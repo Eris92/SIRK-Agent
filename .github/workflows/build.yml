@@ -19,6 +19,19 @@ jobs:
         shell: pwsh
         run: ./tools/build.ps1 -Configuration Release -Runtime win-x64
 
+      - name: Verify no Visual C++ runtime dependency
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path './artifacts/WorkspaceHost-win-x64/WorkspaceHost.exe'
+          $dumpbin = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022" -Filter dumpbin.exe -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $dumpbin) { throw 'dumpbin.exe not found on GitHub runner.' }
+          $dependencies = & $dumpbin /dependents $exe 2>&1 | Out-String
+          Write-Host $dependencies
+          if ($dependencies -match '(?i)VCRUNTIME\d*|MSVCP\d*|CONCRT\d*') {
+            throw 'WorkspaceHost still depends on Visual C++ Redistributable DLLs.'
+          }
+
       - name: Verify WorkspaceHost heartbeat
         shell: pwsh
         run: ./tools/test-workspacehost.ps1 -ExePath ./artifacts/WorkspaceHost-win-x64/WorkspaceHost.exe

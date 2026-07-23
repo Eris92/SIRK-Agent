@@ -9,7 +9,9 @@ param(
 
     [switch]$SkipInstall,
 
-    [string]$ReportPath = "$env:TEMP\SIRK-Agent-Test-$((Get-Date).ToString('yyyyMMdd-HHmmss')).json"
+    [string]$ReportPath = "$env:TEMP\SIRK-Agent-Test-$((Get-Date).ToString('yyyyMMdd-HHmmss')).json",
+
+    [string]$ScreenshotPath
 )
 
 Set-StrictMode -Version Latest
@@ -20,6 +22,10 @@ $agent = Join-Path $root 'Agent\SIRK-Agent.exe'
 $client = Join-Path $root 'Client\SIRK-Agent-Client.exe'
 $workspaceHost = Join-Path $root 'WorkspaceHost\SIRK-WorkspaceHost.exe'
 $installer = Join-Path $root 'Scripts\Install-SIRKAgent.ps1'
+
+if (-not $ScreenshotPath) {
+    $ScreenshotPath = [IO.Path]::ChangeExtension($ReportPath, '.jpg')
+}
 
 foreach ($required in @($agent, $client, $workspaceHost, $installer)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
@@ -45,20 +51,30 @@ $service = Get-Service -Name 'SIRKAgent' -ErrorAction Stop
 $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(20))
 
 function Invoke-AgentCommand {
-    param([Parameter(Mandatory)][string]$MessageType)
+    param(
+        [Parameter(Mandatory)][string]$MessageType,
+        [hashtable]$Payload = @{}
+    )
 
-    $raw = & $client $MessageType $env:COMPUTERNAME "test:$env:USERNAME" 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "Client failed for $MessageType with exit code $LASTEXITCODE. Output: $raw"
+    $payloadFile = Join-Path $env:TEMP ("sirk-payload-{0}.json" -f [guid]::NewGuid())
+    try {
+        $Payload | ConvertTo-Json -Depth 10 -Compress | Set-Content -LiteralPath $payloadFile -Encoding UTF8
+        $raw = & $client $MessageType $env:COMPUTERNAME "test:$env:USERNAME" "@$payloadFile" 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "Client failed for $MessageType with exit code $LASTEXITCODE. Output: $raw"
+        }
+
+        $text = $raw -join [Environment]::NewLine
+        $json = $text | ConvertFrom-Json
+        if (-not $json.ok) {
+            throw "Agent returned an error for $MessageType`: $($json.error.code) $($json.error.message)"
+        }
+
+        return $json
     }
-
-    $text = $raw -join [Environment]::NewLine
-    $json = $text | ConvertFrom-Json
-    if (-not $json.ok) {
-        throw "Agent returned an error for $MessageType`: $($json.error.code) $($json.error.message)"
+    finally {
+        Remove-Item -LiteralPath $payloadFile -Force -ErrorAction SilentlyContinue
     }
-
-    return $json
 }
 
 $ping = Invoke-AgentCommand -MessageType 'System.Ping'
@@ -71,7 +87,35 @@ if ($status.result.status -ne 'running') { throw 'System.GetStatus did not retur
 if ($workspaceCapabilities.result.session.sessionZeroIsolation -ne $true) { throw 'Session 0 isolation is not enabled.' }
 if ($workspaceCapabilities.result.session.rdsEnumerationAvailable -ne $true) { throw 'RDS session enumeration is not enabled.' }
 if ($workspaceCapabilities.result.workspaceHost.installed -ne $true) { throw 'WorkspaceHost was not detected after installation.' }
+if ($workspaceCapabilities.result.capture.available -ne $true) { throw 'Workspace capture provider is not available.' }
 
+$interactiveSession = @($workspaceCapabilities.result.session.sessions | Where-Object { $_.interactive -eq $true }) | Select-Object -First 1
+if (-not $interactiveSession) {
+    throw 'No active interactive Windows session is available for screenshot capture.'
+}
+
+$captureStarted = Get-Date
+$capture = Invoke-AgentCommand -MessageType 'Workspace.CaptureFrame' -Payload @{
+    sessionId = [int]$interactiveSession.sessionId
+    monitorId = 'primary'
+    format = 'jpeg'
+    quality = 70
+    maxWidth = 1920
+    maxHeight = 1080
+    includeCursor = $true
+}
+$captureMilliseconds = [int]((Get-Date) - $captureStarted).TotalMilliseconds
+
+if ($capture.result.contentType -ne 'image/jpeg' -or [string]::IsNullOrWhiteSpace($capture.result.frameBase64)) {
+    throw 'Workspace.CaptureFrame did not return a JPEG frame.'
+}
+
+$frameBytes = [Convert]::FromBase64String($capture.result.frameBase64)
+if ($frameBytes.Length -lt 1024) {
+    throw "Captured JPEG is unexpectedly small: $($frameBytes.Length) bytes."
+}
+
+[IO.File]::WriteAllBytes($ScreenshotPath, $frameBytes)
 $installedAgent = "$env:ProgramFiles\SIRK\Agent\SIRK-Agent.exe"
 $installedHost = "$env:ProgramFiles\SIRK\Agent\SIRK-WorkspaceHost.exe"
 
@@ -99,6 +143,11 @@ $report = [ordered]@{
             Sha256 = (Get-FileHash -LiteralPath $installedHost -Algorithm SHA256).Hash
             Signature = (Get-AuthenticodeSignature -LiteralPath $installedHost).Status.ToString()
         }
+        Screenshot = [ordered]@{
+            Path = $ScreenshotPath
+            Bytes = $frameBytes.Length
+            Sha256 = (Get-FileHash -LiteralPath $ScreenshotPath -Algorithm SHA256).Hash
+        }
     }
     Checks = [ordered]@{
         Ping = $true
@@ -108,11 +157,21 @@ $report = [ordered]@{
         SessionZeroIsolation = $true
         RdsEnumeration = $true
         WorkspaceHostDetected = $true
+        WorkspaceHostHandshake = $true
+        CaptureFrame = $true
+    }
+    Capture = [ordered]@{
+        SessionId = [int]$interactiveSession.sessionId
+        StationName = $interactiveSession.stationName
+        Provider = $workspaceCapabilities.result.capture.executionProvider
+        Milliseconds = $captureMilliseconds
+        JpegBytes = $frameBytes.Length
     }
     Workspace = $workspaceCapabilities.result
 }
 
 $report | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $ReportPath -Encoding UTF8
-Write-Host 'SIRK-Agent smoke test passed.'
-Write-Host "Report: $ReportPath"
-$report
+Write-Host 'SIRK-Agent functional workspace test passed.' -ForegroundColor Green
+Write-Host "Screenshot: $ScreenshotPath"
+Write-Host "Report:     $ReportPath"
+Write-Host "Capture:    $captureMilliseconds ms / $($frameBytes.Length) bytes"

@@ -51,7 +51,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          Get-ChildItem SIRK-Agent/scripts -Filter *.ps1 | ForEach-Object {
+          Get-ChildItem SIRK-Agent,SIRK-MeshAdapter -Filter *.ps1 -Recurse | ForEach-Object {
             $tokens = $null
             $errors = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
@@ -60,12 +60,20 @@ jobs:
             }
           }
 
-      - name: Run IPC integration tests
+      - name: Run agent IPC integration tests
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $agent = Resolve-Path 'SIRK-Agent/src/SIRK.Agent/bin/Release/net8.0-windows/win-x64/SIRK-Agent.exe'
           dotnet run --project SIRK-Agent/tests/SIRK.Agent.IntegrationTests/SIRK.Agent.IntegrationTests.csproj --configuration Release --no-build -- $agent 2>&1 | Tee-Object integration-tests.log
+
+      - name: Run Mesh adapter integration tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $agent = Resolve-Path 'SIRK-Agent/src/SIRK.Agent/bin/Release/net8.0-windows/win-x64/SIRK-Agent.exe'
+          $adapter = Resolve-Path 'SIRK-MeshAdapter/src/SIRK.MeshAdapter/bin/Release/net8.0-windows/win-x64/SIRK-MeshAdapter.exe'
+          & 'SIRK-MeshAdapter/tests/Invoke-MeshAdapterIntegration.ps1' -AgentPath $agent -AdapterPath $adapter 2>&1 | Tee-Object mesh-adapter-integration.log
 
       - name: Upload diagnostics
         if: always()
@@ -82,6 +90,7 @@ jobs:
             build-tests.log
             build-mesh-adapter.log
             integration-tests.log
+            mesh-adapter-integration.log
           if-no-files-found: warn
           retention-days: 7
 

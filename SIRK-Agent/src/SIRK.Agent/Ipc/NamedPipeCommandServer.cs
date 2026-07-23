@@ -1,5 +1,8 @@
 using System.Buffers.Binary;
 using System.IO.Pipes;
+using System.IO.Pipes.AccessControl;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Sirk.Agent.Protocol;
@@ -42,15 +45,57 @@ internal sealed class NamedPipeCommandServer(
         }
     }
 
-    private static NamedPipeServerStream CreatePipe() =>
-        new(
+    private static NamedPipeServerStream CreatePipe()
+    {
+        PipeSecurity security = CreatePipeSecurity();
+
+        return NamedPipeServerStreamAcl.Create(
             PipeName,
             PipeDirection.InOut,
             1,
             PipeTransmissionMode.Byte,
-            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly,
+            PipeOptions.Asynchronous,
             MaximumMessageBytes,
-            MaximumMessageBytes);
+            MaximumMessageBytes,
+            security,
+            HandleInheritability.None,
+            PipeAccessRights.ChangePermissions);
+    }
+
+    private static PipeSecurity CreatePipeSecurity()
+    {
+        var security = new PipeSecurity();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+
+        AddAllowRule(security, new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null));
+        AddAllowRule(security, new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null));
+
+        using WindowsIdentity identity = WindowsIdentity.GetCurrent();
+        if (identity.User is not null)
+        {
+            AddAllowRule(security, identity.User);
+        }
+
+        return security;
+    }
+
+    private static void AddAllowRule(PipeSecurity security, IdentityReference identity)
+    {
+        const PipeAccessRights rights =
+            PipeAccessRights.ReadData |
+            PipeAccessRights.WriteData |
+            PipeAccessRights.ReadAttributes |
+            PipeAccessRights.WriteAttributes |
+            PipeAccessRights.ReadExtendedAttributes |
+            PipeAccessRights.WriteExtendedAttributes |
+            PipeAccessRights.ReadPermissions |
+            PipeAccessRights.Synchronize;
+
+        security.AddAccessRule(new PipeAccessRule(
+            identity,
+            rights,
+            AccessControlType.Allow));
+    }
 
     private async Task ProcessConnectionAsync(Stream stream, CancellationToken cancellationToken)
     {

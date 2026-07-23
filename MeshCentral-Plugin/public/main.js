@@ -3,13 +3,13 @@
 (function () {
     window.MeshCentralWorkspace = window.MeshCentralWorkspace || {};
     var plugin = window.MeshCentralWorkspace;
-    plugin.state = plugin.state || { nodeId: "", sessionId: "", timer: null };
+    plugin.state = plugin.state || { nodeId: "", slots: [], timer: null };
 
     function assetUrl(asset, extra) {
         var url = new URL("pluginadmin.ashx", window.location.href);
         url.searchParams.set("pin", "workspace");
         url.searchParams.set("asset", asset);
-        url.searchParams.set("v", "0.5.0");
+        url.searchParams.set("v", "0.6.0");
         if (extra) Object.keys(extra).forEach(function (key) { url.searchParams.set(key, extra[key]); });
         return url.href;
     }
@@ -35,79 +35,81 @@
         return String(value == null ? "" : value).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]; });
     }
 
-    function mark(element, label) {
-        if (!element) return element;
-        element.setAttribute("data-meshcentral-plugin-pin", "workspace");
-        element.setAttribute("data-meshcentral-plugin-click", label || element.id || "Pulpit -New");
-        return element;
+    function resolution(width, height) { return width == null || height == null ? "-" : width + " × " + height; }
+    function busy(state) { return ["requested", "deploying", "stopping"].indexOf(state) >= 0; }
+    function active(slot) { return slot && ["free", "stopped", "error"].indexOf(slot.state) < 0; }
+
+    function card(slot) {
+        var occupied = active(slot);
+        var disabledStart = busy(slot.state) || occupied;
+        var disabledStop = !occupied || busy(slot.state);
+        return '<section class="workspace-card" data-slot="' + escapeHtml(slot.slot) + '">' +
+            '<div class="workspace-card-head"><div><h3>' + escapeHtml(slot.slotLabel) + '</h3><span class="workspace-kind">' + escapeHtml(slot.kind === "admin" ? "Administracyjny" : "Użytkownik") + '</span></div>' +
+            '<div class="workspace-toolbar"><button class="btn btn-success btn-sm workspace-start"' + (disabledStart ? ' disabled' : '') + '>Uruchom</button>' +
+            '<button class="btn btn-danger btn-sm workspace-stop"' + (disabledStop ? ' disabled' : '') + '>Zatrzymaj</button></div></div>' +
+            '<dl class="workspace-grid">' +
+            '<dt>Stan</dt><dd>' + escapeHtml(slot.state || "free") + '</dd>' +
+            '<dt>Właściciel</dt><dd>' + escapeHtml(slot.ownerName || "-") + '</dd>' +
+            '<dt>Session ID</dt><dd>' + escapeHtml(slot.id || "-") + '</dd>' +
+            '<dt>Bootstrap PID</dt><dd>' + escapeHtml(slot.bootstrapPid || "-") + '</dd>' +
+            '<dt>Worker PID</dt><dd>' + escapeHtml(slot.pid || "-") + '</dd>' +
+            '<dt>Windows Session</dt><dd>' + escapeHtml(slot.windowsSessionId == null ? "-" : slot.windowsSessionId) + '</dd>' +
+            '<dt>User</dt><dd>' + escapeHtml(slot.user || "-") + '</dd>' +
+            '<dt>Desktop</dt><dd>' + escapeHtml(slot.desktop || "-") + '</dd>' +
+            '<dt>Version</dt><dd>' + escapeHtml(slot.version || "-") + '</dd>' +
+            '<dt>Monitory</dt><dd>' + escapeHtml(slot.monitorCount == null ? "-" : slot.monitorCount) + '</dd>' +
+            '<dt>Ekran główny</dt><dd>' + escapeHtml(resolution(slot.primaryWidth, slot.primaryHeight)) + '</dd>' +
+            '<dt>Pulpit wirtualny</dt><dd>' + escapeHtml(resolution(slot.virtualWidth, slot.virtualHeight)) + '</dd>' +
+            '<dt>Błąd</dt><dd>' + escapeHtml(slot.error || "-") + '</dd></dl></section>';
     }
 
-    function resolution(width, height) {
-        return width == null || height == null ? "-" : width + " × " + height;
-    }
-
-    function render(session) {
+    function render() {
         var root = document.getElementById("workspace-device-page");
         if (!root) return;
-        var s = session || {};
-        var busy = ["requested", "deploying", "stopping"].indexOf(s.state) >= 0;
         root.className = "workspace-panel";
-        root.innerHTML = '<div class="workspace-card"><div class="workspace-toolbar">' +
-            '<button id="workspace-connect" class="btn btn-success btn-sm"' + (busy ? ' disabled' : '') + '>Polacz</button>' +
-            '<button id="workspace-disconnect" class="btn btn-danger btn-sm"' + (!plugin.state.sessionId || busy ? ' disabled' : '') + '>Rozlacz</button>' +
-            '</div><h3>WorkspaceHost</h3><dl class="workspace-grid">' +
-            '<dt>Host</dt><dd>' + escapeHtml(plugin.state.nodeId || '-') + '</dd>' +
-            '<dt>Stan</dt><dd>' + escapeHtml(s.state || 'idle') + '</dd>' +
-            '<dt>Session ID</dt><dd>' + escapeHtml(s.id || plugin.state.sessionId || '-') + '</dd>' +
-            '<dt>Bootstrap PID</dt><dd>' + escapeHtml(s.bootstrapPid || '-') + '</dd>' +
-            '<dt>Worker PID</dt><dd>' + escapeHtml(s.pid || '-') + '</dd>' +
-            '<dt>Windows Session</dt><dd>' + escapeHtml(s.windowsSessionId == null ? '-' : s.windowsSessionId) + '</dd>' +
-            '<dt>User</dt><dd>' + escapeHtml(s.user || '-') + '</dd>' +
-            '<dt>Desktop</dt><dd>' + escapeHtml(s.desktop || '-') + '</dd>' +
-            '<dt>Version</dt><dd>' + escapeHtml(s.version || '-') + '</dd>' +
-            '<dt>Monitory</dt><dd>' + escapeHtml(s.monitorCount == null ? '-' : s.monitorCount) + '</dd>' +
-            '<dt>Ekran glowny</dt><dd>' + escapeHtml(resolution(s.primaryWidth, s.primaryHeight)) + '</dd>' +
-            '<dt>Pulpit wirtualny</dt><dd>' + escapeHtml(resolution(s.virtualWidth, s.virtualHeight)) + '</dd>' +
-            '<dt>Uptime</dt><dd>' + escapeHtml(s.uptimeSeconds == null ? '-' : s.uptimeSeconds + ' s') + '</dd>' +
-            '<dt>Ostatni heartbeat</dt><dd>' + escapeHtml(s.lastHeartbeat || '-') + '</dd>' +
-            '<dt>Blad</dt><dd>' + escapeHtml(s.error || '-') + '</dd></dl></div>';
-        document.getElementById("workspace-connect").onclick = start;
-        document.getElementById("workspace-disconnect").onclick = stop;
+        root.innerHTML = '<div class="workspace-header"><div><h2>Workspace</h2><p>Host: ' + escapeHtml(plugin.state.nodeId || "-") + '</p></div><button id="workspace-refresh" class="btn btn-primary btn-sm">Odśwież</button></div>' +
+            '<div class="workspace-cards">' + plugin.state.slots.map(card).join("") + '</div>' +
+            '<p class="workspace-note">Admin 1 i Admin 2 są osobnymi slotami procesu. Ukryte desktopy zostaną podłączone w następnym etapie.</p>';
+        var refresh = document.getElementById("workspace-refresh");
+        if (refresh) refresh.onclick = loadSlots;
+        Array.prototype.forEach.call(root.querySelectorAll(".workspace-card"), function (element) {
+            var slotId = element.getAttribute("data-slot");
+            var startButton = element.querySelector(".workspace-start");
+            var stopButton = element.querySelector(".workspace-stop");
+            if (startButton) startButton.onclick = function () { start(slotId); };
+            if (stopButton) stopButton.onclick = function () {
+                var slot = plugin.state.slots.find(function (item) { return item.slot === slotId; });
+                if (slot && slot.id) stop(slot.id);
+            };
+        });
     }
 
-    function start() {
-        if (!plugin.state.nodeId) { render({ state: "error", error: "Nie znaleziono nodeId." }); return; }
-        render({ state: "requested" });
-        post("start", { nodeId: plugin.state.nodeId }).then(function (session) {
-            plugin.state.sessionId = session.id;
-            render(session);
-            poll();
-        }).catch(function (error) { render({ state: "error", error: error.message }); });
+    function loadSlots() {
+        if (!plugin.state.nodeId) return Promise.resolve([]);
+        return request("slots", null, { nodeId: plugin.state.nodeId }).then(function (slots) {
+            plugin.state.slots = slots || [];
+            render();
+            return plugin.state.slots;
+        }).catch(function (error) {
+            plugin.state.slots = [{ slot: "user", slotLabel: "Błąd", kind: "user", state: "error", error: error.message }];
+            render();
+            return [];
+        });
     }
 
-    function stop() {
-        if (!plugin.state.sessionId) return;
-        render({ id: plugin.state.sessionId, state: "stopping" });
-        post("stop", { id: plugin.state.sessionId }).then(function (session) {
-            render(session);
-            poll();
-        }).catch(function (error) { render({ state: "error", error: error.message }); });
+    function start(slot) {
+        post("start", { nodeId: plugin.state.nodeId, slot: slot }).then(function () { loadSlots(); startPolling(); })
+            .catch(function (error) { alert(error.message); loadSlots(); });
     }
 
-    function poll() {
+    function stop(id) {
+        post("stop", { id: id }).then(function () { loadSlots(); startPolling(); })
+            .catch(function (error) { alert(error.message); loadSlots(); });
+    }
+
+    function startPolling() {
         if (plugin.state.timer) clearInterval(plugin.state.timer);
-        var run = function () {
-            if (!plugin.state.sessionId) return;
-            request("status", null, { id: plugin.state.sessionId }).then(function (session) {
-                render(session);
-                if (["error", "stopped"].indexOf(session.state) >= 0) {
-                    clearInterval(plugin.state.timer); plugin.state.timer = null;
-                    if (session.state === "stopped") plugin.state.sessionId = "";
-                }
-            }).catch(function (error) { render({ state: "error", error: error.message }); });
-        };
-        run();
-        plugin.state.timer = setInterval(run, 1500);
+        plugin.state.timer = setInterval(loadSlots, 1500);
     }
 
     plugin.ensureDeviceIntegration = function () {
@@ -115,7 +117,7 @@
         if (!window.pluginHandler || typeof window.pluginHandler.registerPluginTab !== "function") return false;
         window.pluginHandler.registerPluginTab({ tabId: "workspace-device-page", tabTitle: "Pulpit -New" });
         plugin.ensureDeviceTab();
-        render();
+        loadSlots();
         return true;
     };
 
@@ -126,8 +128,7 @@
         var tab = document.getElementById("MainDevWorkspace");
         if (!tab) {
             tab = document.createElement("td"); tab.id = "MainDevWorkspace"; tab.tabIndex = 0; tab.className = "topbar_td style3x"; tab.textContent = "Pulpit -New"; tab.onmouseup = plugin.openDeviceTab;
-            tab.onkeypress = function (event) { if (event && event.key === "Enter") return plugin.openDeviceTab(event); };
-            mark(tab, "Pulpit -New device tab"); anchor.parentNode.insertBefore(tab, anchor.nextSibling);
+            anchor.parentNode.insertBefore(tab, anchor.nextSibling);
         }
         tab.style.display = "";
         return true;
@@ -140,29 +141,14 @@
         window.setTimeout(function () {
             var header = document.getElementById("p19ph-workspace-device-page");
             if (header && window.pluginHandler && typeof window.pluginHandler.callPluginPage === "function") window.pluginHandler.callPluginPage("workspace-device-page", header);
-            render(); plugin.updateDeviceTab(19);
+            loadSlots();
         }, 0);
         if (event && event.preventDefault) event.preventDefault();
         return false;
     };
 
-    plugin.updateDeviceTab = function (view) {
-        var tab = document.getElementById("MainDevWorkspace");
-        if (!tab) return;
-        if (view == null && typeof window.xxcurrentView !== "undefined") view = window.xxcurrentView;
-        var activeHeader = document.querySelector("#p19headers span.on");
-        var workspaceHeader = document.getElementById("p19ph-workspace-device-page");
-        var active = Number(view) === 19 && activeHeader === workspaceHeader;
-        tab.classList.remove("style3x", "style3sel"); tab.classList.add(active ? "style3sel" : "style3x");
-        var pluginTab = document.getElementById("MainDevPlugins");
-        if (pluginTab && active) { pluginTab.classList.remove("style3sel"); pluginTab.classList.add("style3x"); }
-        var headers = document.getElementById("p19headers"); if (headers) headers.style.display = active ? "none" : "";
-    };
-
     plugin.onDeviceRefreshEnd = function (nodeId) { plugin.state.nodeId = String(nodeId || ""); if (plugin.state.nodeId) plugin.ensureDeviceIntegration(); };
-    plugin.onNativePageEnd = function (view) { if (plugin.state.nodeId) plugin.ensureDeviceTab(); plugin.updateDeviceTab(view); };
-    plugin.initialize = function () { if (window.MeshCentralWorkspacePendingNodeId) plugin.state.nodeId = String(window.MeshCentralWorkspacePendingNodeId); if (plugin.state.nodeId) plugin.ensureDeviceIntegration(); return Promise.resolve(); };
+    plugin.onNativePageEnd = function () { if (plugin.state.nodeId) plugin.ensureDeviceTab(); };
+    plugin.initialize = function () { if (window.MeshCentralWorkspacePendingNodeId) plugin.state.nodeId = String(window.MeshCentralWorkspacePendingNodeId); if (plugin.state.nodeId) plugin.ensureDeviceIntegration(); startPolling(); return Promise.resolve(); };
     plugin.refresh = plugin.onDeviceRefreshEnd;
-    plugin.start = start;
-    plugin.stop = stop;
 })();

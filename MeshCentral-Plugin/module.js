@@ -42,7 +42,9 @@ module.exports.createModule = function createModule(parent) {
             pid: null, bootstrapPid: null, windowsSessionId: null, user: null, desktop: null,
             version: null, uptimeSeconds: null, lastHeartbeat: null,
             monitorCount: null, primaryWidth: null, primaryHeight: null,
-            virtualWidth: null, virtualHeight: null, error: null, responseId: null
+            virtualWidth: null, virtualHeight: null,
+            testWindowReady: null, testWindowThreadId: null, testWindowTitle: null,
+            error: null, responseId: null
         };
         sessions.set(session.id, session);
         slots.set(slotKey(nodeId, slot), session.id);
@@ -146,6 +148,9 @@ module.exports.createModule = function createModule(parent) {
                 primaryHeight: data.primaryHeight == null ? session.primaryHeight : data.primaryHeight,
                 virtualWidth: data.virtualWidth == null ? session.virtualWidth : data.virtualWidth,
                 virtualHeight: data.virtualHeight == null ? session.virtualHeight : data.virtualHeight,
+                testWindowReady: data.testWindowReady == null ? session.testWindowReady : data.testWindowReady,
+                testWindowThreadId: data.testWindowThreadId == null ? session.testWindowThreadId : data.testWindowThreadId,
+                testWindowTitle: data.testWindowTitle || session.testWindowTitle || null,
                 lastHeartbeat: result.state === 'running' ? now() : session.lastHeartbeat, error: null
             });
         } catch (error) { updateSession(session.id, { state: 'error', error: 'Invalid WorkspaceHost result: ' + error.message }); }

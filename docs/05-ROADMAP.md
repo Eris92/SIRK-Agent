@@ -12,6 +12,7 @@
 - usluga Windows `SIRK-Agent`,
 - instalacja przez MeshAgent,
 - lokalne IPC przez Named Pipe,
+- jawne ACL Named Pipe,
 - heartbeat i capability report,
 - command dispatcher,
 - polityki lokalne,
@@ -20,10 +21,23 @@
 
 ## Etap 2 - migracja Workspace
 
+Zrealizowane fundamenty:
+
+- walidowany kontrakt `Workspace.CaptureFrame`,
+- izolacja Windows Session 0,
+- enumeracja sesji lokalnych i RDS przez WTS API,
+- wybor aktywnej sesji interaktywnej,
+- abstrakcja `IWorkspaceCaptureProvider`,
+- przejscie MeshCentral -> SIRK-MeshAdapter -> SIRK-Agent.
+
+Kolejne zadania:
+
 - `WorkspaceHost` pod kontrola SIRK-Agent,
+- bezpieczny proces pomocniczy uruchamiany w sesji uzytkownika,
 - `captureFrame` bez dynamicznego PowerShell,
 - pierwszy stabilny obraz DXGI,
 - stale polaczenie capture,
+- adaptacyjna kompresja dla bardzo slabych laczy,
 - input, clipboard i virtual display.
 
 ## Etap 3 - modul Terminal
@@ -57,4 +71,4 @@
 
 ## Najblizsze zadanie implementacyjne
 
-Zbudowac minimalny, bezpieczny szkielet SIRK-Agent z heartbeat, IPC i obsluga `System.GetStatus`, a nastepnie podlaczyc do niego `Workspace.CaptureFrame`.
+Zbudowac podpisany i ograniczony proces `SIRK-WorkspaceHost`, ktory jest uruchamiany przez usluge tylko w zweryfikowanej aktywnej sesji uzytkownika. Komunikacja Agent -> WorkspaceHost ma uzywac osobnego, jednorazowego kanalu IPC z limitem czasu, rozmiaru odpowiedzi i identyfikatorem zadania.

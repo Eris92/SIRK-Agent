@@ -9,7 +9,7 @@ internal interface IWorkspaceHostLauncher
 {
     bool IsSupported { get; }
 
-    WorkspaceHostLaunchResult Launch(uint sessionId, string workspaceHostPath);
+    WorkspaceHostLaunchResult Launch(uint sessionId, string workspaceHostPath, string pipeName);
 }
 
 internal sealed record WorkspaceHostLaunchResult(
@@ -30,7 +30,7 @@ internal sealed class WindowsWorkspaceHostLauncher : IWorkspaceHostLauncher
 
     public bool IsSupported => OperatingSystem.IsWindows();
 
-    public WorkspaceHostLaunchResult Launch(uint sessionId, string workspaceHostPath)
+    public WorkspaceHostLaunchResult Launch(uint sessionId, string workspaceHostPath, string pipeName)
     {
         if (sessionId == 0)
         {
@@ -47,7 +47,11 @@ internal sealed class WindowsWorkspaceHostLauncher : IWorkspaceHostLauncher
             return Failure("workspace_host_not_found", "WorkspaceHost executable is not installed.");
         }
 
-        string pipeName = $"SIRK.WorkspaceHost.{sessionId}.{Guid.NewGuid():N}";
+        if (string.IsNullOrWhiteSpace(pipeName) || pipeName.Length > 128 || pipeName.Contains('\\') || pipeName.Contains('/'))
+        {
+            return Failure("workspace_host_pipe_invalid", "WorkspaceHost pipe name is invalid.");
+        }
+
         string token = CreateBase64UrlToken();
         string commandLine = BuildCommandLine(workspaceHostPath, sessionId, pipeName, token);
 
@@ -63,13 +67,7 @@ internal sealed class WindowsWorkspaceHostLauncher : IWorkspaceHostLauncher
                 return Win32Failure("wts_query_user_token_failed");
             }
 
-            if (!DuplicateTokenEx(
-                    userToken,
-                    TokenAllAccess,
-                    IntPtr.Zero,
-                    SecurityImpersonation,
-                    TokenPrimary,
-                    out primaryToken))
+            if (!DuplicateTokenEx(userToken, TokenAllAccess, IntPtr.Zero, SecurityImpersonation, TokenPrimary, out primaryToken))
             {
                 return Win32Failure("duplicate_user_token_failed");
             }
@@ -166,13 +164,7 @@ internal sealed class WindowsWorkspaceHostLauncher : IWorkspaceHostLauncher
 
     [DllImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool DuplicateTokenEx(
-        IntPtr existingToken,
-        uint desiredAccess,
-        IntPtr tokenAttributes,
-        int impersonationLevel,
-        int tokenType,
-        out IntPtr newToken);
+    private static extern bool DuplicateTokenEx(IntPtr existingToken, uint desiredAccess, IntPtr tokenAttributes, int impersonationLevel, int tokenType, out IntPtr newToken);
 
     [DllImport("userenv.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

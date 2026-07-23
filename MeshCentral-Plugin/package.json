@@ -1,8 +1,8 @@
 {
   "name": "meshcentral-workspace",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Alternatywny modul Pulpit -New dla MeshCentral",
   "main": "plugin.js",
   "license": "MIT",
-  "meshCentralCompat": ">=1.1.0"
+  "meshCentralCompat": ">=1.1.18"
 }

@@ -5,7 +5,8 @@ namespace Sirk.Agent.Modules.Workspace;
 
 internal sealed class WorkspaceCommandHandler(
     IWorkspaceCaptureProvider captureProvider,
-    IWindowsSessionProvider sessionProvider) : ICommandHandler
+    IWindowsSessionProvider sessionProvider,
+    IWorkspaceHostLauncher workspaceHostLauncher) : ICommandHandler
 {
     private static readonly string[] SupportedMessages =
     {
@@ -46,6 +47,14 @@ internal sealed class WorkspaceCommandHandler(
                     state = session.State,
                     interactive = session.IsInteractive
                 })
+            },
+            workspaceHost = new
+            {
+                installed = false,
+                launcherSupported = workspaceHostLauncher.IsSupported,
+                launchMethod = "WTSQueryUserToken+DuplicateTokenEx+CreateProcessAsUser",
+                oneTimeHandshake = true,
+                sessionValidation = true
             },
             capture = new
             {

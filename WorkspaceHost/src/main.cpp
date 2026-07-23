@@ -14,8 +14,8 @@
 #include <vector>
 
 namespace {
-constexpr wchar_t kPipeName[] = L"\\\\.\\pipe\\SirK.MeshCentral.Workspace";
-constexpr wchar_t kVersion[] = L"0.4.0";
+constexpr wchar_t kPipeBase[] = L"\\\\.\\pipe\\SirK.MeshCentral.Workspace";
+constexpr wchar_t kVersion[] = L"0.5.0";
 
 std::filesystem::path LogPath() {
     wchar_t programData[MAX_PATH]{};
@@ -31,11 +31,9 @@ void Log(const std::wstring& message) {
     const std::time_t value = std::chrono::system_clock::to_time_t(now);
     std::tm local{};
     localtime_s(&local, &value);
-
     std::wofstream stream(LogPath(), std::ios::app);
     stream << std::put_time(&local, L"%Y-%m-%d %H:%M:%S")
-           << L" [PID=" << GetCurrentProcessId() << L"] "
-           << message << L'\n';
+           << L" [PID=" << GetCurrentProcessId() << L"] " << message << L'\n';
 }
 
 std::wstring CurrentUser() {
@@ -48,9 +46,7 @@ std::wstring CurrentDesktop() {
     HDESK desktop = GetThreadDesktop(GetCurrentThreadId());
     wchar_t value[256]{};
     DWORD needed = 0;
-    if (desktop != nullptr && GetUserObjectInformationW(desktop, UOI_NAME, value, sizeof(value), &needed)) {
-        return value;
-    }
+    if (desktop != nullptr && GetUserObjectInformationW(desktop, UOI_NAME, value, sizeof(value), &needed)) return value;
     return L"unknown";
 }
 
@@ -82,11 +78,8 @@ std::string JsonEscape(const std::string& value) {
         case '\r': escaped << "\\r"; break;
         case '\t': escaped << "\\t"; break;
         default:
-            if (character < 0x20) {
-                escaped << "\\u" << std::hex << std::setw(4) << std::setfill('0') << static_cast<int>(character) << std::dec;
-            } else {
-                escaped << static_cast<char>(character);
-            }
+            if (character < 0x20) escaped << "\\u" << std::hex << std::setw(4) << std::setfill('0') << static_cast<int>(character) << std::dec;
+            else escaped << static_cast<char>(character);
         }
     }
     return escaped.str();
@@ -95,9 +88,7 @@ std::string JsonEscape(const std::string& value) {
 bool IsLocalSystem() {
     SID_IDENTIFIER_AUTHORITY ntAuthority = SECURITY_NT_AUTHORITY;
     PSID systemSid = nullptr;
-    if (!AllocateAndInitializeSid(&ntAuthority, 1, SECURITY_LOCAL_SYSTEM_RID, 0, 0, 0, 0, 0, 0, 0, &systemSid)) {
-        return false;
-    }
+    if (!AllocateAndInitializeSid(&ntAuthority, 1, SECURITY_LOCAL_SYSTEM_RID, 0, 0, 0, 0, 0, 0, 0, &systemSid)) return false;
     BOOL member = FALSE;
     const BOOL checked = CheckTokenMembership(nullptr, systemSid, &member);
     FreeSid(systemSid);
@@ -116,17 +107,12 @@ bool SessionHasUser(DWORD sessionId) {
 DWORD FindInteractiveSession() {
     const DWORD consoleSession = WTSGetActiveConsoleSessionId();
     if (consoleSession != 0xFFFFFFFF && SessionHasUser(consoleSession)) return consoleSession;
-
     PWTS_SESSION_INFOW sessions = nullptr;
     DWORD count = 0;
     if (!WTSEnumerateSessionsW(WTS_CURRENT_SERVER_HANDLE, 0, 1, &sessions, &count)) return 0xFFFFFFFF;
-
     DWORD selected = 0xFFFFFFFF;
     for (DWORD index = 0; index < count; ++index) {
-        if (sessions[index].State == WTSActive && SessionHasUser(sessions[index].SessionId)) {
-            selected = sessions[index].SessionId;
-            break;
-        }
+        if (sessions[index].State == WTSActive && SessionHasUser(sessions[index].SessionId)) { selected = sessions[index].SessionId; break; }
     }
     WTSFreeMemory(sessions);
     return selected;
@@ -139,7 +125,14 @@ std::wstring CurrentExecutable() {
     return std::wstring(buffer.data(), length);
 }
 
-bool RelaunchInInteractiveSession(DWORD sessionId) {
+std::wstring NormalizeSlot(std::wstring slot) {
+    if (slot == L"user" || slot == L"admin1" || slot == L"admin2") return slot;
+    return L"user";
+}
+
+std::wstring PipeName(const std::wstring& slot) { return std::wstring(kPipeBase) + L"." + NormalizeSlot(slot); }
+
+bool RelaunchInInteractiveSession(DWORD sessionId, const std::wstring& slot) {
     HANDLE userToken = nullptr;
     HANDLE primaryToken = nullptr;
     LPVOID environment = nullptr;
@@ -147,66 +140,29 @@ bool RelaunchInInteractiveSession(DWORD sessionId) {
     STARTUPINFOW startupInfo{};
     startupInfo.cb = sizeof(startupInfo);
     startupInfo.lpDesktop = const_cast<LPWSTR>(L"winsta0\\default");
-
     if (!WTSQueryUserToken(sessionId, &userToken)) {
         Log(L"WTSQueryUserToken failed for session " + std::to_wstring(sessionId) + L": " + std::to_wstring(GetLastError()));
         return false;
     }
-
     bool success = false;
     do {
         if (!DuplicateTokenEx(userToken, TOKEN_ALL_ACCESS, nullptr, SecurityImpersonation, TokenPrimary, &primaryToken)) {
-            Log(L"DuplicateTokenEx failed: " + std::to_wstring(GetLastError()));
-            break;
+            Log(L"DuplicateTokenEx failed: " + std::to_wstring(GetLastError())); break;
         }
-
-        if (!CreateEnvironmentBlock(&environment, primaryToken, FALSE)) {
-            Log(L"CreateEnvironmentBlock failed: " + std::to_wstring(GetLastError()));
-            environment = nullptr;
-        }
-
+        if (!CreateEnvironmentBlock(&environment, primaryToken, FALSE)) environment = nullptr;
         const std::wstring executable = CurrentExecutable();
-        if (executable.empty()) {
-            Log(L"GetModuleFileName failed: " + std::to_wstring(GetLastError()));
-            break;
-        }
-
-        std::wstring commandLine = L"\"" + executable + L"\" --worker";
+        if (executable.empty()) break;
+        std::wstring commandLine = L"\"" + executable + L"\" --worker --slot " + NormalizeSlot(slot);
         const DWORD flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
-        success = CreateProcessAsUserW(
-            primaryToken,
-            executable.c_str(),
-            commandLine.data(),
-            nullptr,
-            nullptr,
-            FALSE,
-            flags,
-            environment,
-            std::filesystem::path(executable).parent_path().c_str(),
-            &startupInfo,
-            &processInfo) != FALSE;
-
+        success = CreateProcessAsUserW(primaryToken, executable.c_str(), commandLine.data(), nullptr, nullptr, FALSE, flags,
+            environment, std::filesystem::path(executable).parent_path().c_str(), &startupInfo, &processInfo) != FALSE;
         if (!success) {
-            const DWORD firstError = GetLastError();
-            Log(L"CreateProcessAsUser failed: " + std::to_wstring(firstError) + L". Trying CreateProcessWithTokenW.");
-            success = CreateProcessWithTokenW(
-                primaryToken,
-                LOGON_WITH_PROFILE,
-                executable.c_str(),
-                commandLine.data(),
-                flags,
-                environment,
-                std::filesystem::path(executable).parent_path().c_str(),
-                &startupInfo,
-                &processInfo) != FALSE;
-            if (!success) Log(L"CreateProcessWithTokenW failed: " + std::to_wstring(GetLastError()));
+            Log(L"CreateProcessAsUser failed: " + std::to_wstring(GetLastError()) + L". Trying CreateProcessWithTokenW.");
+            success = CreateProcessWithTokenW(primaryToken, LOGON_WITH_PROFILE, executable.c_str(), commandLine.data(), flags,
+                environment, std::filesystem::path(executable).parent_path().c_str(), &startupInfo, &processInfo) != FALSE;
         }
-
-        if (success) {
-            Log(L"Interactive worker started. Session=" + std::to_wstring(sessionId) + L", PID=" + std::to_wstring(processInfo.dwProcessId));
-        }
+        if (success) Log(L"Interactive worker started. Slot=" + slot + L", Session=" + std::to_wstring(sessionId) + L", PID=" + std::to_wstring(processInfo.dwProcessId));
     } while (false);
-
     if (processInfo.hThread != nullptr) CloseHandle(processInfo.hThread);
     if (processInfo.hProcess != nullptr) CloseHandle(processInfo.hProcess);
     if (environment != nullptr) DestroyEnvironmentBlock(environment);
@@ -215,7 +171,7 @@ bool RelaunchInInteractiveSession(DWORD sessionId) {
     return success;
 }
 
-std::string Heartbeat(std::chrono::steady_clock::time_point started) {
+std::string Heartbeat(std::chrono::steady_clock::time_point started, const std::wstring& slot) {
     DWORD sessionId = 0;
     ProcessIdToSessionId(GetCurrentProcessId(), &sessionId);
     const auto uptime = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - started).count();
@@ -224,63 +180,38 @@ std::string Heartbeat(std::chrono::steady_clock::time_point started) {
     const int primaryHeight = GetSystemMetrics(SM_CYSCREEN);
     const int virtualWidth = GetSystemMetrics(SM_CXVIRTUALSCREEN);
     const int virtualHeight = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-
     std::ostringstream json;
-    json << "{\"type\":\"heartbeat\",\"version\":\"0.4.0\",\"pid\":" << GetCurrentProcessId()
+    json << "{\"type\":\"heartbeat\",\"version\":\"0.5.0\",\"pid\":" << GetCurrentProcessId()
          << ",\"sessionId\":" << sessionId
-         << ",\"user\":\"" << JsonEscape(Utf8(CurrentUser()))
+         << ",\"slot\":\"" << JsonEscape(Utf8(slot))
+         << "\",\"user\":\"" << JsonEscape(Utf8(CurrentUser()))
          << "\",\"desktop\":\"" << JsonEscape(Utf8(CurrentDesktop()))
          << "\",\"uptimeSeconds\":" << uptime
          << ",\"monitorCount\":" << monitorCount
          << ",\"primaryWidth\":" << primaryWidth
          << ",\"primaryHeight\":" << primaryHeight
          << ",\"virtualWidth\":" << virtualWidth
-         << ",\"virtualHeight\":" << virtualHeight
-         << "}\n";
+         << ",\"virtualHeight\":" << virtualHeight << "}\n";
     return json.str();
 }
 
-int RunServer() {
+int RunServer(const std::wstring& slot) {
     const auto started = std::chrono::steady_clock::now();
-    Log(L"WorkspaceHost worker started. Version " + std::wstring(kVersion) + L", User=" + CurrentUser());
-
+    const std::wstring pipeName = PipeName(slot);
+    Log(L"WorkspaceHost worker started. Version " + std::wstring(kVersion) + L", Slot=" + slot + L", User=" + CurrentUser());
     while (true) {
-        HANDLE pipe = CreateNamedPipeW(
-            kPipeName,
-            PIPE_ACCESS_OUTBOUND,
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-            1,
-            64 * 1024,
-            64 * 1024,
-            0,
-            nullptr);
-
-        if (pipe == INVALID_HANDLE_VALUE) {
-            Log(L"CreateNamedPipe failed: " + std::to_wstring(GetLastError()));
-            return 2;
-        }
-
-        Log(L"Waiting for pipe client");
+        HANDLE pipe = CreateNamedPipeW(pipeName.c_str(), PIPE_ACCESS_OUTBOUND,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1, 64 * 1024, 64 * 1024, 0, nullptr);
+        if (pipe == INVALID_HANDLE_VALUE) { Log(L"CreateNamedPipe failed: " + std::to_wstring(GetLastError())); return 2; }
         const BOOL connected = ConnectNamedPipe(pipe, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED;
-        if (!connected) {
-            Log(L"ConnectNamedPipe failed: " + std::to_wstring(GetLastError()));
-            CloseHandle(pipe);
-            std::this_thread::sleep_for(std::chrono::seconds(2));
-            continue;
-        }
-
-        Log(L"Pipe client connected");
+        if (!connected) { CloseHandle(pipe); std::this_thread::sleep_for(std::chrono::seconds(2)); continue; }
         while (true) {
-            const std::string payload = Heartbeat(started);
+            const std::string payload = Heartbeat(started, slot);
             DWORD written = 0;
-            if (!WriteFile(pipe, payload.data(), static_cast<DWORD>(payload.size()), &written, nullptr)) {
-                Log(L"Pipe client disconnected");
-                break;
-            }
+            if (!WriteFile(pipe, payload.data(), static_cast<DWORD>(payload.size()), &written, nullptr)) break;
             FlushFileBuffers(pipe);
             std::this_thread::sleep_for(std::chrono::seconds(5));
         }
-
         DisconnectNamedPipe(pipe);
         CloseHandle(pipe);
     }
@@ -288,27 +219,24 @@ int RunServer() {
 }
 
 int wmain(int argc, wchar_t* argv[]) {
-    if (argc > 1 && std::wstring_view(argv[1]) == L"--version") {
-        std::wcout << kVersion << L'\n';
-        return 0;
-    }
-
+    if (argc > 1 && std::wstring_view(argv[1]) == L"--version") { std::wcout << kVersion << L'\n'; return 0; }
     try {
-        const bool workerMode = argc > 1 && std::wstring_view(argv[1]) == L"--worker";
+        bool workerMode = false;
+        std::wstring slot = L"user";
+        for (int index = 1; index < argc; ++index) {
+            const std::wstring_view arg(argv[index]);
+            if (arg == L"--worker") workerMode = true;
+            else if (arg == L"--slot" && index + 1 < argc) slot = NormalizeSlot(argv[++index]);
+        }
         if (!workerMode && IsLocalSystem()) {
             const DWORD sessionId = FindInteractiveSession();
-            if (sessionId == 0xFFFFFFFF) {
-                Log(L"No active interactive user session found.");
-                return 3;
-            }
-            return RelaunchInInteractiveSession(sessionId) ? 0 : 4;
+            if (sessionId == 0xFFFFFFFF) { Log(L"No active interactive user session found."); return 3; }
+            return RelaunchInInteractiveSession(sessionId, slot) ? 0 : 4;
         }
-        return RunServer();
+        return RunServer(slot);
     } catch (const std::exception& ex) {
-        Log(L"Unhandled exception: " + Wide(ex.what()));
-        return 1;
+        Log(L"Unhandled exception: " + Wide(ex.what())); return 1;
     } catch (...) {
-        Log(L"Unhandled unknown exception");
-        return 1;
+        Log(L"Unhandled unknown exception"); return 1;
     }
 }

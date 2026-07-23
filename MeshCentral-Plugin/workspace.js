@@ -3,6 +3,7 @@
 const createModule = require('./module.js').createModule;
 const createVirtualMedia = require('./virtualmedia.js').createVirtualMedia;
 const createAppControl = require('./appcontrol.js').createAppControl;
+const createCaptureControl = require('./capturecontrol.js').createCaptureControl;
 
 module.exports.workspace = function workspacePlugin(parent) {
     const obj = {};
@@ -10,9 +11,11 @@ module.exports.workspace = function workspacePlugin(parent) {
     const pluginModule = createModule(parent);
     const virtualMedia = createVirtualMedia(parent, pluginModule);
     const appControl = createAppControl(parent, pluginModule);
+    const captureControl = createCaptureControl(parent, pluginModule);
     const assets = {
         'main.js': { path: parent.path.join(pluginRoot, 'public', 'main.js'), type: 'text/javascript; charset=utf-8' },
         'apps.js': { path: parent.path.join(pluginRoot, 'public', 'apps.js'), type: 'text/javascript; charset=utf-8' },
+        'capture.js': { path: parent.path.join(pluginRoot, 'public', 'capture.js'), type: 'text/javascript; charset=utf-8' },
         'main.css': { path: parent.path.join(pluginRoot, 'public', 'main.css'), type: 'text/css; charset=utf-8' }
     };
 
@@ -20,27 +23,31 @@ module.exports.workspace = function workspacePlugin(parent) {
     obj.meshServer = parent.parent;
     obj.exports = ['onWebUIStartupEnd', 'onDeviceRefreshEnd', 'goPageStart', 'goPageEnd'];
 
-    function send(res, code, type, body) { res.statusCode = code; res.setHeader('Content-Type', type); res.setHeader('Cache-Control', 'no-store'); res.end(body); }
+    function send(res, code, type, body) { res.statusCode = code; res.setHeader('Content-Type', type); res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0'); res.setHeader('Pragma', 'no-cache'); res.end(body); }
     function sendJson(res, code, value) { send(res, code, 'application/json; charset=utf-8', JSON.stringify(value)); }
     function handlePromise(res, work) { Promise.resolve(work).then(function (value) { sendJson(res, 200, { ok: true, result: value }); }).catch(function (error) { sendJson(res, 400, { ok: false, error: String(error && error.message || error || 'Request failed.') }); }); }
 
-    obj.server_startup = function () { console.log('[MeshCentral-Workspace] Plugin 0.9.1 loaded'); };
+    obj.server_startup = function () { console.log('[MeshCentral-Workspace] Plugin 0.9.2 loaded'); };
 
     obj.onWebUIStartupEnd = function () {
         if (typeof window === 'undefined' || typeof document === 'undefined') return;
         window.MeshCentralWorkspace = window.MeshCentralWorkspace || {};
         window.MeshCentralWorkspace.bootstrapPromise = null;
-        var endpoint = function (asset) { var url = new URL('pluginadmin.ashx', window.location.href); url.searchParams.set('pin', 'workspace'); url.searchParams.set('asset', asset); url.searchParams.set('v', '0.9.1-' + Date.now()); return url.href; };
+        var endpoint = function (asset) { var url = new URL('pluginadmin.ashx', window.location.href); url.searchParams.set('pin', 'workspace'); url.searchParams.set('asset', asset); url.searchParams.set('v', '0.9.2-' + Date.now()); return url.href; };
         var load = function (id, source) { return new Promise(function (resolve, reject) { var existing = document.getElementById(id); if (existing) existing.remove(); var script = document.createElement('script'); script.id = id; script.src = source; script.async = false; script.onload = function () { script.setAttribute('data-loaded', '1'); resolve(); }; script.onerror = reject; (document.head || document.documentElement).appendChild(script); }); };
         var oldStyle = document.getElementById('workspace-plugin-css'); if (oldStyle) oldStyle.remove();
         var style = document.createElement('link'); style.id = 'workspace-plugin-css'; style.rel = 'stylesheet'; style.href = endpoint('main.css'); (document.head || document.documentElement).appendChild(style);
-        window.MeshCentralWorkspace.bootstrapPromise = load('workspace-main-script', endpoint('main.js')).then(function () { return load('workspace-apps-script', endpoint('apps.js')); }).then(function () { return window.MeshCentralWorkspace.initialize(); }).catch(function (error) { window.MeshCentralWorkspace.bootstrapPromise = null; if (window.console) console.error('Workspace bootstrap error', error); });
+        window.MeshCentralWorkspace.bootstrapPromise = load('workspace-main-script', endpoint('main.js'))
+            .then(function () { return load('workspace-apps-script', endpoint('apps.js')); })
+            .then(function () { return load('workspace-capture-script', endpoint('capture.js')); })
+            .then(function () { return window.MeshCentralWorkspace.initialize(); })
+            .catch(function (error) { window.MeshCentralWorkspace.bootstrapPromise = null; if (window.console) console.error('Workspace bootstrap error', error); });
     };
 
     obj.onDeviceRefreshEnd = function (nodeId) { if (typeof window === 'undefined') return; window.MeshCentralWorkspacePendingNodeId = nodeId; if (window.MeshCentralWorkspace && typeof window.MeshCentralWorkspace.onDeviceRefreshEnd === 'function') window.MeshCentralWorkspace.onDeviceRefreshEnd(nodeId); };
     obj.goPageStart = function () {};
     obj.goPageEnd = function (view) { if (typeof window !== 'undefined' && window.MeshCentralWorkspace && typeof window.MeshCentralWorkspace.onNativePageEnd === 'function') window.MeshCentralWorkspace.onNativePageEnd(view); };
-    obj.hook_processAgentData = function (command, agent) { pluginModule.captureAgentData(command, agent); virtualMedia.captureAgentData(command, agent); appControl.captureAgentData(command, agent); };
+    obj.hook_processAgentData = function (command, agent) { pluginModule.captureAgentData(command, agent); virtualMedia.captureAgentData(command, agent); appControl.captureAgentData(command, agent); captureControl.captureAgentData(command, agent); };
 
     obj.handleAdminReq = function (req, res, user) {
         const asset = String(req && req.query && req.query.asset || '');
@@ -51,6 +58,11 @@ module.exports.workspace = function workspacePlugin(parent) {
         }
         if (asset === 'slots') {
             sendJson(res, 200, { ok: true, result: pluginModule.list(String(req && req.query && req.query.nodeId || '')) }); return;
+        }
+        if (asset === 'capture-image') {
+            try { send(res, 200, 'image/png', captureControl.getImage(user, req && req.query && req.query.id)); }
+            catch (error) { sendJson(res, 404, { ok: false, error: String(error && error.message || error) }); }
+            return;
         }
         const file = assets[asset];
         if (!file) { send(res, 404, 'text/plain; charset=utf-8', 'Not found'); return; }
@@ -66,6 +78,7 @@ module.exports.workspace = function workspacePlugin(parent) {
         if (asset === 'media-unmount') { handlePromise(res, virtualMedia.unmount(user, body.id)); return; }
         if (asset === 'apps-list') { handlePromise(res, appControl.list(user, body.id)); return; }
         if (asset === 'apps-launch') { handlePromise(res, appControl.launch(user, body.id, body.file, body.args)); return; }
+        if (asset === 'capture-frame') { handlePromise(res, captureControl.capture(user, body.id)); return; }
         sendJson(res, 400, { ok: false, error: 'Unknown action.' });
     };
 

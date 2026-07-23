@@ -1,12 +1,14 @@
 #include <windows.h>
-#include <sddl.h>
 #include <chrono>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 
 namespace {
@@ -55,6 +57,14 @@ std::string Utf8(const std::wstring& value) {
     const int size = WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
     std::string result(size, '\0');
     WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), result.data(), size, nullptr, nullptr);
+    return result;
+}
+
+std::wstring Wide(const std::string& value) {
+    if (value.empty()) return {};
+    const int size = MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0);
+    std::wstring result(size, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), result.data(), size);
     return result;
 }
 
@@ -128,7 +138,7 @@ int wmain(int argc, wchar_t* argv[]) {
     try {
         return RunServer();
     } catch (const std::exception& ex) {
-        Log(L"Unhandled exception: " + std::wstring(ex.what(), ex.what() + std::strlen(ex.what())));
+        Log(L"Unhandled exception: " + Wide(ex.what()));
         return 1;
     } catch (...) {
         Log(L"Unhandled unknown exception");

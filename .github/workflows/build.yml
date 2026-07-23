@@ -1,35 +1,31 @@
-name: Build native WorkspaceHost
+name: build
 
 on:
-  workflow_dispatch:
   push:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
-
-permissions:
-  contents: read
+  workflow_dispatch:
 
 jobs:
-  build-windows-x64:
-    name: Windows x64
-    runs-on: windows-2022
+  build:
+    runs-on: windows-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build native C++ artifacts
+      - name: Build native WorkspaceHost and plugin
         shell: pwsh
         run: ./tools/build.ps1 -Configuration Release -Runtime win-x64
 
+      - name: Verify WorkspaceHost heartbeat
+        shell: pwsh
+        run: ./tools/test-workspacehost.ps1 -ExePath ./artifacts/WorkspaceHost-win-x64/WorkspaceHost.exe
+
       - name: Package WorkspaceHost
         shell: pwsh
-        run: |
-          Compress-Archive `
-            -Path ./artifacts/WorkspaceHost-win-x64/* `
-            -DestinationPath ./artifacts/WorkspaceHost-win-x64.zip `
-            -Force
+        run: Compress-Archive -Path ./artifacts/WorkspaceHost-win-x64/* -DestinationPath ./artifacts/WorkspaceHost-win-x64.zip -Force
 
       - name: Upload WorkspaceHost
         uses: actions/upload-artifact@v4
@@ -37,7 +33,7 @@ jobs:
           name: WorkspaceHost-win-x64
           path: artifacts/WorkspaceHost-win-x64.zip
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 14
 
       - name: Upload MeshCentral plugin
         uses: actions/upload-artifact@v4
@@ -45,4 +41,4 @@ jobs:
           name: MeshCentral-Workspace-Plugin-0.2.0
           path: artifacts/MeshCentral-Workspace-Plugin-0.2.0.zip
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 14

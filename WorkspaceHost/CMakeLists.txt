@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 project(WorkspaceHost VERSION 0.2.0 LANGUAGES CXX)
 
-add_executable(WorkspaceHost WIN32
+add_executable(WorkspaceHost
     src/main.cpp
 )
 
@@ -10,5 +10,4 @@ target_compile_definitions(WorkspaceHost PRIVATE UNICODE _UNICODE NOMINMAX WIN32
 
 if(MSVC)
     target_compile_options(WorkspaceHost PRIVATE /W4 /permissive- /EHsc)
-    target_link_options(WorkspaceHost PRIVATE /SUBSYSTEM:CONSOLE)
 endif()

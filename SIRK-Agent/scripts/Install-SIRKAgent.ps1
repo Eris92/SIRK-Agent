@@ -7,6 +7,9 @@ param(
     [ValidateScript({ Test-Path -LiteralPath $_ -PathType Leaf })]
     [string]$SourceExe,
 
+    [ValidateScript({ -not $_ -or (Test-Path -LiteralPath $_ -PathType Leaf) })]
+    [string]$WorkspaceHostSource,
+
     [ValidateNotNullOrEmpty()]
     [string]$InstallDirectory = "$env:ProgramFiles\SIRK\Agent",
 
@@ -22,7 +25,9 @@ $ErrorActionPreference = 'Stop'
 $serviceName = 'SIRKAgent'
 $displayName = 'SIRK Agent'
 $targetExe = Join-Path $InstallDirectory 'SIRK-Agent.exe'
+$targetWorkspaceHost = Join-Path $InstallDirectory 'SIRK-WorkspaceHost.exe'
 $sourceFullPath = (Resolve-Path -LiteralPath $SourceExe).Path
+$workspaceHostFullPath = if ($WorkspaceHostSource) { (Resolve-Path -LiteralPath $WorkspaceHostSource).Path } else { $null }
 
 if ($ExpectedSha256) {
     $actualHash = (Get-FileHash -LiteralPath $sourceFullPath -Algorithm SHA256).Hash
@@ -31,9 +36,11 @@ if ($ExpectedSha256) {
     }
 }
 
-$signature = Get-AuthenticodeSignature -LiteralPath $sourceFullPath
-if ($signature.Status -notin @('Valid', 'NotSigned')) {
-    throw "Invalid Authenticode status: $($signature.Status)"
+foreach ($binary in @($sourceFullPath, $workspaceHostFullPath) | Where-Object { $_ }) {
+    $signature = Get-AuthenticodeSignature -LiteralPath $binary
+    if ($signature.Status -notin @('Valid', 'NotSigned')) {
+        throw "Invalid Authenticode status for $binary`: $($signature.Status)"
+    }
 }
 
 if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
@@ -53,16 +60,15 @@ if ($PSCmdlet.ShouldProcess($InstallDirectory, 'Install SIRK Agent')) {
     $propagation = [System.Security.AccessControl.PropagationFlags]::None
     $allow = [System.Security.AccessControl.AccessControlType]::Allow
 
-    $systemRule = New-Object System.Security.AccessControl.FileSystemAccessRule('SYSTEM', 'FullControl', $inherit, $propagation, $allow)
-    $adminsRule = New-Object System.Security.AccessControl.FileSystemAccessRule('BUILTIN\Administrators', 'FullControl', $inherit, $propagation, $allow)
-    $usersRule = New-Object System.Security.AccessControl.FileSystemAccessRule('BUILTIN\Users', 'ReadAndExecute', $inherit, $propagation, $allow)
-
-    $acl.AddAccessRule($systemRule)
-    $acl.AddAccessRule($adminsRule)
-    $acl.AddAccessRule($usersRule)
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule('SYSTEM', 'FullControl', $inherit, $propagation, $allow)))
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule('BUILTIN\Administrators', 'FullControl', $inherit, $propagation, $allow)))
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule('BUILTIN\Users', 'ReadAndExecute', $inherit, $propagation, $allow)))
     Set-Acl -LiteralPath $InstallDirectory -AclObject $acl
 
     Copy-Item -LiteralPath $sourceFullPath -Destination $targetExe -Force
+    if ($workspaceHostFullPath) {
+        Copy-Item -LiteralPath $workspaceHostFullPath -Destination $targetWorkspaceHost -Force
+    }
 
     if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
         & sc.exe config $serviceName binPath= ('"{0}"' -f $targetExe) start= delayed-auto DisplayName= $displayName | Out-Null
@@ -84,10 +90,11 @@ if ($PSCmdlet.ShouldProcess($InstallDirectory, 'Install SIRK Agent')) {
     }
 
     [pscustomobject]@{
-        ServiceName = $serviceName
-        Status      = (Get-Service -Name $serviceName).Status
-        BinaryPath  = $targetExe
-        Sha256      = (Get-FileHash -LiteralPath $targetExe -Algorithm SHA256).Hash
-        Signature   = (Get-AuthenticodeSignature -LiteralPath $targetExe).Status
+        ServiceName        = $serviceName
+        Status             = (Get-Service -Name $serviceName).Status
+        BinaryPath         = $targetExe
+        WorkspaceHostPath  = if (Test-Path -LiteralPath $targetWorkspaceHost) { $targetWorkspaceHost } else { $null }
+        Sha256             = (Get-FileHash -LiteralPath $targetExe -Algorithm SHA256).Hash
+        Signature          = (Get-AuthenticodeSignature -LiteralPath $targetExe).Status
     }
 }

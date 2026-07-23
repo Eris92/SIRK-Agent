@@ -1,6 +1,6 @@
 {
   "name": "meshcentral-workspace",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "Alternatywny modul Pulpit -New dla MeshCentral",
   "main": "workspace.js",
   "license": "MIT",

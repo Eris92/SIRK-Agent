@@ -1,5 +1,13 @@
 # MeshCentral Workspace
 
+## 0.4.2
+
+- WorkspaceHost jest uruchamiany przez MeshAgent w trybie interaktywnego uzytkownika zamiast jako SYSTEM.
+- Heartbeat raportuje liczbe monitorow, rozdzielczosc ekranu glownego i rozmiar pulpitu wirtualnego.
+- Dodano prawidlowe kodowanie JSON dla nazw uzytkownikow domenowych.
+- Widok Pulpit -New pokazuje dane przygotowujace kolejny etap DXGI Desktop Duplication.
+- WorkspaceHost podniesiono do wersji 0.3.0.
+
 ## 0.4.0
 
 - Plugin po uruchomieniu `WorkspaceHost.exe` laczy sie z Named Pipe `SirK.MeshCentral.Workspace`.

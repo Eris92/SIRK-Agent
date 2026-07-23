@@ -3,7 +3,7 @@ using Sirk.Agent.Protocol;
 
 namespace Sirk.Agent.Modules.Workspace;
 
-internal sealed class WorkspaceCommandHandler : ICommandHandler
+internal sealed class WorkspaceCommandHandler(IWorkspaceCaptureProvider captureProvider) : ICommandHandler
 {
     private static readonly string[] SupportedMessages =
     {
@@ -23,7 +23,7 @@ internal sealed class WorkspaceCommandHandler : ICommandHandler
         };
     }
 
-    private static ProtocolResponse GetCapabilities(ProtocolEnvelope command) =>
+    private ProtocolResponse GetCapabilities(ProtocolEnvelope command) =>
         Success(command, new
         {
             module = "Workspace",
@@ -31,9 +31,9 @@ internal sealed class WorkspaceCommandHandler : ICommandHandler
             capabilities = SupportedMessages,
             capture = new
             {
-                available = false,
+                available = captureProvider.IsAvailable,
                 requestValidationAvailable = true,
-                executionProvider = "not_configured",
+                executionProvider = captureProvider.ProviderName,
                 formats = new[] { "jpeg" },
                 quality = new
                 {
@@ -44,17 +44,27 @@ internal sealed class WorkspaceCommandHandler : ICommandHandler
             }
         });
 
-    private static ProtocolResponse CaptureFrame(ProtocolEnvelope command)
+    private ProtocolResponse CaptureFrame(ProtocolEnvelope command)
     {
         if (!CaptureFrameRequest.TryParse(command.Payload, out CaptureFrameRequest? request, out string error))
         {
             return Failure(command, "invalid_payload", error);
         }
 
-        return Failure(
-            command,
-            "capture_provider_unavailable",
-            $"Workspace capture provider is not installed for Windows session {request!.SessionId}.");
+        WorkspaceCaptureResult result = captureProvider.Capture(request!);
+        if (!result.Success)
+        {
+            return Failure(
+                command,
+                result.ErrorCode ?? "capture_failed",
+                result.ErrorMessage ?? "Workspace capture failed safely.");
+        }
+
+        return Success(command, new
+        {
+            contentType = result.ContentType,
+            frameBase64 = Convert.ToBase64String(result.FrameBytes ?? Array.Empty<byte>())
+        });
     }
 
     private static ProtocolResponse Success(ProtocolEnvelope command, object result) =>

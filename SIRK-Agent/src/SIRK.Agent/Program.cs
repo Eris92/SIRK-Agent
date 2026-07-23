@@ -15,6 +15,7 @@ builder.Services.AddWindowsService(options =>
 
 builder.Services.AddSingleton<ReplayProtection>();
 builder.Services.AddSingleton<ProtocolValidator>();
+builder.Services.AddSingleton<IWorkspaceCaptureProvider, UnavailableWorkspaceCaptureProvider>();
 builder.Services.AddSingleton<ICommandHandler, SystemCommandHandler>();
 builder.Services.AddSingleton<ICommandHandler, WorkspaceCommandHandler>();
 builder.Services.AddSingleton<CommandDispatcher>();

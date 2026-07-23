@@ -1,5 +1,12 @@
 # MeshCentral Workspace
 
+## 0.8.2
+
+- Usunieto delegacje klikniec z kontenera pluginu.
+- Przyciski `Przygotuj`, `Utworz`, `Zatrzymaj` i `Odswiez` dostaja bezposredni `onclick` po kazdym renderowaniu kart.
+- Loader zeruje stary `bootstrapPromise` i wymusza ponowne zaladowanie `main.js` po aktualizacji.
+- Stan `wysylanie` nadal pojawia sie natychmiast po kliknieciu.
+
 ## 0.8.1
 
 - Dodano `type="button"` do wszystkich przyciskow, aby formularz MeshCentral nie przejmowal klikniecia.

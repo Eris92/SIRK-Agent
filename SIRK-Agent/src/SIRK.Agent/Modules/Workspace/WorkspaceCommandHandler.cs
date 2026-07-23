@@ -25,8 +25,11 @@ internal sealed class WorkspaceCommandHandler(
         };
     }
 
-    private ProtocolResponse GetCapabilities(ProtocolEnvelope command) =>
-        Success(command, new
+    private ProtocolResponse GetCapabilities(ProtocolEnvelope command)
+    {
+        IReadOnlyList<WindowsSessionInfo> sessions = sessionProvider.GetSessions();
+
+        return Success(command, new
         {
             module = "Workspace",
             status = "foundation",
@@ -35,7 +38,14 @@ internal sealed class WorkspaceCommandHandler(
             {
                 activeConsoleSessionId = sessionProvider.ActiveConsoleSessionId,
                 sessionZeroIsolation = true,
-                rdsEnumerationAvailable = false
+                rdsEnumerationAvailable = true,
+                sessions = sessions.Select(session => new
+                {
+                    sessionId = session.SessionId,
+                    stationName = session.StationName,
+                    state = session.State,
+                    interactive = session.IsInteractive
+                })
             },
             capture = new
             {
@@ -51,6 +61,7 @@ internal sealed class WorkspaceCommandHandler(
                 }
             }
         });
+    }
 
     private ProtocolResponse CaptureFrame(ProtocolEnvelope command)
     {
@@ -72,7 +83,7 @@ internal sealed class WorkspaceCommandHandler(
             return Failure(
                 command,
                 "interactive_session_unavailable",
-                $"Windows session {request.SessionId} is not the active interactive console session.");
+                $"Windows session {request.SessionId} is not an active interactive session.");
         }
 
         WorkspaceCaptureResult result = captureProvider.Capture(request);

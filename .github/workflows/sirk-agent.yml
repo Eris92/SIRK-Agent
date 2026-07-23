@@ -1,0 +1,47 @@
+name: SIRK-Agent
+
+on:
+  push:
+    branches:
+      - main
+      - smp-agent-foundation
+    paths:
+      - "SIRK-Agent/**"
+      - ".github/workflows/sirk-agent.yml"
+  pull_request:
+    paths:
+      - "SIRK-Agent/**"
+      - ".github/workflows/sirk-agent.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore
+        run: dotnet restore SIRK-Agent/src/SIRK.Agent/SIRK.Agent.csproj
+
+      - name: Build
+        run: dotnet build SIRK-Agent/src/SIRK.Agent/SIRK.Agent.csproj --configuration Release --no-restore
+
+      - name: Publish
+        run: dotnet publish SIRK-Agent/src/SIRK.Agent/SIRK.Agent.csproj --configuration Release --no-build --output artifacts/SIRK-Agent
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SIRK-Agent-win-x64
+          path: artifacts/SIRK-Agent
+          if-no-files-found: error
+          retention-days: 14

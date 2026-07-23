@@ -86,6 +86,9 @@ try {
     if ($workspace.Json.result.capabilities -notcontains 'Workspace.CaptureFrame') {
         throw 'Workspace.CaptureFrame is missing from the capability report.'
     }
+    if ($workspace.Json.result.session.sessionZeroIsolation -ne $true) {
+        throw 'Workspace session zero isolation is not reported.'
+    }
 
     $invalidCaptureRequest = $baseRequest.Clone()
     $invalidCaptureRequest.messageType = 'Workspace.CaptureFrame'
@@ -103,10 +106,10 @@ try {
         throw 'Workspace.CaptureFrame accepted an invalid format.'
     }
 
-    $captureRequest = $baseRequest.Clone()
-    $captureRequest.messageType = 'Workspace.CaptureFrame'
-    $captureRequest.payload = @{
-        sessionId = 1
+    $sessionZeroRequest = $baseRequest.Clone()
+    $sessionZeroRequest.messageType = 'Workspace.CaptureFrame'
+    $sessionZeroRequest.payload = @{
+        sessionId = 0
         format = 'jpeg'
         quality = 70
         maxWidth = 1920
@@ -114,9 +117,45 @@ try {
         monitorId = 'primary'
         includeCursor = $true
     }
-    $capture = Invoke-AdapterRequest -Request $captureRequest
-    if ($capture.Json.ok -ne $false -or $capture.Json.error.code -ne 'capture_provider_unavailable') {
-        throw 'Workspace.CaptureFrame did not fail safely when the provider was unavailable.'
+    $sessionZero = Invoke-AdapterRequest -Request $sessionZeroRequest
+    if ($sessionZero.Json.ok -ne $false -or $sessionZero.Json.error.code -ne 'session_zero_blocked') {
+        throw 'Workspace.CaptureFrame did not block Windows Session 0.'
+    }
+
+    $activeSessionId = $workspace.Json.result.session.activeConsoleSessionId
+    if ($null -ne $activeSessionId) {
+        $captureRequest = $baseRequest.Clone()
+        $captureRequest.messageType = 'Workspace.CaptureFrame'
+        $captureRequest.payload = @{
+            sessionId = [int]$activeSessionId
+            format = 'jpeg'
+            quality = 70
+            maxWidth = 1920
+            maxHeight = 1080
+            monitorId = 'primary'
+            includeCursor = $true
+        }
+        $capture = Invoke-AdapterRequest -Request $captureRequest
+        if ($capture.Json.ok -ne $false -or $capture.Json.error.code -ne 'capture_provider_unavailable') {
+            throw 'Workspace.CaptureFrame did not fail safely when the provider was unavailable.'
+        }
+    }
+    else {
+        $captureRequest = $baseRequest.Clone()
+        $captureRequest.messageType = 'Workspace.CaptureFrame'
+        $captureRequest.payload = @{
+            sessionId = 1
+            format = 'jpeg'
+            quality = 70
+            maxWidth = 1920
+            maxHeight = 1080
+            monitorId = 'primary'
+            includeCursor = $true
+        }
+        $capture = Invoke-AdapterRequest -Request $captureRequest
+        if ($capture.Json.ok -ne $false -or $capture.Json.error.code -ne 'interactive_session_unavailable') {
+            throw 'Workspace.CaptureFrame did not reject a missing interactive session.'
+        }
     }
 
     $blockedRequest = $baseRequest.Clone()

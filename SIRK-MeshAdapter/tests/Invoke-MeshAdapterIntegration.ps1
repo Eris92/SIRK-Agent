@@ -66,48 +66,64 @@ try {
     }
 
     $ping = Invoke-AdapterRequest -Request $baseRequest
-    if ($ping.ExitCode -ne 0) {
+    if ($ping.ExitCode -ne 0 -or -not $ping.Json.ok -or $ping.Json.result.message -ne 'pong') {
         throw "MeshAdapter ping failed. ExitCode=$($ping.ExitCode) StdErr=$($ping.StdErr)"
-    }
-
-    if (-not $ping.Json.ok -or $ping.Json.result.message -ne 'pong') {
-        throw "MeshAdapter did not return a valid pong response."
     }
 
     $statusRequest = $baseRequest.Clone()
     $statusRequest.messageType = 'System.GetStatus'
     $status = Invoke-AdapterRequest -Request $statusRequest
-
     if ($status.ExitCode -ne 0 -or -not $status.Json.ok -or $status.Json.result.status -ne 'running') {
-        throw "MeshAdapter status request failed."
+        throw 'MeshAdapter status request failed.'
     }
 
     $workspaceRequest = $baseRequest.Clone()
     $workspaceRequest.messageType = 'Workspace.GetCapabilities'
     $workspace = Invoke-AdapterRequest -Request $workspaceRequest
-
-    if ($workspace.ExitCode -ne 0 -or -not $workspace.Json.ok) {
-        throw "MeshAdapter workspace capabilities request failed."
+    if ($workspace.ExitCode -ne 0 -or -not $workspace.Json.ok -or $workspace.Json.result.module -ne 'Workspace') {
+        throw 'MeshAdapter workspace capabilities request failed.'
+    }
+    if ($workspace.Json.result.capabilities -notcontains 'Workspace.CaptureFrame') {
+        throw 'Workspace.CaptureFrame is missing from the capability report.'
     }
 
-    if ($workspace.Json.result.module -ne 'Workspace') {
-        throw "MeshAdapter returned an unexpected Workspace module response."
+    $invalidCaptureRequest = $baseRequest.Clone()
+    $invalidCaptureRequest.messageType = 'Workspace.CaptureFrame'
+    $invalidCaptureRequest.payload = @{
+        sessionId = 1
+        format = 'png'
+        quality = 70
+        maxWidth = 1920
+        maxHeight = 1080
+        monitorId = 'primary'
+        includeCursor = $true
+    }
+    $invalidCapture = Invoke-AdapterRequest -Request $invalidCaptureRequest
+    if ($invalidCapture.Json.ok -ne $false -or $invalidCapture.Json.error.code -ne 'invalid_payload') {
+        throw 'Workspace.CaptureFrame accepted an invalid format.'
     }
 
-    if ($workspace.Json.result.capabilities -notcontains 'Workspace.GetCapabilities') {
-        throw "Workspace.GetCapabilities is missing from the capability report."
+    $captureRequest = $baseRequest.Clone()
+    $captureRequest.messageType = 'Workspace.CaptureFrame'
+    $captureRequest.payload = @{
+        sessionId = 1
+        format = 'jpeg'
+        quality = 70
+        maxWidth = 1920
+        maxHeight = 1080
+        monitorId = 'primary'
+        includeCursor = $true
+    }
+    $capture = Invoke-AdapterRequest -Request $captureRequest
+    if ($capture.Json.ok -ne $false -or $capture.Json.error.code -ne 'capture_provider_unavailable') {
+        throw 'Workspace.CaptureFrame did not fail safely when the provider was unavailable.'
     }
 
     $blockedRequest = $baseRequest.Clone()
     $blockedRequest.messageType = 'Terminal.Execute'
     $blocked = Invoke-AdapterRequest -Request $blockedRequest
-
-    if ($blocked.ExitCode -eq 0) {
-        throw "MeshAdapter accepted a blocked messageType."
-    }
-
-    if ($blocked.Json.ok -ne $false -or $blocked.Json.error.code -ne 'invalid_request') {
-        throw "MeshAdapter returned an unexpected blocked-command response."
+    if ($blocked.ExitCode -eq 0 -or $blocked.Json.ok -ne $false -or $blocked.Json.error.code -ne 'invalid_request') {
+        throw 'MeshAdapter accepted a blocked messageType.'
     }
 
     Write-Host 'SIRK-MeshAdapter integration test passed.'

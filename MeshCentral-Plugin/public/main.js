@@ -9,7 +9,7 @@
         var url = new URL("pluginadmin.ashx", window.location.href);
         url.searchParams.set("pin", "workspace");
         url.searchParams.set("asset", asset);
-        url.searchParams.set("v", "0.4.0");
+        url.searchParams.set("v", "0.4.2");
         if (extra) Object.keys(extra).forEach(function (key) { url.searchParams.set(key, extra[key]); });
         return url.href;
     }
@@ -42,6 +42,10 @@
         return element;
     }
 
+    function resolution(width, height) {
+        return width == null || height == null ? "-" : width + " × " + height;
+    }
+
     function render(session) {
         var root = document.getElementById("workspace-device-page");
         if (!root) return;
@@ -60,6 +64,9 @@
             '<dt>User</dt><dd>' + escapeHtml(s.user || '-') + '</dd>' +
             '<dt>Desktop</dt><dd>' + escapeHtml(s.desktop || '-') + '</dd>' +
             '<dt>Version</dt><dd>' + escapeHtml(s.version || '-') + '</dd>' +
+            '<dt>Monitory</dt><dd>' + escapeHtml(s.monitorCount == null ? '-' : s.monitorCount) + '</dd>' +
+            '<dt>Ekran glowny</dt><dd>' + escapeHtml(resolution(s.primaryWidth, s.primaryHeight)) + '</dd>' +
+            '<dt>Pulpit wirtualny</dt><dd>' + escapeHtml(resolution(s.virtualWidth, s.virtualHeight)) + '</dd>' +
             '<dt>Uptime</dt><dd>' + escapeHtml(s.uptimeSeconds == null ? '-' : s.uptimeSeconds + ' s') + '</dd>' +
             '<dt>Ostatni heartbeat</dt><dd>' + escapeHtml(s.lastHeartbeat || '-') + '</dd>' +
             '<dt>Blad</dt><dd>' + escapeHtml(s.error || '-') + '</dd></dl></div>';

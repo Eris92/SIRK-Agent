@@ -10,7 +10,7 @@
         var url = new URL("pluginadmin.ashx", window.location.href);
         url.searchParams.set("pin", "workspace");
         url.searchParams.set("asset", asset);
-        url.searchParams.set("v", "0.8.2");
+        url.searchParams.set("v", "0.8.3");
         if (extra) Object.keys(extra).forEach(function (key) { url.searchParams.set(key, extra[key]); });
         return url.href;
     }
@@ -46,7 +46,7 @@
         if (!action) return slot;
         var copy = Object.assign({}, slot);
         copy.state = action.state;
-        copy.error = action.error || null;
+        copy.error = action.error || slot.error || null;
         return copy;
     }
 
@@ -78,6 +78,7 @@
             '<dt>Monitory</dt><dd>' + escapeHtml(slot.monitorCount == null ? "-" : slot.monitorCount) + '</dd>' +
             '<dt>Ekran główny</dt><dd>' + escapeHtml(resolution(slot.primaryWidth, slot.primaryHeight)) + '</dd>' +
             '<dt>Pulpit wirtualny</dt><dd>' + escapeHtml(resolution(slot.virtualWidth, slot.virtualHeight)) + '</dd>' +
+            '<dt>Ostatni wynik</dt><dd>' + escapeHtml(slot.lastOutput || "-") + '</dd>' +
             '<dt>Błąd</dt><dd>' + escapeHtml(slot.error || "-") + '</dd></dl></section>';
     }
 
@@ -89,12 +90,7 @@
             var startButton = element.querySelector(".workspace-start");
             var stopButton = element.querySelector(".workspace-stop");
             if (startButton) startButton.onclick = function (event) { if (event) { event.preventDefault(); event.stopPropagation(); } start(slotId); return false; };
-            if (stopButton) stopButton.onclick = function (event) {
-                if (event) { event.preventDefault(); event.stopPropagation(); }
-                var slot = plugin.state.slots.find(function (item) { return item.slot === slotId; });
-                stop(slot);
-                return false;
-            };
+            if (stopButton) stopButton.onclick = function (event) { if (event) { event.preventDefault(); event.stopPropagation(); } var slot = plugin.state.slots.find(function (item) { return item.slot === slotId; }); stop(slot); return false; };
         });
     }
 
@@ -104,62 +100,33 @@
         root.className = "workspace-panel";
         root.innerHTML = '<div class="workspace-header"><div><h2>Workspace</h2><p>Host: ' + escapeHtml(plugin.state.nodeId || "-") + '</p></div><button type="button" id="workspace-refresh" class="btn btn-primary btn-sm">Odśwież</button></div>' +
             '<div class="workspace-cards">' + plugin.state.slots.map(card).join("") + '</div>' +
-            '<p class="workspace-note">Przyciski są przypisywane bezpośrednio po każdym odświeżeniu kart. Po kliknięciu stan zmieni się na „wysyłanie”.</p>';
+            '<p class="workspace-note">Błąd nie znika już z karty. Pole „Ostatni wynik” pokazuje odpowiedź MeshAgenta lub etap oczekiwania.</p>';
         bindButtons(root);
     }
 
     function loadSlots() {
         if (!plugin.state.nodeId) return Promise.resolve([]);
-        return request("slots", null, { nodeId: plugin.state.nodeId }).then(function (slots) {
-            plugin.state.slots = slots || [];
-            render();
-            return plugin.state.slots;
-        }).catch(function (error) {
-            plugin.state.slots = [{ slot: "user", slotLabel: "Błąd", kind: "user", state: "error", error: error.message }];
-            render();
-            return [];
-        });
+        return request("slots", null, { nodeId: plugin.state.nodeId }).then(function (slots) { plugin.state.slots = slots || []; render(); return plugin.state.slots; })
+            .catch(function (error) { plugin.state.slots = [{ slot: "user", slotLabel: "Błąd", kind: "user", state: "error", error: error.message }]; render(); return []; });
     }
 
     function start(slot) {
         if (!slot || plugin.state.actions[slot]) return;
-        plugin.state.actions[slot] = { state: "wysyłanie" };
-        render();
-        post("start", { nodeId: plugin.state.nodeId, slot: slot }).then(function () {
-            delete plugin.state.actions[slot];
-            return loadSlots();
-        }).then(startPolling).catch(function (error) {
-            plugin.state.actions[slot] = { state: "error", error: error.message };
-            render();
-        });
+        plugin.state.actions[slot] = { state: "wysyłanie" }; render();
+        post("start", { nodeId: plugin.state.nodeId, slot: slot }).then(function () { delete plugin.state.actions[slot]; return loadSlots(); }).then(startPolling)
+            .catch(function (error) { plugin.state.actions[slot] = { state: "error", error: error.message }; render(); });
     }
 
     function stop(slot) {
         if (!slot || !slot.id || plugin.state.actions[slot.slot]) return;
-        plugin.state.actions[slot.slot] = { state: "zatrzymywanie" };
-        render();
-        post("stop", { id: slot.id }).then(function () {
-            delete plugin.state.actions[slot.slot];
-            return loadSlots();
-        }).then(startPolling).catch(function (error) {
-            plugin.state.actions[slot.slot] = { state: "error", error: error.message };
-            render();
-        });
+        plugin.state.actions[slot.slot] = { state: "zatrzymywanie" }; render();
+        post("stop", { id: slot.id }).then(function () { delete plugin.state.actions[slot.slot]; return loadSlots(); }).then(startPolling)
+            .catch(function (error) { plugin.state.actions[slot.slot] = { state: "error", error: error.message }; render(); });
     }
 
-    function startPolling() {
-        if (plugin.state.timer) clearInterval(plugin.state.timer);
-        plugin.state.timer = setInterval(loadSlots, 1500);
-    }
+    function startPolling() { if (plugin.state.timer) clearInterval(plugin.state.timer); plugin.state.timer = setInterval(loadSlots, 1500); }
 
-    plugin.ensureDeviceIntegration = function () {
-        if (!plugin.state.nodeId) return false;
-        if (!window.pluginHandler || typeof window.pluginHandler.registerPluginTab !== "function") return false;
-        window.pluginHandler.registerPluginTab({ tabId: "workspace-device-page", tabTitle: "Pulpit -New" });
-        plugin.ensureDeviceTab();
-        loadSlots();
-        return true;
-    };
+    plugin.ensureDeviceIntegration = function () { if (!plugin.state.nodeId) return false; if (!window.pluginHandler || typeof window.pluginHandler.registerPluginTab !== "function") return false; window.pluginHandler.registerPluginTab({ tabId: "workspace-device-page", tabTitle: "Pulpit -New" }); plugin.ensureDeviceTab(); loadSlots(); return true; };
     plugin.ensureDeviceTab = function () { if (!document.getElementById("workspace-device-page")) return false; var anchor = document.getElementById("MainDevTerminal") || document.getElementById("MainDevPlugins"); if (!anchor || !anchor.parentNode) return false; var tab = document.getElementById("MainDevWorkspace"); if (!tab) { tab = document.createElement("td"); tab.id = "MainDevWorkspace"; tab.tabIndex = 0; tab.className = "topbar_td style3x"; tab.textContent = "Pulpit -New"; tab.onmouseup = plugin.openDeviceTab; anchor.parentNode.insertBefore(tab, anchor.nextSibling); } tab.style.display = ""; return true; };
     plugin.openDeviceTab = function (event) { if (event && ((event.which === 3) || (event.button === 2))) return false; if (typeof window.putstore === "function") window.putstore("_curPluginPage", "workspace-device-page"); if (typeof window.go === "function") window.go(19, event); window.setTimeout(function () { var header = document.getElementById("p19ph-workspace-device-page"); if (header && window.pluginHandler && typeof window.pluginHandler.callPluginPage === "function") window.pluginHandler.callPluginPage("workspace-device-page", header); plugin.ensureDeviceIntegration(); }, 0); if (event && event.preventDefault) event.preventDefault(); return false; };
     plugin.onDeviceRefreshEnd = function (nodeId) { plugin.state.nodeId = String(nodeId || ""); if (plugin.state.nodeId) plugin.ensureDeviceIntegration(); };

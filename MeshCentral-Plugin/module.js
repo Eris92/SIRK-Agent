@@ -8,6 +8,7 @@ module.exports.createModule = function createModule(parent) {
     const outputs = Object.create(null);
     const pendingByNode = Object.create(null);
     const outputTimeoutMs = 120000;
+    const workspaceHostVersion = '0.7.0';
     const slotDefinitions = [
         { id: 'user', label: 'User', kind: 'user' },
         { id: 'admin1', label: 'Admin 1', kind: 'admin' },
@@ -73,20 +74,31 @@ module.exports.createModule = function createModule(parent) {
         const success = resultLine(sessionId, "'running'", '$heartbeat');
         const failure = resultLine(sessionId, "'error'", "([ordered]@{message=$_.Exception.Message;type=$_.Exception.GetType().FullName;scriptStack=$_.ScriptStackTrace})");
         const safeSlot = escapePowerShell(slot);
+        const expectedVersion = escapePowerShell(workspaceHostVersion);
         return [
             "$ErrorActionPreference='Stop'", "$ProgressPreference='SilentlyContinue'", 'try{',
             "$dir=Join-Path $env:ProgramData 'SirK\\Workspace'", "New-Item -Path $dir -ItemType Directory -Force|Out-Null",
             "$exe=Join-Path $dir 'WorkspaceHost.exe'", "$tmp=Join-Path $dir 'WorkspaceHost.exe.download'", "$shaFile=Join-Path $dir 'WorkspaceHost.exe.sha256'",
+            "$expectedVersion='" + expectedVersion + "'", "$currentVersion=$null", "$deploymentAction='existing'",
+            "if(Test-Path $exe){try{$currentVersion=((& $exe --version 2>$null)|Select-Object -First 1).ToString().Trim()}catch{$currentVersion=$null}}",
+            "$replace=(-not (Test-Path $exe))-or([string]::IsNullOrWhiteSpace($currentVersion))-or($currentVersion -ne $expectedVersion)",
+            "if($replace){",
+            "$deploymentAction=if(Test-Path $exe){'replaced'}else{'installed'}",
+            "Get-Process -Name 'WorkspaceHost' -ErrorAction SilentlyContinue|Where-Object{try{$_.Path -eq $exe}catch{$false}}|Stop-Process -Force -ErrorAction SilentlyContinue",
+            "Start-Sleep -Milliseconds 500",
+            "Remove-Item $tmp,$shaFile -Force -ErrorAction SilentlyContinue",
             "Invoke-WebRequest -UseBasicParsing -Uri '" + releaseBase + "/WorkspaceHost.exe' -OutFile $tmp",
             "Invoke-WebRequest -UseBasicParsing -Uri '" + releaseBase + "/WorkspaceHost.exe.sha256' -OutFile $shaFile",
-            "$expected=((Get-Content $shaFile -Raw).Trim().Split(' ')[0]).ToUpperInvariant()", "$actual=(Get-FileHash $tmp -Algorithm SHA256).Hash.ToUpperInvariant()",
-            "if($expected -ne $actual){throw 'WorkspaceHost SHA256 mismatch'}",
-            "$replace=$true;if(Test-Path $exe){try{$current=(Get-FileHash $exe -Algorithm SHA256).Hash.ToUpperInvariant();if($current -eq $expected){$replace=$false}}catch{}}",
-            "if($replace){Move-Item $tmp $exe -Force}else{Remove-Item $tmp -Force -ErrorAction SilentlyContinue}",
-            "Unblock-File $exe -ErrorAction SilentlyContinue",
+            "$expectedHash=((Get-Content $shaFile -Raw).Trim().Split(' ')[0]).ToUpperInvariant()", "$downloadHash=(Get-FileHash $tmp -Algorithm SHA256).Hash.ToUpperInvariant()",
+            "if($expectedHash -ne $downloadHash){throw 'WorkspaceHost SHA256 mismatch'}",
+            "Remove-Item $exe -Force -ErrorAction SilentlyContinue", "Move-Item $tmp $exe -Force", "Unblock-File $exe -ErrorAction SilentlyContinue",
+            "$installedVersion=((& $exe --version 2>$null)|Select-Object -First 1).ToString().Trim()",
+            "if($installedVersion -ne $expectedVersion){throw ('WorkspaceHost version mismatch after update. Expected '+$expectedVersion+', got '+$installedVersion)}",
+            "$currentVersion=$installedVersion",
+            "}else{Remove-Item $tmp -Force -ErrorAction SilentlyContinue}",
             "$process=Start-Process -FilePath $exe -ArgumentList @('--slot','" + safeSlot + "') -PassThru -WindowStyle Hidden",
             "$pipe=[System.IO.Pipes.NamedPipeClientStream]::new('.','SirK.MeshCentral.Workspace." + safeSlot + "',[System.IO.Pipes.PipeDirection]::In,[System.IO.Pipes.PipeOptions]::None)",
-            "try{$pipe.Connect(30000);$reader=[System.IO.StreamReader]::new($pipe,[System.Text.Encoding]::UTF8);try{$task=$reader.ReadLineAsync();if(-not $task.Wait([TimeSpan]::FromSeconds(30))){throw 'WorkspaceHost worker heartbeat timeout'};$line=$task.Result;if([string]::IsNullOrWhiteSpace($line)){throw 'WorkspaceHost returned empty heartbeat'};$heartbeat=$line|ConvertFrom-Json;if($heartbeat.type -ne 'heartbeat'){throw ('Unexpected heartbeat type: '+$heartbeat.type)};if($heartbeat.slot -ne '" + safeSlot + "'){throw ('Unexpected workspace slot: '+$heartbeat.slot)};$heartbeat|Add-Member -NotePropertyName bootstrapPid -NotePropertyValue $process.Id -Force;" + success + "}finally{$reader.Dispose()}}finally{$pipe.Dispose()}",
+            "try{$pipe.Connect(30000);$reader=[System.IO.StreamReader]::new($pipe,[System.Text.Encoding]::UTF8);try{$task=$reader.ReadLineAsync();if(-not $task.Wait([TimeSpan]::FromSeconds(30))){throw 'WorkspaceHost worker heartbeat timeout'};$line=$task.Result;if([string]::IsNullOrWhiteSpace($line)){throw 'WorkspaceHost returned empty heartbeat'};$heartbeat=$line|ConvertFrom-Json;if($heartbeat.type -ne 'heartbeat'){throw ('Unexpected heartbeat type: '+$heartbeat.type)};if($heartbeat.slot -ne '" + safeSlot + "'){throw ('Unexpected workspace slot: '+$heartbeat.slot)};$heartbeat|Add-Member -NotePropertyName bootstrapPid -NotePropertyValue $process.Id -Force;$heartbeat|Add-Member -NotePropertyName deploymentAction -NotePropertyValue $deploymentAction -Force;$heartbeat|Add-Member -NotePropertyName expectedVersion -NotePropertyValue $expectedVersion -Force;$heartbeat|Add-Member -NotePropertyName previousVersion -NotePropertyValue $currentVersion -Force;" + success + "}finally{$reader.Dispose()}}finally{$pipe.Dispose()}",
             '}catch{' + failure + '}'
         ].join(';');
     }
@@ -141,7 +153,7 @@ module.exports.createModule = function createModule(parent) {
         const clean = item.output.trim();
         if (clean) updateSession(session.id, { lastOutput: clean.slice(-2000) });
         if (item.output.indexOf("Run commands can't execute, already busy.") >= 0) {
-            updateSession(session.id, { state: 'error', error: "MeshAgent jest zajety wykonywaniem innego polecenia.", lastOutput: clean.slice(-2000) });
+            updateSession(session.id, { state: 'error', error: 'MeshAgent jest zajety wykonywaniem innego polecenia.', lastOutput: clean.slice(-2000) });
             return true;
         }
         const marker = item.output.match(/__WORKSPACE_RESULT__(\{[^\r\n]+\})/);

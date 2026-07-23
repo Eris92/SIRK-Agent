@@ -22,70 +22,70 @@ module.exports.workspace = function workspacePlugin(parent) {
         res.end(body);
     }
 
-    function sendJson(res, code, value) {
-        send(res, code, 'application/json; charset=utf-8', JSON.stringify(value));
-    }
-
+    function sendJson(res, code, value) { send(res, code, 'application/json; charset=utf-8', JSON.stringify(value)); }
     function handlePromise(res, work) {
-        Promise.resolve(work).then(function (value) {
-            sendJson(res, 200, { ok: true, result: value });
-        }).catch(function (error) {
-            sendJson(res, 400, { ok: false, error: String(error && error.message || error || 'Request failed.') });
-        });
+        Promise.resolve(work).then(function (value) { sendJson(res, 200, { ok: true, result: value }); })
+            .catch(function (error) { sendJson(res, 400, { ok: false, error: String(error && error.message || error || 'Request failed.') }); });
     }
 
-    obj.server_startup = function () {
-        console.log('[MeshCentral-Workspace] Plugin 0.3.0 loaded');
-    };
+    obj.server_startup = function () { console.log('[MeshCentral-Workspace] Plugin 0.3.1 loaded'); };
 
     obj.onWebUIStartupEnd = function () {
         if (typeof window === 'undefined' || typeof document === 'undefined') return;
-        if (window.MeshCentralWorkspaceBootstrap) return;
-        window.MeshCentralWorkspaceBootstrap = true;
+        window.MeshCentralWorkspace = window.MeshCentralWorkspace || {};
+        if (window.MeshCentralWorkspace.bootstrapPromise) return;
+
         var endpoint = function (asset) {
             var url = new URL('pluginadmin.ashx', window.location.href);
             url.searchParams.set('pin', 'workspace');
             url.searchParams.set('asset', asset);
-            url.searchParams.set('v', '0.3.0');
+            url.searchParams.set('v', '0.3.1');
             return url.href;
         };
-        var script = document.createElement('script');
-        script.src = endpoint('main.js');
-        script.async = false;
-        (document.head || document.documentElement).appendChild(script);
-        var style = document.createElement('link');
-        style.rel = 'stylesheet';
-        style.href = endpoint('main.css');
-        (document.head || document.documentElement).appendChild(style);
+        var load = function (id, source) {
+            return new Promise(function (resolve, reject) {
+                var existing = document.getElementById(id);
+                if (existing) { if (existing.getAttribute('data-loaded') === '1') resolve(); else { existing.addEventListener('load', resolve, { once: true }); existing.addEventListener('error', reject, { once: true }); } return; }
+                var script = document.createElement('script');
+                script.id = id; script.src = source; script.async = false;
+                script.onload = function () { script.setAttribute('data-loaded', '1'); resolve(); };
+                script.onerror = reject;
+                (document.head || document.documentElement).appendChild(script);
+            });
+        };
+        if (!document.getElementById('workspace-plugin-css')) {
+            var style = document.createElement('link'); style.id = 'workspace-plugin-css'; style.rel = 'stylesheet'; style.href = endpoint('main.css');
+            (document.head || document.documentElement).appendChild(style);
+        }
+        window.MeshCentralWorkspace.bootstrapPromise = load('workspace-main-script', endpoint('main.js')).then(function () {
+            return window.MeshCentralWorkspace.initialize();
+        }).catch(function (error) {
+            window.MeshCentralWorkspace.bootstrapPromise = null;
+            if (window.console) console.error('Workspace bootstrap error', error);
+        });
     };
 
     obj.onDeviceRefreshEnd = function (nodeId) {
         if (typeof window === 'undefined') return;
         window.MeshCentralWorkspacePendingNodeId = nodeId;
-        if (window.MeshCentralWorkspace && typeof window.MeshCentralWorkspace.refresh === 'function') window.MeshCentralWorkspace.refresh(nodeId);
+        if (window.MeshCentralWorkspace && typeof window.MeshCentralWorkspace.onDeviceRefreshEnd === 'function') window.MeshCentralWorkspace.onDeviceRefreshEnd(nodeId);
     };
-
     obj.goPageStart = function () {};
-    obj.goPageEnd = function () {};
-
-    obj.hook_processAgentData = function (command, agent) {
-        pluginModule.captureAgentData(command, agent);
+    obj.goPageEnd = function (view) {
+        if (typeof window !== 'undefined' && window.MeshCentralWorkspace && typeof window.MeshCentralWorkspace.onNativePageEnd === 'function') window.MeshCentralWorkspace.onNativePageEnd(view);
     };
+    obj.hook_processAgentData = function (command, agent) { pluginModule.captureAgentData(command, agent); };
 
     obj.handleAdminReq = function (req, res, user) {
         const asset = String(req && req.query && req.query.asset || '');
         if (asset === 'status') {
             const session = pluginModule.status(user, req && req.query && req.query.id);
             if (!session) { sendJson(res, 404, { ok: false, error: 'Session not found.' }); return; }
-            sendJson(res, 200, { ok: true, result: session });
-            return;
+            sendJson(res, 200, { ok: true, result: session }); return;
         }
         const file = assets[asset];
         if (!file) { send(res, 404, 'text/plain; charset=utf-8', 'Not found'); return; }
-        parent.fs.readFile(file.path, function (error, data) {
-            if (error) send(res, 404, 'text/plain; charset=utf-8', 'Not found');
-            else send(res, 200, file.type, data);
-        });
+        parent.fs.readFile(file.path, function (error, data) { if (error) send(res, 404, 'text/plain; charset=utf-8', 'Not found'); else send(res, 200, file.type, data); });
     };
 
     obj.handleAdminPostReq = function (req, res, user) {

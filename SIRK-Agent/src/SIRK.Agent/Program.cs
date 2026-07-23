@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Sirk.Agent;
 using Sirk.Agent.Ipc;
 using Sirk.Agent.Protocol;
 

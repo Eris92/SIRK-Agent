@@ -3,7 +3,9 @@ using Sirk.Agent.Protocol;
 
 namespace Sirk.Agent.Modules.Workspace;
 
-internal sealed class WorkspaceCommandHandler(IWorkspaceCaptureProvider captureProvider) : ICommandHandler
+internal sealed class WorkspaceCommandHandler(
+    IWorkspaceCaptureProvider captureProvider,
+    IWindowsSessionProvider sessionProvider) : ICommandHandler
 {
     private static readonly string[] SupportedMessages =
     {
@@ -29,6 +31,12 @@ internal sealed class WorkspaceCommandHandler(IWorkspaceCaptureProvider captureP
             module = "Workspace",
             status = "foundation",
             capabilities = SupportedMessages,
+            session = new
+            {
+                activeConsoleSessionId = sessionProvider.ActiveConsoleSessionId,
+                sessionZeroIsolation = true,
+                rdsEnumerationAvailable = false
+            },
             capture = new
             {
                 available = captureProvider.IsAvailable,
@@ -51,7 +59,23 @@ internal sealed class WorkspaceCommandHandler(IWorkspaceCaptureProvider captureP
             return Failure(command, "invalid_payload", error);
         }
 
-        WorkspaceCaptureResult result = captureProvider.Capture(request!);
+        if (request!.SessionId == 0)
+        {
+            return Failure(
+                command,
+                "session_zero_blocked",
+                "Workspace capture cannot execute in Windows Session 0.");
+        }
+
+        if (!sessionProvider.IsInteractiveSessionAvailable((uint)request.SessionId))
+        {
+            return Failure(
+                command,
+                "interactive_session_unavailable",
+                $"Windows session {request.SessionId} is not the active interactive console session.");
+        }
+
+        WorkspaceCaptureResult result = captureProvider.Capture(request);
         if (!result.Success)
         {
             return Failure(

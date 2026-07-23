@@ -1,5 +1,26 @@
 # MeshCentral Workspace
 
+## 0.8.5
+
+- Zastapiono stale wyswietlany surowy JSON czytelnym podsumowaniem stanu.
+- Dodano kontrolki zdrowia: Proces, Heartbeat, Pipe, Desktop, GUI, Capture, Input i Clipboard.
+- Dodano kolorowy status `Dziala`, `Uruchamianie`, `Blad` lub `Wolny`.
+- Najwazniejsze informacje sa stale widoczne, a szczegoly techniczne przeniesiono do zwijanego panelu `Pokaz debug`.
+- Pelny output MeshAgenta pozostaje dostepny w debug bez rozciagania calej strony.
+
+## 0.8.4
+
+- WorkspaceHost jest sprawdzany przez `--version` przed uruchomieniem.
+- Plik jest pobierany i podmieniany tylko wtedy, gdy lokalna wersja jest inna od oczekiwanej.
+- Przed podmiana zatrzymywane sa stare procesy WorkspaceHost korzystajace z tego samego pliku.
+- Po instalacji wykonywane jest ponowne sprawdzenie wersji i SHA256.
+
+## 0.8.3
+
+- Plugin czeka na pelny wynik MeshAgenta zamiast traktowac fragment odpowiedzi jako blad.
+- Bledy oraz ostatni output pozostaja widoczne w karcie.
+- Timeout oczekiwania wydluzono do 120 sekund.
+
 ## 0.8.2
 
 - Usunieto delegacje klikniec z kontenera pluginu.

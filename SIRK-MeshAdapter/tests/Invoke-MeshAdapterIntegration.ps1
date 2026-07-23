@@ -31,6 +31,8 @@ function Invoke-AdapterRequest {
 
         $json | & $AdapterPath 1> $outputFile 2> $errorFile
         $exitCode = $LASTEXITCODE
+        $global:LASTEXITCODE = 0
+
         $rawOutput = if (Test-Path -LiteralPath $outputFile) { Get-Content -LiteralPath $outputFile -Raw } else { '' }
         $errorOutput = if (Test-Path -LiteralPath $errorFile) { Get-Content -LiteralPath $errorFile -Raw } else { '' }
 
@@ -49,6 +51,7 @@ function Invoke-AdapterRequest {
         if ($nativePreferenceExists) {
             $PSNativeCommandUseErrorActionPreference = $previousNativePreference
         }
+        $global:LASTEXITCODE = 0
         Remove-Item -LiteralPath $outputFile, $errorFile -Force -ErrorAction SilentlyContinue
     }
 }
@@ -180,6 +183,7 @@ try {
         throw 'MeshAdapter accepted a blocked messageType.'
     }
 
+    $global:LASTEXITCODE = 0
     Write-Host 'SIRK-MeshAdapter integration test passed.'
 }
 finally {
@@ -189,4 +193,5 @@ finally {
     }
 
     $agent.Dispose()
+    $global:LASTEXITCODE = 0
 }

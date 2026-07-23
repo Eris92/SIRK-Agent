@@ -17,7 +17,7 @@ builder.Services.AddSingleton<ReplayProtection>();
 builder.Services.AddSingleton<ProtocolValidator>();
 builder.Services.AddSingleton<IWindowsSessionProvider, WindowsSessionProvider>();
 builder.Services.AddSingleton<IWorkspaceHostLauncher, WindowsWorkspaceHostLauncher>();
-builder.Services.AddSingleton<IWorkspaceCaptureProvider, UnavailableWorkspaceCaptureProvider>();
+builder.Services.AddSingleton<IWorkspaceCaptureProvider, WorkspaceHostCaptureProvider>();
 builder.Services.AddSingleton<ICommandHandler, SystemCommandHandler>();
 builder.Services.AddSingleton<ICommandHandler, WorkspaceCommandHandler>();
 builder.Services.AddSingleton<CommandDispatcher>();

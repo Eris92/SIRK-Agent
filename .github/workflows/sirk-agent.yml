@@ -34,18 +34,30 @@ jobs:
       - name: Restore projects
         shell: pwsh
         run: |
-          dotnet restore SIRK-Agent/src/SIRK.Agent/SIRK.Agent.csproj 2>&1 | Tee-Object restore-agent.log
-          dotnet restore SIRK-Agent/tools/SIRK.Agent.Client/SIRK.Agent.Client.csproj 2>&1 | Tee-Object restore-client.log
-          dotnet restore SIRK-Agent/tests/SIRK.Agent.IntegrationTests/SIRK.Agent.IntegrationTests.csproj 2>&1 | Tee-Object restore-tests.log
-          dotnet restore SIRK-MeshAdapter/src/SIRK.MeshAdapter/SIRK.MeshAdapter.csproj 2>&1 | Tee-Object restore-mesh-adapter.log
+          $ErrorActionPreference = 'Stop'
+          function Invoke-LoggedNative {
+            param([string]$LogPath, [scriptblock]$Command)
+            & $Command 2>&1 | Tee-Object -FilePath $LogPath
+            if ($LASTEXITCODE -ne 0) { throw "Native command failed with exit code $LASTEXITCODE. See $LogPath" }
+          }
+          Invoke-LoggedNative 'restore-agent.log' { dotnet restore SIRK-Agent/src/SIRK.Agent/SIRK.Agent.csproj }
+          Invoke-LoggedNative 'restore-client.log' { dotnet restore SIRK-Agent/tools/SIRK.Agent.Client/SIRK.Agent.Client.csproj }
+          Invoke-LoggedNative 'restore-tests.log' { dotnet restore SIRK-Agent/tests/SIRK.Agent.IntegrationTests/SIRK.Agent.IntegrationTests.csproj }
+          Invoke-LoggedNative 'restore-mesh-adapter.log' { dotnet restore SIRK-MeshAdapter/src/SIRK.MeshAdapter/SIRK.MeshAdapter.csproj }
 
       - name: Build projects
         shell: pwsh
         run: |
-          dotnet build SIRK-Agent/src/SIRK.Agent/SIRK.Agent.csproj --configuration Release --no-restore 2>&1 | Tee-Object build-agent.log
-          dotnet build SIRK-Agent/tools/SIRK.Agent.Client/SIRK.Agent.Client.csproj --configuration Release --no-restore 2>&1 | Tee-Object build-client.log
-          dotnet build SIRK-Agent/tests/SIRK.Agent.IntegrationTests/SIRK.Agent.IntegrationTests.csproj --configuration Release --no-restore 2>&1 | Tee-Object build-tests.log
-          dotnet build SIRK-MeshAdapter/src/SIRK.MeshAdapter/SIRK.MeshAdapter.csproj --configuration Release --no-restore 2>&1 | Tee-Object build-mesh-adapter.log
+          $ErrorActionPreference = 'Stop'
+          function Invoke-LoggedNative {
+            param([string]$LogPath, [scriptblock]$Command)
+            & $Command 2>&1 | Tee-Object -FilePath $LogPath
+            if ($LASTEXITCODE -ne 0) { throw "Native command failed with exit code $LASTEXITCODE. See $LogPath" }
+          }
+          Invoke-LoggedNative 'build-agent.log' { dotnet build SIRK-Agent/src/SIRK.Agent/SIRK.Agent.csproj --configuration Release --no-restore }
+          Invoke-LoggedNative 'build-client.log' { dotnet build SIRK-Agent/tools/SIRK.Agent.Client/SIRK.Agent.Client.csproj --configuration Release --no-restore }
+          Invoke-LoggedNative 'build-tests.log' { dotnet build SIRK-Agent/tests/SIRK.Agent.IntegrationTests/SIRK.Agent.IntegrationTests.csproj --configuration Release --no-restore }
+          Invoke-LoggedNative 'build-mesh-adapter.log' { dotnet build SIRK-MeshAdapter/src/SIRK.MeshAdapter/SIRK.MeshAdapter.csproj --configuration Release --no-restore }
 
       - name: Validate PowerShell scripts
         shell: pwsh
@@ -66,6 +78,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $agent = Resolve-Path 'SIRK-Agent/src/SIRK.Agent/bin/Release/net8.0-windows/win-x64/SIRK-Agent.exe'
           dotnet run --project SIRK-Agent/tests/SIRK.Agent.IntegrationTests/SIRK.Agent.IntegrationTests.csproj --configuration Release --no-build -- $agent 2>&1 | Tee-Object integration-tests.log
+          if ($LASTEXITCODE -ne 0) { throw "Agent integration tests failed with exit code $LASTEXITCODE." }
 
       - name: Run Mesh adapter integration tests
         shell: pwsh
@@ -74,6 +87,7 @@ jobs:
           $agent = Resolve-Path 'SIRK-Agent/src/SIRK.Agent/bin/Release/net8.0-windows/win-x64/SIRK-Agent.exe'
           $adapter = Resolve-Path 'SIRK-MeshAdapter/src/SIRK.MeshAdapter/bin/Release/net8.0-windows/win-x64/SIRK-MeshAdapter.exe'
           & 'SIRK-MeshAdapter/tests/Invoke-MeshAdapterIntegration.ps1' -AgentPath $agent -AdapterPath $adapter 2>&1 | Tee-Object mesh-adapter-integration.log
+          if ($LASTEXITCODE -ne 0) { throw "Mesh adapter integration tests failed with exit code $LASTEXITCODE." }
 
       - name: Upload diagnostics
         if: always()

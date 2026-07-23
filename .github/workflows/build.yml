@@ -1,0 +1,24 @@
+name: build
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build artifacts
+        shell: pwsh
+        run: ./tools/build.ps1 -Configuration Release -Runtime win-x64
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: MeshCentral-Workspace-0.1.0
+          path: artifacts/**

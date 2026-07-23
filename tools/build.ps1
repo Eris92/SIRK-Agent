@@ -15,7 +15,11 @@ $Root = Split-Path -Parent $PSScriptRoot
 $Out = Join-Path $Root 'artifacts'
 $Build = Join-Path $Root "build\$Runtime"
 $Publish = Join-Path $Out "WorkspaceHost-$Runtime"
-$PluginZip = Join-Path $Out 'MeshCentral-Workspace-Plugin-0.3.0.zip'
+$PluginConfigPath = Join-Path $Root 'MeshCentral-Plugin\config.json'
+if (-not (Test-Path $PluginConfigPath)) { throw "Nie znaleziono konfiguracji pluginu: $PluginConfigPath" }
+$PluginVersion = [string]((Get-Content $PluginConfigPath -Raw | ConvertFrom-Json).version)
+if ([string]::IsNullOrWhiteSpace($PluginVersion)) { throw 'Brak wersji pluginu w config.json.' }
+$PluginZip = Join-Path $Out "MeshCentral-Workspace-Plugin-$PluginVersion.zip"
 $Project = Join-Path $Root 'WorkspaceHost'
 
 function Resolve-CMake {
@@ -33,6 +37,7 @@ function Resolve-CMake {
 }
 
 if (-not (Test-Path (Join-Path $Project 'CMakeLists.txt'))) { throw "Nie znaleziono projektu C++: $Project\CMakeLists.txt" }
+if (-not (Test-Path (Join-Path $Root 'MeshCentral-Plugin\workspace.js'))) { throw 'Brak wymaganego entrypointu MeshCentral-Plugin\workspace.js.' }
 
 $CMake = Resolve-CMake
 $Architecture = if ($Runtime -eq 'win-arm64') { 'ARM64' } else { 'x64' }
@@ -56,7 +61,7 @@ $Exe = Join-Path $Build "$Configuration\WorkspaceHost.exe"
 if (-not (Test-Path $Exe)) { throw "Nie znaleziono wyniku kompilacji: $Exe" }
 Copy-Item $Exe (Join-Path $Publish 'WorkspaceHost.exe') -Force
 
-Write-Host 'Pakowanie pluginu...' -ForegroundColor Cyan
+Write-Host "Pakowanie pluginu $PluginVersion..." -ForegroundColor Cyan
 Compress-Archive -Path (Join-Path $Root 'MeshCentral-Plugin\*') -DestinationPath $PluginZip -Force
 
 Write-Host ''

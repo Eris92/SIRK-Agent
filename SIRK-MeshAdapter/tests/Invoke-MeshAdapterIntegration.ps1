@@ -10,10 +10,6 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
-    $PSNativeCommandUseErrorActionPreference = $false
-}
-
 function Invoke-AdapterRequest {
     param(
         [Parameter(Mandatory)]
@@ -23,12 +19,24 @@ function Invoke-AdapterRequest {
     $json = $Request | ConvertTo-Json -Depth 10 -Compress
     $outputFile = Join-Path $env:TEMP ("sirk-adapter-out-{0}.json" -f ([guid]::NewGuid()))
     $errorFile = Join-Path $env:TEMP ("sirk-adapter-err-{0}.log" -f ([guid]::NewGuid()))
+    $previousErrorActionPreference = $ErrorActionPreference
+    $nativePreferenceExists = $null -ne (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue)
+    $previousNativePreference = if ($nativePreferenceExists) { $PSNativeCommandUseErrorActionPreference } else { $null }
 
     try {
+        $ErrorActionPreference = 'Continue'
+        if ($nativePreferenceExists) {
+            $PSNativeCommandUseErrorActionPreference = $false
+        }
+
         $json | & $AdapterPath 1> $outputFile 2> $errorFile
         $exitCode = $LASTEXITCODE
-        $rawOutput = Get-Content -LiteralPath $outputFile -Raw
+        $rawOutput = if (Test-Path -LiteralPath $outputFile) { Get-Content -LiteralPath $outputFile -Raw } else { '' }
         $errorOutput = if (Test-Path -LiteralPath $errorFile) { Get-Content -LiteralPath $errorFile -Raw } else { '' }
+
+        if ([string]::IsNullOrWhiteSpace($rawOutput)) {
+            throw "SIRK-MeshAdapter returned no JSON. ExitCode=$exitCode StdErr=$errorOutput"
+        }
 
         [pscustomobject]@{
             ExitCode = $exitCode
@@ -37,6 +45,10 @@ function Invoke-AdapterRequest {
         }
     }
     finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+        if ($nativePreferenceExists) {
+            $PSNativeCommandUseErrorActionPreference = $previousNativePreference
+        }
         Remove-Item -LiteralPath $outputFile, $errorFile -Force -ErrorAction SilentlyContinue
     }
 }
@@ -89,6 +101,9 @@ try {
     if ($workspace.Json.result.session.sessionZeroIsolation -ne $true) {
         throw 'Workspace session zero isolation is not reported.'
     }
+    if ($workspace.Json.result.session.rdsEnumerationAvailable -ne $true) {
+        throw 'Workspace RDS session enumeration is not reported.'
+    }
 
     $invalidCaptureRequest = $baseRequest.Clone()
     $invalidCaptureRequest.messageType = 'Workspace.CaptureFrame'
@@ -122,12 +137,12 @@ try {
         throw 'Workspace.CaptureFrame did not block Windows Session 0.'
     }
 
-    $activeSessionId = $workspace.Json.result.session.activeConsoleSessionId
-    if ($null -ne $activeSessionId) {
+    $interactiveSession = @($workspace.Json.result.session.sessions | Where-Object { $_.interactive -eq $true }) | Select-Object -First 1
+    if ($null -ne $interactiveSession) {
         $captureRequest = $baseRequest.Clone()
         $captureRequest.messageType = 'Workspace.CaptureFrame'
         $captureRequest.payload = @{
-            sessionId = [int]$activeSessionId
+            sessionId = [int]$interactiveSession.sessionId
             format = 'jpeg'
             quality = 70
             maxWidth = 1920

@@ -1,5 +1,12 @@
 # MeshCentral Workspace
 
+## 0.9.10
+
+- Wymuszono TLS 1.2 przy pobieraniu WorkspaceCapture.exe.
+- Dodano pobieranie przez curl.exe z obsluga przekierowan, retry i timeoutem.
+- Dodano awaryjny Invoke-WebRequest oraz dokladniejszy komunikat bledu pobierania.
+- Zachowano obowiazkowa kontrole SHA-256 pliku WorkspaceCapture.exe.
+
 ## 0.8.6
 
 - Dodano osobny panel `Urzadzenia` dla kazdego Workspace.
@@ -47,9 +54,9 @@
 
 ## 0.7.0
 
-- Sesja `User` pozostaje na pulpicie `winsta0\\default`.
-- `Workspace A` tworzy ukryty desktop `winsta0\\SirK-Admin-1`.
-- `Workspace B` tworzy ukryty desktop `winsta0\\SirK-Admin-2`.
+- Sesja `User` pozostaje na pulpicie `winsta0\default`.
+- `Workspace A` tworzy ukryty desktop `winsta0\SirK-Admin-1`.
+- `Workspace B` tworzy ukryty desktop `winsta0\SirK-Admin-2`.
 - Worker administracyjny tworzy desktop przez `CreateDesktopW` i przechodzi na niego przez `SetThreadDesktop`.
 - Ukryte desktopy nie sa przelaczane jako aktywne, dlatego uzytkownik nie widzi okien administratora.
 - Interfejs rozroznia sesje uzytkownika od dwoch izolowanych workspace administracyjnych.
@@ -70,10 +77,10 @@
 - MeshAgent uruchamia bootstrap WorkspaceHost jako SYSTEM.
 - Bootstrap wyszukuje aktywna sesje konsolowa lub RDP z zalogowanym uzytkownikiem.
 - Token uzytkownika jest pobierany przez `WTSQueryUserToken` i duplikowany jako token podstawowy.
-- Worker jest uruchamiany na `winsta0\\default` przez `CreateProcessAsUser`, z awaryjnym `CreateProcessWithTokenW`.
+- Worker jest uruchamiany na `winsta0\default` przez `CreateProcessAsUser`, z awaryjnym `CreateProcessWithTokenW`.
 - Plugin czeka na heartbeat workera zamiast wymagac, aby PID heartbeat byl PID-em bootstrapu.
 - Widok pokazuje osobno Bootstrap PID i Worker PID.
-- Pliki runtime sa zapisywane w `C:\\ProgramData\\SirK\\Workspace`.
+- Pliki runtime sa zapisywane w `C:\ProgramData\SirK\Workspace`.
 - WorkspaceHost podniesiono do wersji 0.4.0.
 
 ## 0.4.2

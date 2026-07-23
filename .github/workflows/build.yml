@@ -69,6 +69,24 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Publish plugin-only branch
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/develop'
+        shell: pwsh
+        run: |
+          $dist = Join-Path $env:RUNNER_TEMP 'workspace-plugin-dist'
+          Remove-Item $dist -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item $dist -ItemType Directory -Force | Out-Null
+          Copy-Item './MeshCentral-Plugin/*' $dist -Recurse -Force
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan plugin-publish
+          git rm -rf .
+          Copy-Item "$dist/*" . -Recurse -Force
+          git add --all
+          git commit -m 'Publish MeshCentral Workspace plugin 0.3.0'
+          git push origin HEAD:plugin --force
+
       - name: Publish develop-latest release
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/develop'
         shell: pwsh

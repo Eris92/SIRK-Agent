@@ -2,21 +2,10 @@
 #requires -RunAsAdministrator
 
 param(
-    [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateNotNullOrEmpty()]
     [string]$SourceExe,
-
-    [Parameter(Mandatory = $false, Position = 1)]
     [string]$WorkspaceHostSource = '',
-
-    [Parameter(Mandatory = $false)]
-    [ValidateNotNullOrEmpty()]
     [string]$InstallDirectory = "$env:ProgramFiles\SIRK\Agent",
-
-    [Parameter(Mandatory = $false)]
     [string]$ExpectedSha256 = '',
-
-    [Parameter(Mandatory = $false)]
     [switch]$NoStart
 )
 
@@ -26,14 +15,18 @@ $ErrorActionPreference = 'Stop'
 $serviceName = 'SIRKAgent'
 $displayName = 'SIRK Agent'
 
+if ([string]::IsNullOrWhiteSpace($SourceExe)) {
+    throw 'SourceExe is required.'
+}
+if ([string]::IsNullOrWhiteSpace($InstallDirectory)) {
+    throw 'InstallDirectory is required.'
+}
 if (-not (Test-Path -LiteralPath $SourceExe -PathType Leaf)) {
     throw "Agent source executable was not found: $SourceExe"
 }
-
 if ($WorkspaceHostSource -and -not (Test-Path -LiteralPath $WorkspaceHostSource -PathType Leaf)) {
     throw "WorkspaceHost source executable was not found: $WorkspaceHostSource"
 }
-
 if ($ExpectedSha256 -and $ExpectedSha256 -notmatch '^[A-Fa-f0-9]{64}$') {
     throw 'ExpectedSha256 must contain exactly 64 hexadecimal characters.'
 }
@@ -67,7 +60,6 @@ if ($existingService) {
 
 New-Item -Path $InstallDirectory -ItemType Directory -Force | Out-Null
 
-# Well-known SIDs work on every Windows language version.
 $systemSid = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-18')
 $administratorsSid = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')
 $usersSid = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-545')
@@ -83,7 +75,6 @@ $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRul
 $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($usersSid, 'ReadAndExecute', $inherit, $propagation, $allow)))
 Set-Acl -LiteralPath $InstallDirectory -AclObject $acl
 
-# Framework-dependent deployments require the complete publish directories.
 Copy-Item -Path (Join-Path $sourceDirectory '*') -Destination $InstallDirectory -Recurse -Force
 if ($workspaceHostDirectory) {
     Copy-Item -Path (Join-Path $workspaceHostDirectory '*') -Destination $InstallDirectory -Recurse -Force

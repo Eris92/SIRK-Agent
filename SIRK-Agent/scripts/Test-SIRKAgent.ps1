@@ -44,7 +44,9 @@ if (-not $runtimeInstalled) {
 }
 
 if (-not $SkipInstall) {
-    & $installer -SourceExe $agent -WorkspaceHostSource $workspaceHost
+    # Positional invocation deliberately avoids a Windows PowerShell 5.1
+    # named-parameter binding defect observed on localized systems.
+    & $installer $agent $workspaceHost
 }
 
 $service = Get-Service -Name 'SIRKAgent' -ErrorAction Stop

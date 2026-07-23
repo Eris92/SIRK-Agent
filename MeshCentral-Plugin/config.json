@@ -8,8 +8,9 @@
   "description": "Alternatywny modul WorkspaceHost uruchamiany przez MeshAgent.",
   "hasAdminPanel": false,
   "homepage": "https://github.com/Eris92/MeshCentral-Workspace",
-  "configUrl": "https://raw.githubusercontent.com/Eris92/MeshCentral-Workspace/develop/MeshCentral-Plugin/config.json",
-  "downloadUrl": "https://github.com/Eris92/MeshCentral-Workspace/releases/download/develop-latest/MeshCentral-Workspace-Plugin-0.3.0.zip",
+  "changelogUrl": "https://raw.githubusercontent.com/Eris92/MeshCentral-Workspace/plugin/changelog.md?v=0.3.0",
+  "configUrl": "https://raw.githubusercontent.com/Eris92/MeshCentral-Workspace/plugin/config.json?v=0.3.0",
+  "downloadUrl": "https://codeload.github.com/Eris92/MeshCentral-Workspace/zip/refs/heads/plugin?v=0.3.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/Eris92/MeshCentral-Workspace.git"

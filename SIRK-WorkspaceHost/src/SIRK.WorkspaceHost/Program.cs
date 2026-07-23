@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
-using System.Diagnostics;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
+using System.Security.Principal;
 using System.Text.Json;
 
 const int MaximumMessageBytes = 16 * 1024;
@@ -13,7 +13,7 @@ if (options is null)
     return 2;
 }
 
-if (!TryGetCurrentSessionId(out uint currentSessionId))
+if (!NativeMethods.ProcessIdToSessionId((uint)Environment.ProcessId, out uint currentSessionId))
 {
     Console.Error.WriteLine("Unable to resolve the current Windows session.");
     return 3;
@@ -75,9 +75,6 @@ catch (JsonException)
     return 8;
 }
 
-static bool TryGetCurrentSessionId(out uint sessionId) =>
-    ProcessIdToSessionId((uint)Environment.ProcessId, out sessionId);
-
 static async Task WriteFrameAsync(Stream stream, byte[] payload, CancellationToken cancellationToken)
 {
     if (payload.Length is <= 0 or > MaximumMessageBytes)
@@ -108,14 +105,22 @@ static async Task<byte[]> ReadFrameAsync(Stream stream, CancellationToken cancel
     return payload;
 }
 
-[DllImport("kernel32.dll", SetLastError = true)]
-[return: MarshalAs(UnmanagedType.Bool)]
-static extern bool ProcessIdToSessionId(uint processId, out uint sessionId);
+internal static class NativeMethods
+{
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool ProcessIdToSessionId(uint processId, out uint sessionId);
+}
 
 internal sealed record WorkspaceHostOptions(uint SessionId, string PipeName, string Token)
 {
     internal static WorkspaceHostOptions? Parse(string[] arguments)
     {
+        if (arguments.Length != 6)
+        {
+            return null;
+        }
+
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
 
         for (int index = 0; index < arguments.Length; index += 2)
@@ -141,8 +146,8 @@ internal sealed record WorkspaceHostOptions(uint SessionId, string PipeName, str
         if (!values.TryGetValue("--pipe-name", out string? pipeName) ||
             string.IsNullOrWhiteSpace(pipeName) ||
             pipeName.Length > 128 ||
-            pipeName.Contains('\\', StringComparison.Ordinal) ||
-            pipeName.Contains('/', StringComparison.Ordinal))
+            pipeName.Contains('\\') ||
+            pipeName.Contains('/'))
         {
             return null;
         }

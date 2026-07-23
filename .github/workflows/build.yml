@@ -16,6 +16,10 @@ jobs:
   build-publish:
     runs-on: windows-latest
 
+    defaults:
+      run:
+        shell: pwsh
+
     steps:
       - name: Checkout develop
         uses: actions/checkout@v4
@@ -24,8 +28,8 @@ jobs:
 
       - name: Read plugin version
         id: version
-        shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           $config = Get-Content './MeshCentral-Plugin/config.json' -Raw | ConvertFrom-Json
           $version = [string]$config.version
           if ([string]::IsNullOrWhiteSpace($version)) { throw 'Plugin version is missing in config.json.' }
@@ -33,12 +37,13 @@ jobs:
           Write-Host "Plugin version: $version"
 
       - name: Build native runtime and plugin
-        shell: pwsh
-        run: ./tools/build.ps1 -Configuration Release -Runtime win-x64
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./tools/build.ps1 -Configuration Release -Runtime win-x64
 
       - name: Verify no Visual C++ runtime dependency
-        shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           $vsRoot = Join-Path $env:ProgramFiles 'Microsoft Visual Studio'
           $dumpbin = Get-ChildItem $vsRoot -Filter dumpbin.exe -Recurse -ErrorAction SilentlyContinue |
             Where-Object { $_.FullName -match '\\Hostx64\\x64\\dumpbin\.exe$' } |
@@ -54,6 +59,7 @@ jobs:
           )) {
             if (-not (Test-Path $exe)) { throw "Runtime executable not found: $exe" }
             $dependencies = & $dumpbin /dependents (Resolve-Path $exe) 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) { throw "dumpbin failed for $exe with exit code $LASTEXITCODE" }
             Write-Host "Dependencies for $exe"
             Write-Host $dependencies
             if ($dependencies -match '(?im)^\s*(VCRUNTIME\d*(?:_\d+)?|MSVCP\d+|CONCRT\d+)\.dll\s*$') {
@@ -62,18 +68,22 @@ jobs:
           }
 
       - name: Verify WorkspaceHost heartbeat
-        shell: pwsh
-        run: ./tools/test-workspacehost.ps1 -ExePath ./artifacts/WorkspaceHost-win-x64/WorkspaceHost.exe
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./tools/test-workspacehost.ps1 -ExePath ./artifacts/WorkspaceHost-win-x64/WorkspaceHost.exe
 
       - name: Verify WorkspaceCapture version
-        shell: pwsh
         run: |
-          $version = (& ./artifacts/WorkspaceHost-win-x64/WorkspaceCapture.exe --version | Select-Object -First 1).Trim()
-          if ($LASTEXITCODE -ne 0 -or $version -ne '0.1.0') { throw "Unexpected WorkspaceCapture version: $version" }
+          $ErrorActionPreference = 'Stop'
+          $captureOutput = & ./artifacts/WorkspaceHost-win-x64/WorkspaceCapture.exe --version 2>&1
+          if ($LASTEXITCODE -ne 0) { throw "WorkspaceCapture --version failed with exit code $LASTEXITCODE. Output: $captureOutput" }
+          $captureVersion = [string]($captureOutput | Select-Object -First 1)
+          $captureVersion = $captureVersion.Trim()
+          if ($captureVersion -ne '0.1.0') { throw "Unexpected WorkspaceCapture version: $captureVersion" }
 
       - name: Prepare distribution files
-        shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           $version = '${{ steps.version.outputs.version }}'
           $pluginZip = "./artifacts/MeshCentral-Workspace-Plugin-$version.zip"
           if (-not (Test-Path $pluginZip)) { throw "Plugin archive not found: $pluginZip" }
@@ -96,12 +106,18 @@ jobs:
           retention-days: 14
 
       - name: Publish develop-latest runtime release
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $ErrorActionPreference = 'Stop'
           $version = '${{ steps.version.outputs.version }}'
-          gh release delete develop-latest --repo $env:GITHUB_REPOSITORY --cleanup-tag --yes 2>$null
+
+          gh release view develop-latest --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release delete develop-latest --repo $env:GITHUB_REPOSITORY --cleanup-tag --yes
+            if ($LASTEXITCODE -ne 0) { throw "Cannot delete previous develop-latest release. Exit code: $LASTEXITCODE" }
+          }
+
           gh release create develop-latest `
             ./artifacts/WorkspaceHost.exe `
             ./artifacts/WorkspaceHost.exe.sha256 `
@@ -114,21 +130,50 @@ jobs:
             --title "Development build $version" `
             --notes "Automatic tested build from develop commit $env:GITHUB_SHA." `
             --prerelease
+          if ($LASTEXITCODE -ne 0) { throw "Cannot create develop-latest release. Exit code: $LASTEXITCODE" }
 
       - name: Publish plugin-only branch
-        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          $ErrorActionPreference = 'Stop'
           $version = '${{ steps.version.outputs.version }}'
           $dist = Join-Path $env:RUNNER_TEMP 'workspace-plugin-dist'
-          Remove-Item $dist -Recurse -Force -ErrorAction SilentlyContinue
+          $publish = Join-Path $env:RUNNER_TEMP 'workspace-plugin-publish'
+          Remove-Item $dist,$publish -Recurse -Force -ErrorAction SilentlyContinue
           New-Item $dist -ItemType Directory -Force | Out-Null
           Copy-Item './MeshCentral-Plugin/*' $dist -Recurse -Force
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout --orphan plugin-publish
-          git rm -rf .
-          Copy-Item "$dist/*" . -Recurse -Force
-          git add --all
-          git commit -m "Publish MeshCentral Workspace plugin $version ($env:GITHUB_SHA)"
-          git push origin HEAD:plugin --force
+          git worktree add --detach $publish HEAD
+          if ($LASTEXITCODE -ne 0) { throw "Cannot create publication worktree. Exit code: $LASTEXITCODE" }
+
+          Push-Location $publish
+          try {
+            git checkout --orphan plugin-publish
+            if ($LASTEXITCODE -ne 0) { throw "Cannot create orphan publication branch. Exit code: $LASTEXITCODE" }
+            git rm -rf .
+            Copy-Item "$dist/*" . -Recurse -Force
+            git add --all
+            git commit -m "Publish MeshCentral Workspace plugin $version ($env:GITHUB_SHA)"
+            if ($LASTEXITCODE -ne 0) { throw "Cannot commit plugin publication. Exit code: $LASTEXITCODE" }
+            git push origin HEAD:plugin --force
+            if ($LASTEXITCODE -ne 0) { throw "Cannot push plugin branch. Exit code: $LASTEXITCODE" }
+          }
+          finally {
+            Pop-Location
+          }
+
+      - name: Verify published plugin version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expected = '${{ steps.version.outputs.version }}'
+          $encoded = gh api "repos/$env:GITHUB_REPOSITORY/contents/config.json?ref=plugin" --jq .content
+          if ($LASTEXITCODE -ne 0) { throw "Cannot read config.json from plugin branch. Exit code: $LASTEXITCODE" }
+          $json = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($encoded -replace '\s','')))
+          $actual = [string](($json | ConvertFrom-Json).version)
+          if ($actual -ne $expected) { throw "Published plugin version mismatch. Expected $expected, got $actual." }
+          Write-Host "Published plugin version verified: $actual" -ForegroundColor Green

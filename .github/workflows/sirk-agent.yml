@@ -115,14 +115,15 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Publish components
+      - name: Publish compact components
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          dotnet publish SIRK-Agent/src/SIRK.Agent/SIRK.Agent.csproj --configuration Release --no-build --output artifacts/SIRK-Agent
-          dotnet publish SIRK-Agent/tools/SIRK.Agent.Client/SIRK.Agent.Client.csproj --configuration Release --no-build --output artifacts/SIRK-Agent-Client
-          dotnet publish SIRK-MeshAdapter/src/SIRK.MeshAdapter/SIRK.MeshAdapter.csproj --configuration Release --no-build --output artifacts/SIRK-MeshAdapter
-          dotnet publish SIRK-WorkspaceHost/src/SIRK.WorkspaceHost/SIRK.WorkspaceHost.csproj --configuration Release --no-build --output artifacts/SIRK-WorkspaceHost
+          $publish = @('--configuration','Release','--self-contained','false','-p:PublishSingleFile=false','-p:UseAppHost=true','--runtime','win-x64')
+          dotnet publish SIRK-Agent/src/SIRK.Agent/SIRK.Agent.csproj @publish --output artifacts/SIRK-Agent
+          dotnet publish SIRK-Agent/tools/SIRK.Agent.Client/SIRK.Agent.Client.csproj @publish --output artifacts/SIRK-Agent-Client
+          dotnet publish SIRK-MeshAdapter/src/SIRK.MeshAdapter/SIRK.MeshAdapter.csproj @publish --output artifacts/SIRK-MeshAdapter
+          dotnet publish SIRK-WorkspaceHost/src/SIRK.WorkspaceHost/SIRK.WorkspaceHost.csproj @publish --output artifacts/SIRK-WorkspaceHost
 
       - name: Prepare test bundle
         shell: pwsh
@@ -138,32 +139,42 @@ jobs:
           Copy-Item SIRK-Agent/README.md "$bundle/Docs/README.md" -Force
           Get-ChildItem $bundle -File -Recurse | Get-FileHash -Algorithm SHA256 | Select-Object Hash,Path | ConvertTo-Json -Depth 4 | Set-Content "$bundle/SHA256SUMS.json" -Encoding UTF8
           @'
-          SIRK-Agent test bundle
+          SIRK-Agent compact test bundle
 
-          1. Extract the ZIP on a Windows test computer.
-          2. Start Windows PowerShell as Administrator.
-          3. Run:
-             Set-ExecutionPolicy -Scope Process Bypass -Force
-             .\Scripts\Test-SIRKAgent.ps1 -BundlePath .
-          4. Send the generated JSON report when reporting a problem.
+          Requirement: Microsoft .NET 8 Runtime x64.
+          Install when missing:
+            winget install Microsoft.DotNet.Runtime.8
+
+          Test:
+            Set-ExecutionPolicy -Scope Process Bypass -Force
+            .\Scripts\Test-SIRKAgent.ps1 -BundlePath .
           '@ | Set-Content "$bundle/TESTING.txt" -Encoding UTF8
 
-      - name: Upload component artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: SIRK-Agent-components-win-x64
-          path: |
-            artifacts/SIRK-Agent
-            artifacts/SIRK-Agent-Client
-            artifacts/SIRK-MeshAdapter
-            artifacts/SIRK-WorkspaceHost
-          if-no-files-found: error
-          retention-days: 14
+      - name: Verify bundle layout and size
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundle = Resolve-Path 'artifacts/SIRK-Agent-TestBundle'
+          $required = @(
+            'Agent/SIRK-Agent.exe',
+            'Client/SIRK-Agent-Client.exe',
+            'MeshAdapter/SIRK-MeshAdapter.exe',
+            'WorkspaceHost/SIRK-WorkspaceHost.exe',
+            'Scripts/Test-SIRKAgent.ps1'
+          )
+          foreach ($relative in $required) {
+            $path = Join-Path $bundle $relative
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Bundle validation failed: $relative" }
+          }
+          $size = (Get-ChildItem $bundle -File -Recurse | Measure-Object Length -Sum).Sum
+          $sizeMb = [math]::Round($size / 1MB, 2)
+          Write-Host "Uncompressed test bundle size: $sizeMb MB"
+          if ($size -gt 25MB) { throw "Compact bundle exceeds 25 MB: $sizeMb MB" }
 
       - name: Upload test bundle
         uses: actions/upload-artifact@v4
         with:
-          name: SIRK-Agent-TestBundle-win-x64
+          name: SIRK-Agent-TestBundle-compact-win-x64
           path: artifacts/SIRK-Agent-TestBundle
           if-no-files-found: error
           retention-days: 30

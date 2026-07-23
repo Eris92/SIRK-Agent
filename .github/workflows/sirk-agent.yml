@@ -8,11 +8,13 @@ on:
     paths:
       - "SIRK-Agent/**"
       - "SIRK-MeshAdapter/**"
+      - "SIRK-WorkspaceHost/**"
       - ".github/workflows/sirk-agent.yml"
   pull_request:
     paths:
       - "SIRK-Agent/**"
       - "SIRK-MeshAdapter/**"
+      - "SIRK-WorkspaceHost/**"
       - ".github/workflows/sirk-agent.yml"
 
 permissions:
@@ -44,6 +46,7 @@ jobs:
           Invoke-LoggedNative 'restore-client.log' { dotnet restore SIRK-Agent/tools/SIRK.Agent.Client/SIRK.Agent.Client.csproj }
           Invoke-LoggedNative 'restore-tests.log' { dotnet restore SIRK-Agent/tests/SIRK.Agent.IntegrationTests/SIRK.Agent.IntegrationTests.csproj }
           Invoke-LoggedNative 'restore-mesh-adapter.log' { dotnet restore SIRK-MeshAdapter/src/SIRK.MeshAdapter/SIRK.MeshAdapter.csproj }
+          Invoke-LoggedNative 'restore-workspace-host.log' { dotnet restore SIRK-WorkspaceHost/src/SIRK.WorkspaceHost/SIRK.WorkspaceHost.csproj }
 
       - name: Build projects
         shell: pwsh
@@ -58,12 +61,13 @@ jobs:
           Invoke-LoggedNative 'build-client.log' { dotnet build SIRK-Agent/tools/SIRK.Agent.Client/SIRK.Agent.Client.csproj --configuration Release --no-restore }
           Invoke-LoggedNative 'build-tests.log' { dotnet build SIRK-Agent/tests/SIRK.Agent.IntegrationTests/SIRK.Agent.IntegrationTests.csproj --configuration Release --no-restore }
           Invoke-LoggedNative 'build-mesh-adapter.log' { dotnet build SIRK-MeshAdapter/src/SIRK.MeshAdapter/SIRK.MeshAdapter.csproj --configuration Release --no-restore }
+          Invoke-LoggedNative 'build-workspace-host.log' { dotnet build SIRK-WorkspaceHost/src/SIRK.WorkspaceHost/SIRK.WorkspaceHost.csproj --configuration Release --no-restore }
 
       - name: Validate PowerShell scripts
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          Get-ChildItem SIRK-Agent,SIRK-MeshAdapter -Filter *.ps1 -Recurse | ForEach-Object {
+          Get-ChildItem SIRK-Agent,SIRK-MeshAdapter,SIRK-WorkspaceHost -Filter *.ps1 -Recurse | ForEach-Object {
             $tokens = $null
             $errors = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
@@ -89,6 +93,16 @@ jobs:
           & 'SIRK-MeshAdapter/tests/Invoke-MeshAdapterIntegration.ps1' -AgentPath $agent -AdapterPath $adapter 2>&1 | Tee-Object mesh-adapter-integration.log
           if ($LASTEXITCODE -ne 0) { throw "Mesh adapter integration tests failed with exit code $LASTEXITCODE." }
 
+      - name: Validate WorkspaceHost argument rejection
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $hostPath = Resolve-Path 'SIRK-WorkspaceHost/src/SIRK.WorkspaceHost/bin/Release/net8.0-windows/win-x64/SIRK-WorkspaceHost.exe'
+          & $hostPath --session-id 0 --pipe-name invalid --token invalid 2>&1 | Tee-Object workspace-host-validation.log
+          $exitCode = $LASTEXITCODE
+          $global:LASTEXITCODE = 0
+          if ($exitCode -ne 2) { throw "WorkspaceHost did not reject invalid startup arguments. ExitCode=$exitCode" }
+
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -99,12 +113,15 @@ jobs:
             restore-client.log
             restore-tests.log
             restore-mesh-adapter.log
+            restore-workspace-host.log
             build-agent.log
             build-client.log
             build-tests.log
             build-mesh-adapter.log
+            build-workspace-host.log
             integration-tests.log
             mesh-adapter-integration.log
+            workspace-host-validation.log
           if-no-files-found: warn
           retention-days: 7
 
@@ -116,6 +133,9 @@ jobs:
 
       - name: Publish Mesh adapter
         run: dotnet publish SIRK-MeshAdapter/src/SIRK.MeshAdapter/SIRK.MeshAdapter.csproj --configuration Release --no-build --output artifacts/SIRK-MeshAdapter
+
+      - name: Publish WorkspaceHost
+        run: dotnet publish SIRK-WorkspaceHost/src/SIRK.WorkspaceHost/SIRK.WorkspaceHost.csproj --configuration Release --no-build --output artifacts/SIRK-WorkspaceHost
 
       - name: Upload agent artifact
         uses: actions/upload-artifact@v4
@@ -138,5 +158,13 @@ jobs:
         with:
           name: SIRK-MeshAdapter-win-x64
           path: artifacts/SIRK-MeshAdapter
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload WorkspaceHost artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SIRK-WorkspaceHost-win-x64
+          path: artifacts/SIRK-WorkspaceHost
           if-no-files-found: error
           retention-days: 14

@@ -1,6 +1,6 @@
 namespace Sirk.Agent.Protocol;
 
-internal sealed class ProtocolValidator
+internal sealed class ProtocolValidator(ReplayProtection replayProtection)
 {
     private static readonly TimeSpan MaximumLifetime = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan AllowedClockSkew = TimeSpan.FromSeconds(30);
@@ -22,6 +22,16 @@ internal sealed class ProtocolValidator
             return new ProtocolError("invalid_message_type", "messageType is required and limited to 128 characters.");
         }
 
+        if (string.IsNullOrWhiteSpace(command.DeviceId) || command.DeviceId.Length > 256)
+        {
+            return new ProtocolError("invalid_device_id", "deviceId is required and limited to 256 characters.");
+        }
+
+        if (string.IsNullOrWhiteSpace(command.OperatorId) || command.OperatorId.Length > 256)
+        {
+            return new ProtocolError("invalid_operator_id", "operatorId is required and limited to 256 characters.");
+        }
+
         if (string.IsNullOrWhiteSpace(command.Nonce) || command.Nonce.Length is < 16 or > 256)
         {
             return new ProtocolError("invalid_nonce", "nonce must contain from 16 to 256 characters.");
@@ -40,6 +50,11 @@ internal sealed class ProtocolValidator
         if (command.ExpiresAt <= command.IssuedAt || command.ExpiresAt - command.IssuedAt > MaximumLifetime)
         {
             return new ProtocolError("invalid_lifetime", "The command lifetime is invalid or too long.");
+        }
+
+        if (!replayProtection.TryRegister(command.Nonce, command.ExpiresAt, now))
+        {
+            return new ProtocolError("replay_detected", "The command nonce has already been used.");
         }
 
         return null;

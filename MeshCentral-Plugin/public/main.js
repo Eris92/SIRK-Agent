@@ -3,16 +3,17 @@
 (function () {
     window.MeshCentralWorkspace = window.MeshCentralWorkspace || {};
     var plugin = window.MeshCentralWorkspace;
-    plugin.state = plugin.state || { nodeId: "", slots: [], timer: null, actions: {}, debugOpen: {}, devicesOpen: {} };
+    plugin.state = plugin.state || { nodeId: "", slots: [], timer: null, actions: {}, debugOpen: {}, devicesOpen: {}, mediaActions: {} };
     plugin.state.actions = plugin.state.actions || {};
     plugin.state.debugOpen = plugin.state.debugOpen || {};
     plugin.state.devicesOpen = plugin.state.devicesOpen || {};
+    plugin.state.mediaActions = plugin.state.mediaActions || {};
 
     function assetUrl(asset, extra) {
         var url = new URL("pluginadmin.ashx", window.location.href);
         url.searchParams.set("pin", "workspace");
         url.searchParams.set("asset", asset);
-        url.searchParams.set("v", "0.8.6");
+        url.searchParams.set("v", "0.8.8");
         if (extra) Object.keys(extra).forEach(function (key) { url.searchParams.set(key, extra[key]); });
         return url.href;
     }
@@ -44,6 +45,7 @@
     function stateLabel(state) { return ({ free: "Wolny", requested: "Żądanie", deploying: "Uruchamianie", running: "Działa", stopping: "Zatrzymywanie", stopped: "Zatrzymany", error: "Błąd", "wysyłanie": "Wysyłanie", "zatrzymywanie": "Zatrzymywanie" })[state] || state || "Wolny"; }
     function stateClass(state) { if (state === "running") return "ok"; if (state === "error") return "error"; if (busy(state)) return "pending"; return "idle"; }
     function check(label, ok, pending) { var cls = pending ? "pending" : (ok ? "ok" : "off"); var icon = pending ? "…" : (ok ? "✓" : "–"); return '<span class="workspace-check ' + cls + '"><b>' + icon + '</b>' + escapeHtml(label) + '</span>'; }
+    function formatBytes(value) { var size = Number(value || 0); if (!size) return "-"; var units = ["B", "KB", "MB", "GB", "TB"]; var i = 0; while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; } return size.toFixed(i > 1 ? 1 : 0) + " " + units[i]; }
 
     function deviceKey(slot) { return "workspace-device-mode:" + plugin.state.nodeId + ":" + slot; }
     function getDeviceMode(slot) { try { return localStorage.getItem(deviceKey(slot)) || "broker"; } catch (error) { return "broker"; } }
@@ -73,6 +75,24 @@
             '</div>';
     }
 
+    function mediaPanel(slot) {
+        var state = slot.virtualMediaState || "idle";
+        var action = plugin.state.mediaActions[slot.slot];
+        var pending = !!action || state === "mounting" || state === "unmounting";
+        var mounted = state === "mounted";
+        var label = ({ idle: "Niepodłączony", mounting: "Pobieranie i montowanie", mounted: "Podłączony", unmounting: "Odłączanie", error: "Błąd" })[state] || state;
+        return '<div class="workspace-media">' +
+            '<label>Adres HTTPS obrazu ISO</label>' +
+            '<div class="workspace-media-row"><input type="url" class="workspace-media-url" placeholder="https://serwer/Windows.iso" value="' + escapeHtml(slot.virtualMediaUrl || "") + '"' + (pending || mounted ? ' disabled' : '') + '>' +
+            '<button type="button" class="btn btn-primary btn-sm workspace-media-mount"' + (pending || mounted || !slot.id ? ' disabled' : '') + '>Podłącz</button>' +
+            '<button type="button" class="btn btn-danger btn-sm workspace-media-unmount"' + (pending || !mounted ? ' disabled' : '') + '>Odłącz</button></div>' +
+            '<div class="workspace-media-status ' + (state === "error" ? 'error' : (mounted ? 'ok' : '')) + '"><b>' + escapeHtml(label) + '</b>' +
+            (slot.virtualMediaDrive ? '<span>Napęd: ' + escapeHtml(slot.virtualMediaDrive) + '</span>' : '') +
+            (slot.virtualMediaSizeBytes ? '<span>Rozmiar: ' + escapeHtml(formatBytes(slot.virtualMediaSizeBytes)) + '</span>' : '') +
+            (slot.virtualMediaError ? '<span>' + escapeHtml(slot.virtualMediaError) + '</span>' : '') + '</div>' +
+            '<p class="workspace-media-note">Obraz jest pobierany bezpośrednio przez zdalny host i montowany przez Windows jako napęd DVD.</p></div>';
+    }
+
     function devicePanel(slot) {
         var open = !!plugin.state.devicesOpen[slot.slot];
         var mode = getDeviceMode(slot.slot);
@@ -81,14 +101,14 @@
         }
         return '<button type="button" class="workspace-devices-toggle">' + (open ? 'Ukryj urządzenia' : 'Urządzenia') + '</button>' +
             '<div class="workspace-devices"' + (open ? '' : ' hidden') + '>' +
-            '<h4>Tryb urządzeń</h4><p>Wybór jest zapisywany dla tego hosta i Workspace. Transport urządzeń będzie uruchamiany etapami.</p>' +
+            '<h4>Tryb urządzeń</h4><p>Wybór jest zapisywany dla tego hosta i Workspace.</p>' +
             '<div class="workspace-device-modes">' +
             modeButton('broker', 'Device Broker', 'PIV / Smart Card, audio, kamera i urządzenia obsługiwane logicznie') +
             modeButton('passthrough', 'USB Passthrough', 'Pełne urządzenie USB, np. dongle, programator, pendrive lub adapter') +
-            modeButton('virtual-media', 'Virtual Media', 'Obrazy ISO / IMG jako zdalny napęd CD/DVD lub dysk') +
+            modeButton('virtual-media', 'Virtual Media', 'Obrazy ISO jako zdalny napęd CD/DVD') +
             '</div>' +
-            '<div class="workspace-device-status"><b>Wybrano:</b> ' + escapeHtml(mode === 'broker' ? 'Device Broker' : (mode === 'passthrough' ? 'USB Passthrough' : 'Virtual Media')) +
-            '<span>Moduł transportu: w przygotowaniu</span></div></div>';
+            '<div class="workspace-device-status"><b>Wybrano:</b> ' + escapeHtml(mode === 'broker' ? 'Device Broker' : (mode === 'passthrough' ? 'USB Passthrough' : 'Virtual Media')) + '</div>' +
+            (mode === 'virtual-media' ? mediaPanel(slot) : '<div class="workspace-device-placeholder">Moduł transportu: w przygotowaniu</div>') + '</div>';
     }
 
     function card(sourceSlot) {
@@ -138,6 +158,8 @@
             var stopButton = element.querySelector(".workspace-stop");
             var debugButton = element.querySelector(".workspace-debug-toggle");
             var devicesButton = element.querySelector(".workspace-devices-toggle");
+            var mediaMount = element.querySelector(".workspace-media-mount");
+            var mediaUnmount = element.querySelector(".workspace-media-unmount");
             if (startButton) startButton.onclick = function (event) { if (event) { event.preventDefault(); event.stopPropagation(); } start(slotId); return false; };
             if (stopButton) stopButton.onclick = function (event) { if (event) { event.preventDefault(); event.stopPropagation(); } var slot = plugin.state.slots.find(function (item) { return item.slot === slotId; }); stop(slot); return false; };
             if (debugButton) debugButton.onclick = function (event) { if (event) event.preventDefault(); plugin.state.debugOpen[slotId] = !plugin.state.debugOpen[slotId]; render(); return false; };
@@ -145,6 +167,8 @@
             Array.prototype.forEach.call(element.querySelectorAll(".workspace-device-mode"), function (button) {
                 button.onclick = function (event) { if (event) event.preventDefault(); setDeviceMode(slotId, button.getAttribute("data-mode")); return false; };
             });
+            if (mediaMount) mediaMount.onclick = function (event) { if (event) event.preventDefault(); var slot = plugin.state.slots.find(function (item) { return item.slot === slotId; }); var input = element.querySelector(".workspace-media-url"); mountMedia(slot, input && input.value); return false; };
+            if (mediaUnmount) mediaUnmount.onclick = function (event) { if (event) event.preventDefault(); var slot = plugin.state.slots.find(function (item) { return item.slot === slotId; }); unmountMedia(slot); return false; };
         });
     }
 
@@ -175,6 +199,21 @@
         plugin.state.actions[slot.slot] = { state: "zatrzymywanie" }; render();
         post("stop", { id: slot.id }).then(function () { delete plugin.state.actions[slot.slot]; return loadSlots(); }).then(startPolling)
             .catch(function (error) { plugin.state.actions[slot.slot] = { state: "error", error: error.message }; render(); });
+    }
+
+    function mountMedia(slot, url) {
+        if (!slot || !slot.id || plugin.state.mediaActions[slot.slot]) return;
+        if (!String(url || "").trim()) { alert("Podaj adres HTTPS obrazu ISO."); return; }
+        plugin.state.mediaActions[slot.slot] = true; slot.virtualMediaState = "mounting"; slot.virtualMediaUrl = String(url).trim(); render();
+        post("media-mount", { id: slot.id, url: String(url).trim() }).then(function () { delete plugin.state.mediaActions[slot.slot]; return loadSlots(); })
+            .catch(function (error) { delete plugin.state.mediaActions[slot.slot]; slot.virtualMediaState = "error"; slot.virtualMediaError = error.message; render(); });
+    }
+
+    function unmountMedia(slot) {
+        if (!slot || !slot.id || plugin.state.mediaActions[slot.slot]) return;
+        plugin.state.mediaActions[slot.slot] = true; slot.virtualMediaState = "unmounting"; render();
+        post("media-unmount", { id: slot.id }).then(function () { delete plugin.state.mediaActions[slot.slot]; return loadSlots(); })
+            .catch(function (error) { delete plugin.state.mediaActions[slot.slot]; slot.virtualMediaState = "error"; slot.virtualMediaError = error.message; render(); });
     }
 
     function startPolling() { if (plugin.state.timer) clearInterval(plugin.state.timer); plugin.state.timer = setInterval(loadSlots, 1500); }

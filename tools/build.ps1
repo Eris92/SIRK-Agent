@@ -53,17 +53,20 @@ Write-Host 'Konfigurowanie projektu C++...' -ForegroundColor Cyan
 & $CMake -S $Project -B $Build -A $Architecture
 if ($LASTEXITCODE -ne 0) { throw "CMake configure zakonczyl sie kodem $LASTEXITCODE." }
 
-Write-Host 'Budowanie WorkspaceHost C++...' -ForegroundColor Cyan
+Write-Host 'Budowanie WorkspaceHost i WorkspaceCapture C++...' -ForegroundColor Cyan
 & $CMake --build $Build --config $Configuration --parallel
 if ($LASTEXITCODE -ne 0) { throw "CMake build zakonczyl sie kodem $LASTEXITCODE." }
 
-$Exe = Join-Path $Build "$Configuration\WorkspaceHost.exe"
-if (-not (Test-Path $Exe)) { throw "Nie znaleziono wyniku kompilacji: $Exe" }
-Copy-Item $Exe (Join-Path $Publish 'WorkspaceHost.exe') -Force
+$HostExe = Join-Path $Build "$Configuration\WorkspaceHost.exe"
+$CaptureExe = Join-Path $Build "$Configuration\WorkspaceCapture.exe"
+if (-not (Test-Path $HostExe)) { throw "Nie znaleziono wyniku kompilacji: $HostExe" }
+if (-not (Test-Path $CaptureExe)) { throw "Nie znaleziono wyniku kompilacji: $CaptureExe" }
+Copy-Item $HostExe (Join-Path $Publish 'WorkspaceHost.exe') -Force
+Copy-Item $CaptureExe (Join-Path $Publish 'WorkspaceCapture.exe') -Force
 
 Write-Host "Pakowanie pluginu $PluginVersion..." -ForegroundColor Cyan
 Compress-Archive -Path (Join-Path $Root 'MeshCentral-Plugin\*') -DestinationPath $PluginZip -Force
 
 Write-Host ''
-Write-Host "WorkspaceHost: $Publish" -ForegroundColor Green
-Write-Host "Plugin ZIP:    $PluginZip" -ForegroundColor Green
+Write-Host "Workspace runtime: $Publish" -ForegroundColor Green
+Write-Host "Plugin ZIP:       $PluginZip" -ForegroundColor Green

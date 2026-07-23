@@ -1,4 +1,6 @@
 #include <windows.h>
+#include <userenv.h>
+#include <wtsapi32.h>
 #include <chrono>
 #include <ctime>
 #include <filesystem>
@@ -9,10 +11,11 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 namespace {
 constexpr wchar_t kPipeName[] = L"\\\\.\\pipe\\SirK.MeshCentral.Workspace";
-constexpr wchar_t kVersion[] = L"0.3.0";
+constexpr wchar_t kVersion[] = L"0.4.0";
 
 std::filesystem::path LogPath() {
     wchar_t programData[MAX_PATH]{};
@@ -89,6 +92,129 @@ std::string JsonEscape(const std::string& value) {
     return escaped.str();
 }
 
+bool IsLocalSystem() {
+    SID_IDENTIFIER_AUTHORITY ntAuthority = SECURITY_NT_AUTHORITY;
+    PSID systemSid = nullptr;
+    if (!AllocateAndInitializeSid(&ntAuthority, 1, SECURITY_LOCAL_SYSTEM_RID, 0, 0, 0, 0, 0, 0, 0, &systemSid)) {
+        return false;
+    }
+    BOOL member = FALSE;
+    const BOOL checked = CheckTokenMembership(nullptr, systemSid, &member);
+    FreeSid(systemSid);
+    return checked && member;
+}
+
+bool SessionHasUser(DWORD sessionId) {
+    LPWSTR value = nullptr;
+    DWORD bytes = 0;
+    const BOOL ok = WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, sessionId, WTSUserName, &value, &bytes);
+    const bool hasUser = ok && value != nullptr && bytes > sizeof(wchar_t) && value[0] != L'\0';
+    if (value != nullptr) WTSFreeMemory(value);
+    return hasUser;
+}
+
+DWORD FindInteractiveSession() {
+    const DWORD consoleSession = WTSGetActiveConsoleSessionId();
+    if (consoleSession != 0xFFFFFFFF && SessionHasUser(consoleSession)) return consoleSession;
+
+    PWTS_SESSION_INFOW sessions = nullptr;
+    DWORD count = 0;
+    if (!WTSEnumerateSessionsW(WTS_CURRENT_SERVER_HANDLE, 0, 1, &sessions, &count)) return 0xFFFFFFFF;
+
+    DWORD selected = 0xFFFFFFFF;
+    for (DWORD index = 0; index < count; ++index) {
+        if (sessions[index].State == WTSActive && SessionHasUser(sessions[index].SessionId)) {
+            selected = sessions[index].SessionId;
+            break;
+        }
+    }
+    WTSFreeMemory(sessions);
+    return selected;
+}
+
+std::wstring CurrentExecutable() {
+    std::vector<wchar_t> buffer(32768);
+    const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (length == 0 || length >= buffer.size()) return {};
+    return std::wstring(buffer.data(), length);
+}
+
+bool RelaunchInInteractiveSession(DWORD sessionId) {
+    HANDLE userToken = nullptr;
+    HANDLE primaryToken = nullptr;
+    LPVOID environment = nullptr;
+    PROCESS_INFORMATION processInfo{};
+    STARTUPINFOW startupInfo{};
+    startupInfo.cb = sizeof(startupInfo);
+    startupInfo.lpDesktop = const_cast<LPWSTR>(L"winsta0\\default");
+
+    if (!WTSQueryUserToken(sessionId, &userToken)) {
+        Log(L"WTSQueryUserToken failed for session " + std::to_wstring(sessionId) + L": " + std::to_wstring(GetLastError()));
+        return false;
+    }
+
+    bool success = false;
+    do {
+        if (!DuplicateTokenEx(userToken, TOKEN_ALL_ACCESS, nullptr, SecurityImpersonation, TokenPrimary, &primaryToken)) {
+            Log(L"DuplicateTokenEx failed: " + std::to_wstring(GetLastError()));
+            break;
+        }
+
+        if (!CreateEnvironmentBlock(&environment, primaryToken, FALSE)) {
+            Log(L"CreateEnvironmentBlock failed: " + std::to_wstring(GetLastError()));
+            environment = nullptr;
+        }
+
+        const std::wstring executable = CurrentExecutable();
+        if (executable.empty()) {
+            Log(L"GetModuleFileName failed: " + std::to_wstring(GetLastError()));
+            break;
+        }
+
+        std::wstring commandLine = L"\"" + executable + L"\" --worker";
+        const DWORD flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
+        success = CreateProcessAsUserW(
+            primaryToken,
+            executable.c_str(),
+            commandLine.data(),
+            nullptr,
+            nullptr,
+            FALSE,
+            flags,
+            environment,
+            std::filesystem::path(executable).parent_path().c_str(),
+            &startupInfo,
+            &processInfo) != FALSE;
+
+        if (!success) {
+            const DWORD firstError = GetLastError();
+            Log(L"CreateProcessAsUser failed: " + std::to_wstring(firstError) + L". Trying CreateProcessWithTokenW.");
+            success = CreateProcessWithTokenW(
+                primaryToken,
+                LOGON_WITH_PROFILE,
+                executable.c_str(),
+                commandLine.data(),
+                flags,
+                environment,
+                std::filesystem::path(executable).parent_path().c_str(),
+                &startupInfo,
+                &processInfo) != FALSE;
+            if (!success) Log(L"CreateProcessWithTokenW failed: " + std::to_wstring(GetLastError()));
+        }
+
+        if (success) {
+            Log(L"Interactive worker started. Session=" + std::to_wstring(sessionId) + L", PID=" + std::to_wstring(processInfo.dwProcessId));
+        }
+    } while (false);
+
+    if (processInfo.hThread != nullptr) CloseHandle(processInfo.hThread);
+    if (processInfo.hProcess != nullptr) CloseHandle(processInfo.hProcess);
+    if (environment != nullptr) DestroyEnvironmentBlock(environment);
+    if (primaryToken != nullptr) CloseHandle(primaryToken);
+    CloseHandle(userToken);
+    return success;
+}
+
 std::string Heartbeat(std::chrono::steady_clock::time_point started) {
     DWORD sessionId = 0;
     ProcessIdToSessionId(GetCurrentProcessId(), &sessionId);
@@ -100,7 +226,7 @@ std::string Heartbeat(std::chrono::steady_clock::time_point started) {
     const int virtualHeight = GetSystemMetrics(SM_CYVIRTUALSCREEN);
 
     std::ostringstream json;
-    json << "{\"type\":\"heartbeat\",\"version\":\"0.3.0\",\"pid\":" << GetCurrentProcessId()
+    json << "{\"type\":\"heartbeat\",\"version\":\"0.4.0\",\"pid\":" << GetCurrentProcessId()
          << ",\"sessionId\":" << sessionId
          << ",\"user\":\"" << JsonEscape(Utf8(CurrentUser()))
          << "\",\"desktop\":\"" << JsonEscape(Utf8(CurrentDesktop()))
@@ -116,7 +242,7 @@ std::string Heartbeat(std::chrono::steady_clock::time_point started) {
 
 int RunServer() {
     const auto started = std::chrono::steady_clock::now();
-    Log(L"WorkspaceHost started. Version " + std::wstring(kVersion));
+    Log(L"WorkspaceHost worker started. Version " + std::wstring(kVersion) + L", User=" + CurrentUser());
 
     while (true) {
         HANDLE pipe = CreateNamedPipeW(
@@ -168,6 +294,15 @@ int wmain(int argc, wchar_t* argv[]) {
     }
 
     try {
+        const bool workerMode = argc > 1 && std::wstring_view(argv[1]) == L"--worker";
+        if (!workerMode && IsLocalSystem()) {
+            const DWORD sessionId = FindInteractiveSession();
+            if (sessionId == 0xFFFFFFFF) {
+                Log(L"No active interactive user session found.");
+                return 3;
+            }
+            return RelaunchInInteractiveSession(sessionId) ? 0 : 4;
+        }
         return RunServer();
     } catch (const std::exception& ex) {
         Log(L"Unhandled exception: " + Wide(ex.what()));

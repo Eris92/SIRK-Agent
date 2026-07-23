@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <userenv.h>
 #include <wtsapi32.h>
+#include <atomic>
 #include <chrono>
 #include <ctime>
 #include <filesystem>
@@ -15,8 +16,11 @@
 
 namespace {
 constexpr wchar_t kPipeBase[] = L"\\\\.\\pipe\\SirK.MeshCentral.Workspace";
-constexpr wchar_t kVersion[] = L"0.6.0";
+constexpr wchar_t kVersion[] = L"0.7.0";
+constexpr wchar_t kWindowClass[] = L"SirK.Workspace.TestWindow";
 HDESK gWorkerDesktop = nullptr;
+std::atomic<DWORD> gTestWindowThreadId{0};
+std::atomic<HWND> gTestWindow{nullptr};
 
 std::filesystem::path LogPath() {
     wchar_t programData[MAX_PATH]{};
@@ -161,6 +165,62 @@ bool SetupWorkerDesktop(const std::wstring& slot) {
     return true;
 }
 
+LRESULT CALLBACK TestWindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+    if (message == WM_CLOSE) { DestroyWindow(window); return 0; }
+    if (message == WM_DESTROY) { PostQuitMessage(0); return 0; }
+    return DefWindowProcW(window, message, wParam, lParam);
+}
+
+void TestWindowThread(std::wstring slot) {
+    const std::wstring desktopName = DesktopNameForSlot(slot);
+    HDESK desktop = OpenDesktopW(desktopName.c_str(), 0, FALSE,
+        DESKTOP_CREATEWINDOW | DESKTOP_READOBJECTS | DESKTOP_WRITEOBJECTS);
+    if (desktop == nullptr || !SetThreadDesktop(desktop)) {
+        Log(L"Test window desktop attach failed for " + desktopName + L": " + std::to_wstring(GetLastError()));
+        if (desktop != nullptr) CloseDesktop(desktop);
+        return;
+    }
+
+    WNDCLASSEXW windowClass{};
+    windowClass.cbSize = sizeof(windowClass);
+    windowClass.lpfnWndProc = TestWindowProc;
+    windowClass.hInstance = GetModuleHandleW(nullptr);
+    windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    windowClass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    windowClass.lpszClassName = kWindowClass;
+    RegisterClassExW(&windowClass);
+
+    const std::wstring title = L"SirK Workspace Test - " + desktopName;
+    HWND window = CreateWindowExW(0, kWindowClass, title.c_str(), WS_OVERLAPPEDWINDOW,
+        120, 120, 900, 600, nullptr, nullptr, windowClass.hInstance, nullptr);
+    if (window == nullptr) {
+        Log(L"CreateWindowEx failed on " + desktopName + L": " + std::to_wstring(GetLastError()));
+        CloseDesktop(desktop);
+        return;
+    }
+
+    gTestWindow.store(window);
+    gTestWindowThreadId.store(GetCurrentThreadId());
+    ShowWindow(window, SW_SHOW);
+    UpdateWindow(window);
+    Log(L"Hidden desktop test window created. Desktop=" + desktopName + L", HWND=" + std::to_wstring(reinterpret_cast<uintptr_t>(window)));
+
+    MSG message{};
+    while (GetMessageW(&message, nullptr, 0, 0) > 0) {
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+    gTestWindow.store(nullptr);
+    gTestWindowThreadId.store(0);
+    CloseDesktop(desktop);
+}
+
+void StartTestWindow(const std::wstring& slot) {
+    if (slot == L"user") return;
+    std::thread(TestWindowThread, slot).detach();
+    for (int i = 0; i < 50 && gTestWindow.load() == nullptr; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+}
+
 bool RelaunchInInteractiveSession(DWORD sessionId, const std::wstring& slot) {
     HANDLE userToken = nullptr;
     HANDLE primaryToken = nullptr;
@@ -210,8 +270,11 @@ std::string Heartbeat(std::chrono::steady_clock::time_point started, const std::
     const int virtualWidth = GetSystemMetrics(SM_CXVIRTUALSCREEN);
     const int virtualHeight = GetSystemMetrics(SM_CYVIRTUALSCREEN);
     const bool isolated = slot != L"user";
+    const HWND testWindow = gTestWindow.load();
+    const bool testWindowReady = testWindow != nullptr && IsWindow(testWindow);
+    const std::wstring testWindowTitle = testWindowReady ? (L"SirK Workspace Test - " + DesktopNameForSlot(slot)) : L"";
     std::ostringstream json;
-    json << "{\"type\":\"heartbeat\",\"version\":\"0.6.0\",\"pid\":" << GetCurrentProcessId()
+    json << "{\"type\":\"heartbeat\",\"version\":\"0.7.0\",\"pid\":" << GetCurrentProcessId()
          << ",\"sessionId\":" << sessionId
          << ",\"slot\":\"" << JsonEscape(Utf8(slot))
          << "\",\"workspaceType\":\"" << (isolated ? "admin" : "user")
@@ -223,12 +286,16 @@ std::string Heartbeat(std::chrono::steady_clock::time_point started, const std::
          << ",\"primaryWidth\":" << primaryWidth
          << ",\"primaryHeight\":" << primaryHeight
          << ",\"virtualWidth\":" << virtualWidth
-         << ",\"virtualHeight\":" << virtualHeight << "}\n";
+         << ",\"virtualHeight\":" << virtualHeight
+         << ",\"testWindowReady\":" << (testWindowReady ? "true" : "false")
+         << ",\"testWindowThreadId\":" << gTestWindowThreadId.load()
+         << ",\"testWindowTitle\":\"" << JsonEscape(Utf8(testWindowTitle)) << "\"}\n";
     return json.str();
 }
 
 int RunServer(const std::wstring& slot) {
     if (!SetupWorkerDesktop(slot)) return 5;
+    StartTestWindow(slot);
     const auto started = std::chrono::steady_clock::now();
     const std::wstring pipeName = PipeName(slot);
     Log(L"WorkspaceHost worker started. Version " + std::wstring(kVersion) + L", Slot=" + slot + L", User=" + CurrentUser() + L", Desktop=" + CurrentDesktop());

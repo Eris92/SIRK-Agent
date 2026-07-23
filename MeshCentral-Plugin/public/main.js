@@ -9,7 +9,7 @@
         var url = new URL("pluginadmin.ashx", window.location.href);
         url.searchParams.set("pin", "workspace");
         url.searchParams.set("asset", asset);
-        url.searchParams.set("v", "0.6.0");
+        url.searchParams.set("v", "0.7.0");
         if (extra) Object.keys(extra).forEach(function (key) { url.searchParams.set(key, extra[key]); });
         return url.href;
     }
@@ -38,14 +38,27 @@
     function resolution(width, height) { return width == null || height == null ? "-" : width + " × " + height; }
     function busy(state) { return ["requested", "deploying", "stopping"].indexOf(state) >= 0; }
     function active(slot) { return slot && ["free", "stopped", "error"].indexOf(slot.state) < 0; }
+    function title(slot) {
+        if (slot.slot === "user") return "Sesja użytkownika";
+        if (slot.slot === "admin1") return "Workspace A";
+        if (slot.slot === "admin2") return "Workspace B";
+        return slot.slotLabel || slot.slot;
+    }
+    function subtitle(slot) { return slot.slot === "user" ? "Widoczny pulpit użytkownika" : "Ukryty pulpit administracyjny"; }
+    function expectedDesktop(slot) {
+        if (slot.slot === "admin1") return "SirK-Admin-1";
+        if (slot.slot === "admin2") return "SirK-Admin-2";
+        return "default";
+    }
 
     function card(slot) {
         var occupied = active(slot);
         var disabledStart = busy(slot.state) || occupied;
         var disabledStop = !occupied || busy(slot.state);
+        var startLabel = slot.slot === "user" ? "Przygotuj" : "Utwórz";
         return '<section class="workspace-card" data-slot="' + escapeHtml(slot.slot) + '">' +
-            '<div class="workspace-card-head"><div><h3>' + escapeHtml(slot.slotLabel) + '</h3><span class="workspace-kind">' + escapeHtml(slot.kind === "admin" ? "Administracyjny" : "Użytkownik") + '</span></div>' +
-            '<div class="workspace-toolbar"><button class="btn btn-success btn-sm workspace-start"' + (disabledStart ? ' disabled' : '') + '>Uruchom</button>' +
+            '<div class="workspace-card-head"><div><h3>' + escapeHtml(title(slot)) + '</h3><span class="workspace-kind">' + escapeHtml(subtitle(slot)) + '</span></div>' +
+            '<div class="workspace-toolbar"><button class="btn btn-success btn-sm workspace-start"' + (disabledStart ? ' disabled' : '') + '>' + startLabel + '</button>' +
             '<button class="btn btn-danger btn-sm workspace-stop"' + (disabledStop ? ' disabled' : '') + '>Zatrzymaj</button></div></div>' +
             '<dl class="workspace-grid">' +
             '<dt>Stan</dt><dd>' + escapeHtml(slot.state || "free") + '</dd>' +
@@ -55,7 +68,8 @@
             '<dt>Worker PID</dt><dd>' + escapeHtml(slot.pid || "-") + '</dd>' +
             '<dt>Windows Session</dt><dd>' + escapeHtml(slot.windowsSessionId == null ? "-" : slot.windowsSessionId) + '</dd>' +
             '<dt>User</dt><dd>' + escapeHtml(slot.user || "-") + '</dd>' +
-            '<dt>Desktop</dt><dd>' + escapeHtml(slot.desktop || "-") + '</dd>' +
+            '<dt>Desktop</dt><dd>' + escapeHtml(slot.desktop || expectedDesktop(slot)) + '</dd>' +
+            '<dt>Izolacja</dt><dd>' + escapeHtml(slot.slot === "user" ? "Nie" : "Tak - niewidoczny dla użytkownika") + '</dd>' +
             '<dt>Version</dt><dd>' + escapeHtml(slot.version || "-") + '</dd>' +
             '<dt>Monitory</dt><dd>' + escapeHtml(slot.monitorCount == null ? "-" : slot.monitorCount) + '</dd>' +
             '<dt>Ekran główny</dt><dd>' + escapeHtml(resolution(slot.primaryWidth, slot.primaryHeight)) + '</dd>' +
@@ -69,7 +83,7 @@
         root.className = "workspace-panel";
         root.innerHTML = '<div class="workspace-header"><div><h2>Workspace</h2><p>Host: ' + escapeHtml(plugin.state.nodeId || "-") + '</p></div><button id="workspace-refresh" class="btn btn-primary btn-sm">Odśwież</button></div>' +
             '<div class="workspace-cards">' + plugin.state.slots.map(card).join("") + '</div>' +
-            '<p class="workspace-note">Admin 1 i Admin 2 są osobnymi slotami procesu. Ukryte desktopy zostaną podłączone w następnym etapie.</p>';
+            '<p class="workspace-note">Workspace A i Workspace B działają na ukrytych desktopach winsta0\\SirK-Admin-1 oraz winsta0\\SirK-Admin-2. Użytkownik nie widzi ich okien.</p>';
         var refresh = document.getElementById("workspace-refresh");
         if (refresh) refresh.onclick = loadSlots;
         Array.prototype.forEach.call(root.querySelectorAll(".workspace-card"), function (element) {

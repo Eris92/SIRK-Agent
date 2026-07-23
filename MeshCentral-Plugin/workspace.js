@@ -4,7 +4,6 @@ const createModule = require('./module.js').createModule;
 const createVirtualMedia = require('./virtualmedia.js').createVirtualMedia;
 const createAppControl = require('./appcontrol.js').createAppControl;
 const createCaptureControl = require('./capturecontrol.js').createCaptureControl;
-const createMediaControl = require('./mediacontrol.js').createMediaControl;
 
 module.exports.workspace = function workspacePlugin(parent) {
     const obj = {};
@@ -13,12 +12,10 @@ module.exports.workspace = function workspacePlugin(parent) {
     const virtualMedia = createVirtualMedia(parent, pluginModule);
     const appControl = createAppControl(parent, pluginModule);
     const captureControl = createCaptureControl(parent, pluginModule);
-    const mediaControl = createMediaControl(parent, pluginModule);
     const assets = {
         'main.js': { path: parent.path.join(pluginRoot, 'public', 'main.js'), type: 'text/javascript; charset=utf-8' },
         'apps.js': { path: parent.path.join(pluginRoot, 'public', 'apps.js'), type: 'text/javascript; charset=utf-8' },
         'capture.js': { path: parent.path.join(pluginRoot, 'public', 'capture.js'), type: 'text/javascript; charset=utf-8' },
-        'media.js': { path: parent.path.join(pluginRoot, 'public', 'media.js'), type: 'text/javascript; charset=utf-8' },
         'main.css': { path: parent.path.join(pluginRoot, 'public', 'main.css'), type: 'text/css; charset=utf-8' }
     };
 
@@ -30,20 +27,20 @@ module.exports.workspace = function workspacePlugin(parent) {
     function sendJson(res, code, value) { send(res, code, 'application/json; charset=utf-8', JSON.stringify(value)); }
     function handlePromise(res, work) { Promise.resolve(work).then(function (value) { sendJson(res, 200, { ok: true, result: value }); }).catch(function (error) { sendJson(res, 400, { ok: false, error: String(error && error.message || error || 'Request failed.') }); }); }
 
-    obj.server_startup = function () { console.log('[MeshCentral-Workspace] Plugin 0.9.3 loaded'); };
+    obj.server_startup = function () { console.log('[MeshCentral-Workspace] Plugin 0.9.4 loaded (Media Broker runtime temporarily disabled)'); };
 
     obj.onWebUIStartupEnd = function () {
         if (typeof window === 'undefined' || typeof document === 'undefined') return;
         window.MeshCentralWorkspace = window.MeshCentralWorkspace || {};
         window.MeshCentralWorkspace.bootstrapPromise = null;
-        var endpoint = function (asset) { var url = new URL('pluginadmin.ashx', window.location.href); url.searchParams.set('pin', 'workspace'); url.searchParams.set('asset', asset); url.searchParams.set('v', '0.9.3-' + Date.now()); return url.href; };
+        var endpoint = function (asset) { var url = new URL('pluginadmin.ashx', window.location.href); url.searchParams.set('pin', 'workspace'); url.searchParams.set('asset', asset); url.searchParams.set('v', '0.9.4-' + Date.now()); return url.href; };
         var load = function (id, source) { return new Promise(function (resolve, reject) { var existing = document.getElementById(id); if (existing) existing.remove(); var script = document.createElement('script'); script.id = id; script.src = source; script.async = false; script.onload = function () { script.setAttribute('data-loaded', '1'); resolve(); }; script.onerror = reject; (document.head || document.documentElement).appendChild(script); }); };
         var oldStyle = document.getElementById('workspace-plugin-css'); if (oldStyle) oldStyle.remove();
+        var oldMedia = document.getElementById('workspace-media-script'); if (oldMedia) oldMedia.remove();
         var style = document.createElement('link'); style.id = 'workspace-plugin-css'; style.rel = 'stylesheet'; style.href = endpoint('main.css'); (document.head || document.documentElement).appendChild(style);
         window.MeshCentralWorkspace.bootstrapPromise = load('workspace-main-script', endpoint('main.js'))
             .then(function () { return load('workspace-apps-script', endpoint('apps.js')); })
             .then(function () { return load('workspace-capture-script', endpoint('capture.js')); })
-            .then(function () { return load('workspace-media-script', endpoint('media.js')); })
             .then(function () { return window.MeshCentralWorkspace.initialize(); })
             .catch(function (error) { window.MeshCentralWorkspace.bootstrapPromise = null; if (window.console) console.error('Workspace bootstrap error', error); });
     };
@@ -51,7 +48,7 @@ module.exports.workspace = function workspacePlugin(parent) {
     obj.onDeviceRefreshEnd = function (nodeId) { if (typeof window === 'undefined') return; window.MeshCentralWorkspacePendingNodeId = nodeId; if (window.MeshCentralWorkspace && typeof window.MeshCentralWorkspace.onDeviceRefreshEnd === 'function') window.MeshCentralWorkspace.onDeviceRefreshEnd(nodeId); };
     obj.goPageStart = function () {};
     obj.goPageEnd = function (view) { if (typeof window !== 'undefined' && window.MeshCentralWorkspace && typeof window.MeshCentralWorkspace.onNativePageEnd === 'function') window.MeshCentralWorkspace.onNativePageEnd(view); };
-    obj.hook_processAgentData = function (command, agent) { pluginModule.captureAgentData(command, agent); virtualMedia.captureAgentData(command, agent); appControl.captureAgentData(command, agent); captureControl.captureAgentData(command, agent); mediaControl.captureAgentData(command, agent); };
+    obj.hook_processAgentData = function (command, agent) { pluginModule.captureAgentData(command, agent); virtualMedia.captureAgentData(command, agent); appControl.captureAgentData(command, agent); captureControl.captureAgentData(command, agent); };
 
     obj.handleAdminReq = function (req, res, user) {
         const asset = String(req && req.query && req.query.asset || '');
@@ -83,7 +80,6 @@ module.exports.workspace = function workspacePlugin(parent) {
         if (asset === 'apps-list') { handlePromise(res, appControl.list(user, body.id)); return; }
         if (asset === 'apps-launch') { handlePromise(res, appControl.launch(user, body.id, body.file, body.args)); return; }
         if (asset === 'capture-frame') { handlePromise(res, captureControl.capture(user, body.id)); return; }
-        if (asset === 'media-devices-list') { handlePromise(res, mediaControl.list(user, body.id)); return; }
         sendJson(res, 400, { ok: false, error: 'Unknown action.' });
     };
 

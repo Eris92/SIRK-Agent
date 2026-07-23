@@ -3,14 +3,15 @@
 (function () {
     window.MeshCentralWorkspace = window.MeshCentralWorkspace || {};
     var plugin = window.MeshCentralWorkspace;
-    plugin.state = plugin.state || { nodeId: "", slots: [], timer: null, actions: {} };
+    plugin.state = plugin.state || { nodeId: "", slots: [], timer: null, actions: {}, debugOpen: {} };
     plugin.state.actions = plugin.state.actions || {};
+    plugin.state.debugOpen = plugin.state.debugOpen || {};
 
     function assetUrl(asset, extra) {
         var url = new URL("pluginadmin.ashx", window.location.href);
         url.searchParams.set("pin", "workspace");
         url.searchParams.set("asset", asset);
-        url.searchParams.set("v", "0.8.3");
+        url.searchParams.set("v", "0.8.5");
         if (extra) Object.keys(extra).forEach(function (key) { url.searchParams.set(key, extra[key]); });
         return url.href;
     }
@@ -39,7 +40,9 @@
     function title(slot) { if (slot.slot === "user") return "Sesja użytkownika"; if (slot.slot === "admin1") return "Workspace A"; if (slot.slot === "admin2") return "Workspace B"; return slot.slotLabel || slot.slot; }
     function subtitle(slot) { return slot.slot === "user" ? "Widoczny pulpit użytkownika" : "Ukryty pulpit administracyjny"; }
     function expectedDesktop(slot) { if (slot.slot === "admin1") return "SirK-Admin-1"; if (slot.slot === "admin2") return "SirK-Admin-2"; return "default"; }
-    function yesNo(value) { return value == null ? "-" : (value ? "Tak" : "Nie"); }
+    function stateLabel(state) { return ({ free: "Wolny", requested: "Żądanie", deploying: "Uruchamianie", running: "Działa", stopping: "Zatrzymywanie", stopped: "Zatrzymany", error: "Błąd", "wysyłanie": "Wysyłanie", "zatrzymywanie": "Zatrzymywanie" })[state] || state || "Wolny"; }
+    function stateClass(state) { if (state === "running") return "ok"; if (state === "error") return "error"; if (busy(state)) return "pending"; return "idle"; }
+    function check(label, ok, pending) { var cls = pending ? "pending" : (ok ? "ok" : "off"); var icon = pending ? "…" : (ok ? "✓" : "–"); return '<span class="workspace-check ' + cls + '"><b>' + icon + '</b>' + escapeHtml(label) + '</span>'; }
 
     function displaySlot(slot) {
         var action = plugin.state.actions[slot.slot];
@@ -50,6 +53,21 @@
         return copy;
     }
 
+    function health(slot) {
+        var running = slot.state === "running";
+        var pending = busy(slot.state);
+        return '<div class="workspace-health">' +
+            check("Proces", !!slot.pid, pending) +
+            check("Heartbeat", running && !slot.error, pending) +
+            check("Pipe", running && !!slot.pid, pending) +
+            check("Desktop", running && !!slot.desktop, pending) +
+            check("GUI", slot.slot === "user" ? running : !!slot.testWindowReady, pending) +
+            check("Capture", false, false) +
+            check("Input", false, false) +
+            check("Clipboard", false, false) +
+            '</div>';
+    }
+
     function card(sourceSlot) {
         var slot = displaySlot(sourceSlot);
         var occupied = active(slot);
@@ -57,29 +75,34 @@
         var disabledStart = actionPending || busy(slot.state) || occupied;
         var disabledStop = actionPending || !occupied || busy(slot.state);
         var startLabel = slot.slot === "user" ? "Przygotuj" : "Utwórz";
+        var debugOpen = !!plugin.state.debugOpen[slot.slot];
         return '<section class="workspace-card" data-slot="' + escapeHtml(slot.slot) + '">' +
             '<div class="workspace-card-head"><div><h3>' + escapeHtml(title(slot)) + '</h3><span class="workspace-kind">' + escapeHtml(subtitle(slot)) + '</span></div>' +
             '<div class="workspace-toolbar"><button type="button" class="btn btn-success btn-sm workspace-start"' + (disabledStart ? ' disabled' : '') + '>' + startLabel + '</button>' +
             '<button type="button" class="btn btn-danger btn-sm workspace-stop"' + (disabledStop ? ' disabled' : '') + '>Zatrzymaj</button></div></div>' +
-            '<dl class="workspace-grid">' +
-            '<dt>Stan</dt><dd>' + escapeHtml(slot.state || "free") + '</dd>' +
+            '<div class="workspace-state ' + stateClass(slot.state) + '"><span></span><strong>' + escapeHtml(stateLabel(slot.state)) + '</strong>' + (slot.error ? '<em>' + escapeHtml(slot.error) + '</em>' : '') + '</div>' +
+            health(slot) +
+            '<dl class="workspace-grid workspace-summary">' +
             '<dt>Właściciel</dt><dd>' + escapeHtml(slot.ownerName || "-") + '</dd>' +
+            '<dt>Użytkownik</dt><dd>' + escapeHtml(slot.user || "-") + '</dd>' +
+            '<dt>Sesja Windows</dt><dd>' + escapeHtml(slot.windowsSessionId == null ? "-" : slot.windowsSessionId) + '</dd>' +
+            '<dt>Desktop</dt><dd>' + escapeHtml(slot.desktop || expectedDesktop(slot)) + '</dd>' +
+            '<dt>WorkspaceHost</dt><dd>' + escapeHtml(slot.version || "-") + '</dd>' +
+            '<dt>Proces</dt><dd>' + escapeHtml(slot.pid ? ("PID " + slot.pid) : "-") + '</dd>' +
+            '<dt>Ekran</dt><dd>' + escapeHtml(resolution(slot.primaryWidth, slot.primaryHeight)) + '</dd>' +
+            '<dt>Monitory</dt><dd>' + escapeHtml(slot.monitorCount == null ? "-" : slot.monitorCount) + '</dd></dl>' +
+            '<button type="button" class="workspace-debug-toggle">' + (debugOpen ? "Ukryj debug" : "Pokaż debug") + '</button>' +
+            '<div class="workspace-debug"' + (debugOpen ? '' : ' hidden') + '><dl class="workspace-grid">' +
             '<dt>Session ID</dt><dd>' + escapeHtml(slot.id || "-") + '</dd>' +
             '<dt>Bootstrap PID</dt><dd>' + escapeHtml(slot.bootstrapPid || "-") + '</dd>' +
             '<dt>Worker PID</dt><dd>' + escapeHtml(slot.pid || "-") + '</dd>' +
-            '<dt>Windows Session</dt><dd>' + escapeHtml(slot.windowsSessionId == null ? "-" : slot.windowsSessionId) + '</dd>' +
-            '<dt>User</dt><dd>' + escapeHtml(slot.user || "-") + '</dd>' +
-            '<dt>Desktop</dt><dd>' + escapeHtml(slot.desktop || expectedDesktop(slot)) + '</dd>' +
             '<dt>Izolacja</dt><dd>' + escapeHtml(slot.slot === "user" ? "Nie" : "Tak - niewidoczny dla użytkownika") + '</dd>' +
-            '<dt>Okno testowe</dt><dd>' + escapeHtml(slot.slot === "user" ? "Nie dotyczy" : yesNo(slot.testWindowReady)) + '</dd>' +
+            '<dt>Okno testowe</dt><dd>' + escapeHtml(slot.slot === "user" ? "Nie dotyczy" : (slot.testWindowReady ? "Tak" : "Nie")) + '</dd>' +
             '<dt>Tytuł okna</dt><dd>' + escapeHtml(slot.testWindowTitle || "-") + '</dd>' +
             '<dt>Wątek UI</dt><dd>' + escapeHtml(slot.testWindowThreadId || "-") + '</dd>' +
-            '<dt>Version</dt><dd>' + escapeHtml(slot.version || "-") + '</dd>' +
-            '<dt>Monitory</dt><dd>' + escapeHtml(slot.monitorCount == null ? "-" : slot.monitorCount) + '</dd>' +
-            '<dt>Ekran główny</dt><dd>' + escapeHtml(resolution(slot.primaryWidth, slot.primaryHeight)) + '</dd>' +
             '<dt>Pulpit wirtualny</dt><dd>' + escapeHtml(resolution(slot.virtualWidth, slot.virtualHeight)) + '</dd>' +
-            '<dt>Ostatni wynik</dt><dd>' + escapeHtml(slot.lastOutput || "-") + '</dd>' +
-            '<dt>Błąd</dt><dd>' + escapeHtml(slot.error || "-") + '</dd></dl></section>';
+            '<dt>Ostatni wynik</dt><dd><pre>' + escapeHtml(slot.lastOutput || "-") + '</pre></dd>' +
+            '<dt>Błąd</dt><dd>' + escapeHtml(slot.error || "-") + '</dd></dl></div></section>';
     }
 
     function bindButtons(root) {
@@ -89,8 +112,10 @@
             var slotId = element.getAttribute("data-slot");
             var startButton = element.querySelector(".workspace-start");
             var stopButton = element.querySelector(".workspace-stop");
+            var debugButton = element.querySelector(".workspace-debug-toggle");
             if (startButton) startButton.onclick = function (event) { if (event) { event.preventDefault(); event.stopPropagation(); } start(slotId); return false; };
             if (stopButton) stopButton.onclick = function (event) { if (event) { event.preventDefault(); event.stopPropagation(); } var slot = plugin.state.slots.find(function (item) { return item.slot === slotId; }); stop(slot); return false; };
+            if (debugButton) debugButton.onclick = function (event) { if (event) event.preventDefault(); plugin.state.debugOpen[slotId] = !plugin.state.debugOpen[slotId]; render(); return false; };
         });
     }
 
@@ -99,8 +124,7 @@
         if (!root) return;
         root.className = "workspace-panel";
         root.innerHTML = '<div class="workspace-header"><div><h2>Workspace</h2><p>Host: ' + escapeHtml(plugin.state.nodeId || "-") + '</p></div><button type="button" id="workspace-refresh" class="btn btn-primary btn-sm">Odśwież</button></div>' +
-            '<div class="workspace-cards">' + plugin.state.slots.map(card).join("") + '</div>' +
-            '<p class="workspace-note">Błąd nie znika już z karty. Pole „Ostatni wynik” pokazuje odpowiedź MeshAgenta lub etap oczekiwania.</p>';
+            '<div class="workspace-cards">' + plugin.state.slots.map(card).join("") + '</div>';
         bindButtons(root);
     }
 

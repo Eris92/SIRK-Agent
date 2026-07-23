@@ -31,6 +31,8 @@ module.exports.createModule = function createModule(parent) {
             state: 'requested', createdAt: now(), updatedAt: now(),
             pid: null, windowsSessionId: null, user: null, desktop: null,
             version: null, uptimeSeconds: null, lastHeartbeat: null,
+            monitorCount: null, primaryWidth: null, primaryHeight: null,
+            virtualWidth: null, virtualHeight: null,
             error: null, responseId: null
         };
         sessions.set(session.id, session);
@@ -150,6 +152,11 @@ module.exports.createModule = function createModule(parent) {
                 version: data.version || session.version || null,
                 desktop: data.desktop || session.desktop || null,
                 uptimeSeconds: data.uptimeSeconds == null ? session.uptimeSeconds : data.uptimeSeconds,
+                monitorCount: data.monitorCount == null ? session.monitorCount : data.monitorCount,
+                primaryWidth: data.primaryWidth == null ? session.primaryWidth : data.primaryWidth,
+                primaryHeight: data.primaryHeight == null ? session.primaryHeight : data.primaryHeight,
+                virtualWidth: data.virtualWidth == null ? session.virtualWidth : data.virtualWidth,
+                virtualHeight: data.virtualHeight == null ? session.virtualHeight : data.virtualHeight,
                 lastHeartbeat: result.state === 'running' ? now() : session.lastHeartbeat,
                 error: null
             });
@@ -177,7 +184,7 @@ module.exports.createModule = function createModule(parent) {
         return new Promise(function (resolve, reject) {
             const session = createSession(nodeId, user && user._id);
             updateSession(session.id, { state: 'deploying' });
-            dispatchCommand(session, user, launcherCommand(session.id), 'workspace-start-' + session.id, 2, function (error) {
+            dispatchCommand(session, user, launcherCommand(session.id), 'workspace-start-' + session.id, 1, function (error) {
                 if (error) { updateSession(session.id, { state: 'error', error }); reject(new Error(error)); return; }
                 resolve(session);
             });
@@ -191,7 +198,7 @@ module.exports.createModule = function createModule(parent) {
             if (session.userId && user && session.userId !== user._id && user.siteadmin !== 0xFFFFFFFF) { reject(new Error('Permission denied.')); return; }
             if (!session.pid) { updateSession(session.id, { state: 'stopped' }); resolve(session); return; }
             updateSession(session.id, { state: 'stopping' });
-            dispatchCommand(session, user, stopCommand(session.id, session.pid), 'workspace-stop-' + session.id, 2, function (error) {
+            dispatchCommand(session, user, stopCommand(session.id, session.pid), 'workspace-stop-' + session.id, 1, function (error) {
                 if (error) { updateSession(session.id, { state: 'error', error }); reject(new Error(error)); return; }
                 resolve(session);
             });

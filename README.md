@@ -1,36 +1,60 @@
-# MeshCentral Workspace
+# SIRK Management Platform
 
-Alternatywny modul zdalnego pulpitu dla MeshCentral rozwijany jako osobna wtyczka i host Windows.
+SIRK Management Platform (SMP) to bezpieczna, szybka i niezalezna platforma do zarzadzania srodowiskami IT oraz integracji z innymi systemami.
 
-## Cel pierwszego etapu
+MeshCentral nie jest juz traktowany jako docelowy rdzen produktu. Pozostaje pierwszym adapterem wdrozeniowym i transportowym, ktory instaluje oraz uruchamia `SIRK-Agent` na zarzadzanych urzadzeniach.
 
-Po kliknieciu **Pulpit -New -> Polacz** wtyczka ma:
+## Priorytety projektu
 
-1. utworzyc sesje,
-2. wyslac polecenie do wybranego urzadzenia,
-3. uruchomic `WorkspaceHost` w sesji zalogowanego uzytkownika,
-4. odebrac heartbeat,
-5. pokazac PID, SessionId, uzytkownika i stan procesu.
+1. **Security First** - zadna funkcja nie moze obchodzic walidacji, autoryzacji, audytu ani kontroli integralnosci.
+2. **Performance First** - platforma ma pozostawac responsywna takze przy bardzo slabym i niestabilnym laczu.
+3. **Transport Independence** - moduly wykonawcze nie moga zalezec od MeshCentral ani od konkretnego portalu.
+4. **No Vendor Lock-in** - kazdy adapter i transport musi byc wymienialny.
+5. **Enterprise Ready** - RBAC, MFA, audyt, polityki, HA i bezpieczne aktualizacje sa uwzgledniane od poczatku.
 
-## Struktura
+## Docelowa architektura
 
 ```text
-MeshCentral-Plugin/
-WorkspaceHost/
-WorkspaceCommon/
-docs/
-tests/
+SIRK Management Platform
+├── SIRK-Portal
+├── SIRK-Server
+├── SIRK-Agent
+├── SIRK-Protocol
+├── SIRK-SDK
+├── SIRK-MeshAdapter
+├── SIRK-Installer
+├── SIRK-Updater
+└── SIRK-Diagnostics
 ```
 
-## Roadmap
+## Model przejsciowy
 
-- v0.1 - szkielet repozytorium i dokumentacja
-- v0.2 - uruchamianie WorkspaceHost przez MeshAgent
-- v0.3 - heartbeat i diagnostyka
-- v0.4 - DXGI capture
-- v0.5 - streaming obrazu
-- v0.6 - input
-- v0.7 - virtual display
-- v1.0 - stabilny modul Pulpit -New
+```text
+MeshCentral Plugin / MeshAgent
+        ↓ instalacja i transport przejsciowy
+SIRK-Agent
+        ↓
+SIRK Runtime
+├── Workspace
+├── Terminal
+├── Files
+├── Registry
+├── Software
+├── Automation
+├── Monitoring
+└── Security
+```
 
-Projekt jest rozwijany etapami. Oryginalny modul Desktop MeshCentral pozostaje bez zmian.
+Po uruchomieniu SIRK-Server ten sam agent ma polaczyc sie z nowym portalem bez reinstalacji i bez przepisywania modulow wykonawczych.
+
+## Najblizszy etap
+
+- fundament uslugi Windows `SIRK-Agent`,
+- wersjonowany protokol polecen,
+- lokalne IPC przez Named Pipe,
+- instalacja oraz aktualizacja przez MeshAgent,
+- heartbeat i diagnostyka,
+- przeniesienie `captureFrame` pod kontrole agenta,
+- przygotowanie transportu standalone do przyszlego SIRK-Server.
+
+Szczegoly znajduja sie w katalogu [`docs`](docs/README.md).

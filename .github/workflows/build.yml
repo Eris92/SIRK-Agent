@@ -23,12 +23,19 @@ jobs:
         shell: pwsh
         run: |
           $exe = Resolve-Path './artifacts/WorkspaceHost-win-x64/WorkspaceHost.exe'
-          $dumpbin = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022" -Filter dumpbin.exe -Recurse -ErrorAction SilentlyContinue |
+          $vsRoot = Join-Path $env:ProgramFiles 'Microsoft Visual Studio'
+          $dumpbin = Get-ChildItem $vsRoot -Filter dumpbin.exe -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '\\Hostx64\\x64\\dumpbin\.exe$' } |
             Select-Object -First 1 -ExpandProperty FullName
-          if (-not $dumpbin) { throw 'dumpbin.exe not found on GitHub runner.' }
+          if (-not $dumpbin) {
+            $dumpbin = Get-ChildItem $vsRoot -Filter dumpbin.exe -Recurse -ErrorAction SilentlyContinue |
+              Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $dumpbin) { throw "dumpbin.exe not found under $vsRoot" }
+          Write-Host "dumpbin: $dumpbin"
           $dependencies = & $dumpbin /dependents $exe 2>&1 | Out-String
           Write-Host $dependencies
-          if ($dependencies -match '(?i)VCRUNTIME\d*|MSVCP\d*|CONCRT\d*') {
+          if ($dependencies -match '(?im)^\s*(VCRUNTIME\d*(?:_\d+)?|MSVCP\d+|CONCRT\d+)\.dll\s*$') {
             throw 'WorkspaceHost still depends on Visual C++ Redistributable DLLs.'
           }
 

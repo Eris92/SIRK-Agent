@@ -24,13 +24,13 @@ module.exports.workspace = function workspacePlugin(parent) {
     function sendJson(res, code, value) { send(res, code, 'application/json; charset=utf-8', JSON.stringify(value)); }
     function handlePromise(res, work) { Promise.resolve(work).then(function (value) { sendJson(res, 200, { ok: true, result: value }); }).catch(function (error) { sendJson(res, 400, { ok: false, error: String(error && error.message || error || 'Request failed.') }); }); }
 
-    obj.server_startup = function () { console.log('[MeshCentral-Workspace] Plugin 0.9.5 loaded (0.9.1 runtime path restored)'); };
+    obj.server_startup = function () { console.log('[MeshCentral-Workspace] Plugin 0.9.6 loaded (stable app controls)'); };
 
     obj.onWebUIStartupEnd = function () {
         if (typeof window === 'undefined' || typeof document === 'undefined') return;
         window.MeshCentralWorkspace = window.MeshCentralWorkspace || {};
         window.MeshCentralWorkspace.bootstrapPromise = null;
-        var endpoint = function (asset) { var url = new URL('pluginadmin.ashx', window.location.href); url.searchParams.set('pin', 'workspace'); url.searchParams.set('asset', asset); url.searchParams.set('v', '0.9.5-' + Date.now()); return url.href; };
+        var endpoint = function (asset) { var url = new URL('pluginadmin.ashx', window.location.href); url.searchParams.set('pin', 'workspace'); url.searchParams.set('asset', asset); url.searchParams.set('v', '0.9.6-' + Date.now()); return url.href; };
         var load = function (id, source) { return new Promise(function (resolve, reject) { var existing = document.getElementById(id); if (existing) existing.remove(); var script = document.createElement('script'); script.id = id; script.src = source; script.async = false; script.onload = function () { script.setAttribute('data-loaded', '1'); resolve(); }; script.onerror = reject; (document.head || document.documentElement).appendChild(script); }); };
         ['workspace-capture-script', 'workspace-media-script'].forEach(function (id) { var old = document.getElementById(id); if (old) old.remove(); });
         var oldStyle = document.getElementById('workspace-plugin-css'); if (oldStyle) oldStyle.remove();

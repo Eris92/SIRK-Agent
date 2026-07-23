@@ -94,7 +94,8 @@ static string? Validate(AdapterRequest input)
         "System.Ping",
         "System.GetStatus",
         "System.GetCapabilities",
-        "Workspace.GetCapabilities"
+        "Workspace.GetCapabilities",
+        "Workspace.CaptureFrame"
     };
 
     if (!allowedMessages.Contains(input.MessageType, StringComparer.Ordinal))

@@ -1,132 +1,176 @@
-(function () {
-    'use strict';
+"use strict";
 
-    var state = { nodeId: '', sessionId: '', timer: null };
+(function () {
+    window.MeshCentralWorkspace = window.MeshCentralWorkspace || {};
+    var plugin = window.MeshCentralWorkspace;
+    plugin.state = plugin.state || { nodeId: "", sessionId: "", timer: null };
 
     function assetUrl(asset, extra) {
-        var url = new URL('pluginadmin.ashx', window.location.href);
-        url.searchParams.set('pin', 'workspace');
-        url.searchParams.set('asset', asset);
+        var url = new URL("pluginadmin.ashx", window.location.href);
+        url.searchParams.set("pin", "workspace");
+        url.searchParams.set("asset", asset);
+        url.searchParams.set("v", "0.3.1");
         if (extra) Object.keys(extra).forEach(function (key) { url.searchParams.set(key, extra[key]); });
         return url.href;
     }
 
-    function currentNodeId(explicit) {
-        if (explicit) return explicit;
-        if (window.MeshCentralWorkspacePendingNodeId) return window.MeshCentralWorkspacePendingNodeId;
-        if (window.currentNode && window.currentNode._id) return window.currentNode._id;
-        if (window.nodeid) return window.nodeid;
-        try { var q = new URLSearchParams(location.search); return q.get('nodeid') || q.get('node') || ''; }
-        catch (_) { return ''; }
-    }
-
-    function escapeHtml(value) {
-        return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
-            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    function request(asset, options, extra) {
+        return fetch(assetUrl(asset, extra), Object.assign({ credentials: "same-origin", cache: "no-store" }, options || {})).then(function (response) {
+            return response.text().then(function (text) {
+                var data = {};
+                try { data = JSON.parse(text || "{}"); } catch (error) { data = { ok: false, error: text || response.statusText }; }
+                if (!response.ok || data.ok === false) throw new Error(data.error || response.statusText || "Request failed");
+                return data.result;
+            });
         });
     }
 
-    async function request(asset, options, extra) {
-        var response = await fetch(assetUrl(asset, extra), Object.assign({ credentials: 'same-origin' }, options || {}));
-        var data = await response.json().catch(function () { return {}; });
-        if (!response.ok || data.ok === false) throw new Error(data.error || ('HTTP ' + response.status));
-        return data.result;
+    function post(asset, values) {
+        var body = new URLSearchParams();
+        Object.keys(values || {}).forEach(function (key) { body.set(key, values[key]); });
+        return request(asset, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" }, body: body.toString() });
+    }
+
+    function escapeHtml(value) {
+        return String(value == null ? "" : value).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]; });
+    }
+
+    function mark(element, label) {
+        if (!element) return element;
+        element.setAttribute("data-meshcentral-plugin-pin", "workspace");
+        element.setAttribute("data-meshcentral-plugin-click", label || element.id || "Pulpit -New");
+        return element;
     }
 
     function render(session) {
-        var root = document.getElementById('workspace-new-root');
+        var root = document.getElementById("workspace-device-page");
         if (!root) return;
         var s = session || {};
-        var busy = s.state === 'requested' || s.state === 'deploying';
-        root.innerHTML = '<div class="workspace-card">' +
-            '<div class="workspace-toolbar">' +
+        var busy = s.state === "requested" || s.state === "deploying";
+        root.className = "workspace-panel";
+        root.innerHTML = '<div class="workspace-card"><div class="workspace-toolbar">' +
             '<button id="workspace-connect" class="btn btn-success btn-sm"' + (busy ? ' disabled' : '') + '>Polacz</button>' +
-            '<button id="workspace-disconnect" class="btn btn-danger btn-sm"' + (state.sessionId ? '' : ' disabled') + '>Rozlacz</button>' +
+            '<button id="workspace-disconnect" class="btn btn-danger btn-sm"' + (plugin.state.sessionId ? '' : ' disabled') + '>Rozlacz</button>' +
             '</div><h3>WorkspaceHost</h3><dl class="workspace-grid">' +
-            '<dt>Host</dt><dd>' + escapeHtml(state.nodeId || '-') + '</dd>' +
+            '<dt>Host</dt><dd>' + escapeHtml(plugin.state.nodeId || '-') + '</dd>' +
             '<dt>Stan</dt><dd>' + escapeHtml(s.state || 'idle') + '</dd>' +
-            '<dt>Session ID</dt><dd>' + escapeHtml(s.id || state.sessionId || '-') + '</dd>' +
+            '<dt>Session ID</dt><dd>' + escapeHtml(s.id || plugin.state.sessionId || '-') + '</dd>' +
             '<dt>PID</dt><dd>' + escapeHtml(s.pid || '-') + '</dd>' +
             '<dt>User</dt><dd>' + escapeHtml(s.user || '-') + '</dd>' +
             '<dt>Desktop</dt><dd>' + escapeHtml(s.desktop || '-') + '</dd>' +
             '<dt>Version</dt><dd>' + escapeHtml(s.version || '-') + '</dd>' +
             '<dt>Ostatni status</dt><dd>' + escapeHtml(s.lastHeartbeat || s.updatedAt || '-') + '</dd>' +
-            '<dt>Blad</dt><dd>' + escapeHtml(s.error || '-') + '</dd>' +
-            '</dl><p class="workspace-note">Etap 0.3: plugin wysyla przez MeshAgenta polecenie pobrania, weryfikacji SHA256 i uruchomienia WorkspaceHost w sesji interaktywnego uzytkownika.</p></div>';
-        document.getElementById('workspace-connect').onclick = start;
-        document.getElementById('workspace-disconnect').onclick = stop;
+            '<dt>Blad</dt><dd>' + escapeHtml(s.error || '-') + '</dd></dl></div>';
+        document.getElementById("workspace-connect").onclick = start;
+        document.getElementById("workspace-disconnect").onclick = stop;
     }
 
-    async function start() {
-        try {
-            state.nodeId = currentNodeId();
-            if (!state.nodeId) throw new Error('Nie znaleziono nodeId.');
-            render({ state: 'requested' });
-            var body = new URLSearchParams();
-            body.set('nodeId', state.nodeId);
-            var session = await request('start', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
-                body: body.toString()
-            });
-            state.sessionId = session.id;
+    function start() {
+        if (!plugin.state.nodeId) { render({ state: "error", error: "Nie znaleziono nodeId." }); return; }
+        render({ state: "requested" });
+        post("start", { nodeId: plugin.state.nodeId }).then(function (session) {
+            plugin.state.sessionId = session.id;
             render(session);
             poll();
-        } catch (error) { render({ state: 'error', error: error.message }); }
+        }).catch(function (error) { render({ state: "error", error: error.message }); });
     }
 
-    async function stop() {
-        if (!state.sessionId) return;
-        try {
-            var body = new URLSearchParams();
-            body.set('id', state.sessionId);
-            var session = await request('stop', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
-                body: body.toString()
-            });
-            if (state.timer) clearInterval(state.timer);
-            state.timer = null;
-            state.sessionId = '';
+    function stop() {
+        if (!plugin.state.sessionId) return;
+        post("stop", { id: plugin.state.sessionId }).then(function (session) {
+            if (plugin.state.timer) clearInterval(plugin.state.timer);
+            plugin.state.timer = null;
+            plugin.state.sessionId = "";
             render(session);
-        } catch (error) { render({ state: 'error', error: error.message }); }
+        }).catch(function (error) { render({ state: "error", error: error.message }); });
     }
 
     function poll() {
-        if (state.timer) clearInterval(state.timer);
-        state.timer = setInterval(async function () {
-            if (!state.sessionId) return;
-            try {
-                var session = await request('status', null, { id: state.sessionId });
+        if (plugin.state.timer) clearInterval(plugin.state.timer);
+        plugin.state.timer = setInterval(function () {
+            if (!plugin.state.sessionId) return;
+            request("status", null, { id: plugin.state.sessionId }).then(function (session) {
                 render(session);
-                if (session.state === 'running' || session.state === 'error' || session.state === 'stopped') {
-                    clearInterval(state.timer);
-                    state.timer = null;
-                }
-            } catch (error) { render({ state: 'error', error: error.message }); }
+                if (["running", "error", "stopped"].indexOf(session.state) >= 0) { clearInterval(plugin.state.timer); plugin.state.timer = null; }
+            }).catch(function (error) { render({ state: "error", error: error.message }); });
         }, 1500);
     }
 
-    function ensureTab(nodeId) {
-        state.nodeId = currentNodeId(nodeId);
-        if (document.getElementById('workspace-new-root')) return;
-        var tabs = document.querySelector('[role="tablist"], #p11tabs, .device-tabs');
-        var content = document.querySelector('.tab-content, #p11, #deviceDetails') || document.body;
-        if (!tabs) return;
-        var button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'workspace-tab-button';
-        button.textContent = 'Pulpit -New';
-        var panel = document.createElement('div');
-        panel.id = 'workspace-new-root';
-        panel.className = 'workspace-panel';
-        panel.style.display = 'none';
-        button.onclick = function () { panel.style.display = 'block'; render(); };
-        tabs.appendChild(button);
-        content.appendChild(panel);
-    }
+    plugin.ensureDeviceIntegration = function () {
+        if (!plugin.state.nodeId) return false;
+        if (!window.pluginHandler || typeof window.pluginHandler.registerPluginTab !== "function") return false;
+        window.pluginHandler.registerPluginTab({ tabId: "workspace-device-page", tabTitle: "Pulpit -New" });
+        plugin.ensureDeviceTab();
+        render();
+        return true;
+    };
 
-    window.MeshCentralWorkspace = { refresh: ensureTab, start: start, stop: stop };
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { ensureTab(); });
-    else ensureTab();
+    plugin.ensureDeviceTab = function () {
+        if (!document.getElementById("workspace-device-page")) return false;
+        var anchor = document.getElementById("MainDevTerminal") || document.getElementById("MainDevPlugins");
+        if (!anchor || !anchor.parentNode) return false;
+        var tab = document.getElementById("MainDevWorkspace");
+        if (!tab) {
+            tab = document.createElement("td");
+            tab.id = "MainDevWorkspace";
+            tab.tabIndex = 0;
+            tab.className = "topbar_td style3x";
+            tab.textContent = "Pulpit -New";
+            tab.onmouseup = plugin.openDeviceTab;
+            tab.onkeypress = function (event) { if (event && event.key === "Enter") return plugin.openDeviceTab(event); };
+            mark(tab, "Pulpit -New device tab");
+            anchor.parentNode.insertBefore(tab, anchor.nextSibling);
+        }
+        tab.style.display = "";
+        return true;
+    };
+
+    plugin.openDeviceTab = function (event) {
+        if (event && ((event.which === 3) || (event.button === 2))) return false;
+        if (typeof window.putstore === "function") window.putstore("_curPluginPage", "workspace-device-page");
+        if (typeof window.go === "function") window.go(19, event);
+        window.setTimeout(function () {
+            var header = document.getElementById("p19ph-workspace-device-page");
+            if (header && window.pluginHandler && typeof window.pluginHandler.callPluginPage === "function") window.pluginHandler.callPluginPage("workspace-device-page", header);
+            render();
+            plugin.updateDeviceTab(19);
+        }, 0);
+        if (event && event.preventDefault) event.preventDefault();
+        return false;
+    };
+
+    plugin.updateDeviceTab = function (view) {
+        var tab = document.getElementById("MainDevWorkspace");
+        if (!tab) return;
+        if (view == null && typeof window.xxcurrentView !== "undefined") view = window.xxcurrentView;
+        var activeHeader = document.querySelector("#p19headers span.on");
+        var workspaceHeader = document.getElementById("p19ph-workspace-device-page");
+        var active = Number(view) === 19 && activeHeader === workspaceHeader;
+        tab.classList.remove("style3x", "style3sel");
+        tab.classList.add(active ? "style3sel" : "style3x");
+        var pluginTab = document.getElementById("MainDevPlugins");
+        if (pluginTab && active) { pluginTab.classList.remove("style3sel"); pluginTab.classList.add("style3x"); }
+        var headers = document.getElementById("p19headers");
+        if (headers) headers.style.display = active ? "none" : "";
+    };
+
+    plugin.onDeviceRefreshEnd = function (nodeId) {
+        plugin.state.nodeId = String(nodeId || "");
+        if (plugin.state.nodeId) plugin.ensureDeviceIntegration();
+    };
+
+    plugin.onNativePageEnd = function (view) {
+        if (plugin.state.nodeId) plugin.ensureDeviceTab();
+        plugin.updateDeviceTab(view);
+    };
+
+    plugin.initialize = function () {
+        if (window.MeshCentralWorkspacePendingNodeId) plugin.state.nodeId = String(window.MeshCentralWorkspacePendingNodeId);
+        if (plugin.state.nodeId) plugin.ensureDeviceIntegration();
+        return Promise.resolve();
+    };
+
+    plugin.refresh = plugin.onDeviceRefreshEnd;
+    plugin.start = start;
+    plugin.stop = stop;
 })();

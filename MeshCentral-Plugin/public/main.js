@@ -9,7 +9,7 @@
         var url = new URL("pluginadmin.ashx", window.location.href);
         url.searchParams.set("pin", "workspace");
         url.searchParams.set("asset", asset);
-        url.searchParams.set("v", "0.4.2");
+        url.searchParams.set("v", "0.5.0");
         if (extra) Object.keys(extra).forEach(function (key) { url.searchParams.set(key, extra[key]); });
         return url.href;
     }
@@ -59,7 +59,8 @@
             '<dt>Host</dt><dd>' + escapeHtml(plugin.state.nodeId || '-') + '</dd>' +
             '<dt>Stan</dt><dd>' + escapeHtml(s.state || 'idle') + '</dd>' +
             '<dt>Session ID</dt><dd>' + escapeHtml(s.id || plugin.state.sessionId || '-') + '</dd>' +
-            '<dt>PID</dt><dd>' + escapeHtml(s.pid || '-') + '</dd>' +
+            '<dt>Bootstrap PID</dt><dd>' + escapeHtml(s.bootstrapPid || '-') + '</dd>' +
+            '<dt>Worker PID</dt><dd>' + escapeHtml(s.pid || '-') + '</dd>' +
             '<dt>Windows Session</dt><dd>' + escapeHtml(s.windowsSessionId == null ? '-' : s.windowsSessionId) + '</dd>' +
             '<dt>User</dt><dd>' + escapeHtml(s.user || '-') + '</dd>' +
             '<dt>Desktop</dt><dd>' + escapeHtml(s.desktop || '-') + '</dd>' +

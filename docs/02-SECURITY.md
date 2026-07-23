@@ -24,6 +24,18 @@ Kazde polecenie musi zawierac co najmniej:
 - Operacje SYSTEM, terminal, kamera, mikrofon, input i pliki wymagaja osobnych polityk.
 - Zwykly uzytkownik nie moze modyfikowac katalogu runtime ani konfiguracji maszyny.
 
+## Lokalne IPC
+
+Named Pipe `SIRK.Agent.v1` ma chroniona, jawna liste ACL. Polaczenie jest dozwolone tylko dla:
+
+- `LOCAL SYSTEM`,
+- lokalnych administratorow,
+- konta uruchamiajacego proces agenta podczas pracy interaktywnej i testow.
+
+ACL nie dziedziczy ogolnych uprawnien systemu. Brak wpisu dla `Everyone`, uzytkownikow uwierzytelnionych ani dostepu sieciowego. MeshAgent uruchomiony jako SYSTEM moze korzystac z adaptera, ale zwykly proces uzytkownika nie uzyskuje dostepu do IPC.
+
+Docelowo osobna grupa lokalna lub SID uslugi adaptera zastapi dostep administracyjny tam, gdzie adapter nie pracuje jako SYSTEM.
+
 ## Tozsamosc urzadzenia
 
 Agent generuje unikalna tozsamosc urzadzenia przy enrollment. Token instalacyjny jest jednorazowy i nie moze pozostawac jako staly sekret. Docelowo klucz prywatny powinien byc chroniony przez DPAPI Machine albo TPM.
@@ -43,4 +55,4 @@ Agent nie moze nadpisywac samego siebie bez mechanizmu updatera i rollbacku.
 
 ## Audyt
 
-Log audytowy musi wskazywac kto, kiedy, z jakiego kanalu i na jakim urzadzeniu wykonal operacje. Sekrety, tokeny i pelna zawartosc poufnych danych nie moga trafac do logow.
+Log audytowy musi wskazywac kto, kiedy, z jakiego kanalu i na jakim urzadzeniu wykonal operacje. Sekrety, tokeny i pelna zawartosc poufnych danych nie moga trafiac do logow.

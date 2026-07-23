@@ -8,7 +8,7 @@
         var url = new URL('pluginadmin.ashx', window.location.href);
         url.searchParams.set('pin', 'workspace');
         url.searchParams.set('asset', asset);
-        url.searchParams.set('v', '0.9.8-' + Date.now());
+        url.searchParams.set('v', '0.9.9-' + Date.now());
         if (extra) Object.keys(extra).forEach(function (key) { url.searchParams.set(key, extra[key]); });
         return url.href;
     }
@@ -21,8 +21,10 @@
             headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
             body: body.toString()
         }).then(function (response) {
-            return response.json().then(function (data) {
-                if (!response.ok || data.ok === false) throw new Error(data.error || response.statusText);
+            return response.text().then(function (text) {
+                var data;
+                try { data = JSON.parse(text || '{}'); } catch (error) { throw new Error(text || response.statusText || 'Invalid server response'); }
+                if (!response.ok || data.ok === false) throw new Error(data.error || response.statusText || 'Capture request failed');
                 return data.result;
             });
         });
@@ -34,8 +36,16 @@
         });
     }
 
-    function getSlot(slotId) {
-        return plugin.state && Array.isArray(plugin.state.slots) ? plugin.state.slots.find(function (slot) { return slot.slot === slotId; }) : null;
+    function getSlotByName(slotName) {
+        return plugin.state && Array.isArray(plugin.state.slots) ? plugin.state.slots.find(function (slot) { return slot.slot === slotName; }) : null;
+    }
+
+    function getSlotBySession(sessionId) {
+        return plugin.state && Array.isArray(plugin.state.slots) ? plugin.state.slots.find(function (slot) { return slot.id === sessionId; }) : null;
+    }
+
+    function signature(slot) {
+        return [slot.id, slot.state, slot.captureState, slot.captureVersion, slot.captureWidth, slot.captureHeight, slot.captureBackend, slot.captureError, !!busyBySession[slot.id]].join('|');
     }
 
     function panel(slot) {
@@ -44,8 +54,8 @@
         var supported = slot.slot === 'user';
         var source = ready ? endpoint('capture-image', { id: slot.id, frame: slot.captureVersion }) : '';
         var status = busy ? 'Pobieranie klatki DXGI...' : (ready ? 'Podglad gotowy' : (slot.captureState === 'error' ? 'Blad przechwytywania' : 'Brak podgladu'));
-        return '<div class="workspace-capture">' +
-            '<div class="workspace-capture-head"><b>Podglad Workspace</b><button type="button" class="workspace-capture-button"' + (!supported || busy ? ' disabled' : '') + '>Pobierz klatke</button></div>' +
+        return '<div class="workspace-capture" data-capture-signature="' + esc(signature(slot)) + '">' +
+            '<div class="workspace-capture-head"><b>Podglad Workspace</b><button type="button" class="workspace-capture-button" data-session-id="' + esc(slot.id) + '" data-slot="' + esc(slot.slot) + '"' + (!supported || busy ? ' disabled' : '') + '>Pobierz klatke</button></div>' +
             '<div class="workspace-capture-state ' + (slot.captureState === 'error' ? 'error' : (ready ? 'ok' : '')) + '">' + esc(status) +
             (slot.captureWidth && slot.captureHeight ? ' · ' + esc(slot.captureWidth + ' × ' + slot.captureHeight) : '') +
             (slot.captureBackend ? ' · ' + esc(slot.captureBackend) : '') + '</div>' +
@@ -57,37 +67,36 @@
     }
 
     function refreshUntilDone(sessionId, startedAt) {
-        if (!plugin.refresh || !plugin.state || !plugin.state.nodeId) return;
-        plugin.refresh(plugin.state.nodeId);
-        window.setTimeout(function () {
-            var slot = plugin.state && plugin.state.slots && plugin.state.slots.find(function (item) { return item.id === sessionId; });
-            var pending = slot && slot.captureState === 'capturing';
-            if (pending && Date.now() - startedAt < 25000) {
-                refreshUntilDone(sessionId, startedAt);
-                return;
-            }
+        if (!plugin.refresh || !plugin.state || !plugin.state.nodeId) {
             delete busyBySession[sessionId];
             scheduleEnhance();
-        }, 900);
+            return;
+        }
+        Promise.resolve(plugin.refresh(plugin.state.nodeId)).finally(function () {
+            window.setTimeout(function () {
+                var slot = getSlotBySession(sessionId);
+                var pending = slot && slot.captureState === 'capturing';
+                if (pending && Date.now() - startedAt < 45000) {
+                    refreshUntilDone(sessionId, startedAt);
+                    return;
+                }
+                delete busyBySession[sessionId];
+                scheduleEnhance();
+            }, 900);
+        });
     }
 
-    function bind(card, slot) {
-        var button = card.querySelector('.workspace-capture-button');
-        if (!button) return;
-        button.onclick = function (event) {
-            if (event) { event.preventDefault(); event.stopPropagation(); }
-            if (busyBySession[slot.id]) return false;
-            busyBySession[slot.id] = true;
+    function executeCapture(sessionId) {
+        if (!sessionId || busyBySession[sessionId]) return;
+        busyBySession[sessionId] = true;
+        scheduleEnhance();
+        post('capture-frame', { id: sessionId }).then(function () {
+            refreshUntilDone(sessionId, Date.now());
+        }).catch(function (error) {
+            delete busyBySession[sessionId];
+            window.alert(error && error.message || error);
             scheduleEnhance();
-            post('capture-frame', { id: slot.id }).then(function () {
-                refreshUntilDone(slot.id, Date.now());
-            }).catch(function (error) {
-                delete busyBySession[slot.id];
-                window.alert(error && error.message || error);
-                scheduleEnhance();
-            });
-            return false;
-        };
+        });
     }
 
     function enhance() {
@@ -95,19 +104,23 @@
         var root = document.getElementById('workspace-device-page');
         if (!root) return;
         Array.prototype.forEach.call(root.querySelectorAll('.workspace-card'), function (card) {
-            var slot = getSlot(card.getAttribute('data-slot'));
+            var slot = getSlotByName(card.getAttribute('data-slot'));
             var existing = card.querySelector('.workspace-capture');
-            if (existing) existing.remove();
-            if (!slot || !slot.id || slot.state !== 'running') return;
+            if (!slot || !slot.id || slot.state !== 'running') {
+                if (existing) existing.remove();
+                return;
+            }
+            var expectedSignature = signature(slot);
+            if (existing && existing.getAttribute('data-capture-signature') === expectedSignature) return;
             var wrapper = document.createElement('div');
             wrapper.innerHTML = panel(slot);
             var node = wrapper.firstChild;
+            if (existing) { existing.replaceWith(node); return; }
             var apps = card.querySelector('.workspace-apps');
             var debug = card.querySelector('.workspace-debug-toggle');
             if (apps && apps.nextSibling) card.insertBefore(node, apps.nextSibling);
             else if (debug) card.insertBefore(node, debug);
             else card.appendChild(node);
-            bind(card, slot);
         });
     }
 
@@ -116,10 +129,21 @@
         enhanceTimer = window.setTimeout(enhance, 0);
     }
 
+    document.addEventListener('click', function (event) {
+        var button = event.target && event.target.closest ? event.target.closest('.workspace-capture-button') : null;
+        if (!button || button.disabled) return;
+        event.preventDefault();
+        event.stopPropagation();
+        executeCapture(button.getAttribute('data-session-id'));
+    }, true);
+
     var observer = new MutationObserver(function (changes) {
         for (var index = 0; index < changes.length; index++) {
             var target = changes[index].target;
-            if (target && (target.id === 'workspace-device-page' || target.closest && target.closest('#workspace-device-page'))) {
+            if (!target) continue;
+            if (target.classList && target.classList.contains('workspace-capture')) continue;
+            if (target.closest && target.closest('.workspace-capture')) continue;
+            if (target.id === 'workspace-device-page' || target.closest && target.closest('#workspace-device-page')) {
                 scheduleEnhance();
                 break;
             }

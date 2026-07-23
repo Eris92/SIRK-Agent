@@ -1,5 +1,15 @@
 # MeshCentral Workspace
 
+## 0.7.0
+
+- Sesja `User` pozostaje na pulpicie `winsta0\\default`.
+- `Workspace A` tworzy ukryty desktop `winsta0\\SirK-Admin-1`.
+- `Workspace B` tworzy ukryty desktop `winsta0\\SirK-Admin-2`.
+- Worker administracyjny tworzy desktop przez `CreateDesktopW` i przechodzi na niego przez `SetThreadDesktop`.
+- Ukryte desktopy nie sa przelaczane jako aktywne, dlatego uzytkownik nie widzi okien administratora.
+- Interfejs rozroznia sesje uzytkownika od dwoch izolowanych workspace administracyjnych.
+- WorkspaceHost podniesiono do wersji 0.6.0.
+
 ## 0.6.0
 
 - Dodano trzy sloty: `User`, `Admin 1` i `Admin 2`.

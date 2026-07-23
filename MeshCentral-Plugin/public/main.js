@@ -10,7 +10,7 @@
         var url = new URL("pluginadmin.ashx", window.location.href);
         url.searchParams.set("pin", "workspace");
         url.searchParams.set("asset", asset);
-        url.searchParams.set("v", "0.8.1");
+        url.searchParams.set("v", "0.8.2");
         if (extra) Object.keys(extra).forEach(function (key) { url.searchParams.set(key, extra[key]); });
         return url.href;
     }
@@ -34,7 +34,7 @@
 
     function escapeHtml(value) { return String(value == null ? "" : value).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]; }); }
     function resolution(width, height) { return width == null || height == null ? "-" : width + " × " + height; }
-    function busy(state) { return ["requested", "deploying", "stopping"].indexOf(state) >= 0; }
+    function busy(state) { return ["requested", "deploying", "stopping", "wysyłanie", "zatrzymywanie"].indexOf(state) >= 0; }
     function active(slot) { return slot && ["free", "stopped", "error"].indexOf(slot.state) < 0; }
     function title(slot) { if (slot.slot === "user") return "Sesja użytkownika"; if (slot.slot === "admin1") return "Workspace A"; if (slot.slot === "admin2") return "Workspace B"; return slot.slotLabel || slot.slot; }
     function subtitle(slot) { return slot.slot === "user" ? "Widoczny pulpit użytkownika" : "Ukryty pulpit administracyjny"; }
@@ -81,13 +81,31 @@
             '<dt>Błąd</dt><dd>' + escapeHtml(slot.error || "-") + '</dd></dl></section>';
     }
 
+    function bindButtons(root) {
+        var refresh = document.getElementById("workspace-refresh");
+        if (refresh) refresh.onclick = function (event) { if (event) event.preventDefault(); loadSlots(); return false; };
+        Array.prototype.forEach.call(root.querySelectorAll(".workspace-card"), function (element) {
+            var slotId = element.getAttribute("data-slot");
+            var startButton = element.querySelector(".workspace-start");
+            var stopButton = element.querySelector(".workspace-stop");
+            if (startButton) startButton.onclick = function (event) { if (event) { event.preventDefault(); event.stopPropagation(); } start(slotId); return false; };
+            if (stopButton) stopButton.onclick = function (event) {
+                if (event) { event.preventDefault(); event.stopPropagation(); }
+                var slot = plugin.state.slots.find(function (item) { return item.slot === slotId; });
+                stop(slot);
+                return false;
+            };
+        });
+    }
+
     function render() {
         var root = document.getElementById("workspace-device-page");
         if (!root) return;
         root.className = "workspace-panel";
         root.innerHTML = '<div class="workspace-header"><div><h2>Workspace</h2><p>Host: ' + escapeHtml(plugin.state.nodeId || "-") + '</p></div><button type="button" id="workspace-refresh" class="btn btn-primary btn-sm">Odśwież</button></div>' +
             '<div class="workspace-cards">' + plugin.state.slots.map(card).join("") + '</div>' +
-            '<p class="workspace-note">Po kliknięciu przycisku stan natychmiast zmieni się na „wysyłanie”. Błąd uruchomienia zostanie pokazany bezpośrednio w karcie.</p>';
+            '<p class="workspace-note">Przyciski są przypisywane bezpośrednio po każdym odświeżeniu kart. Po kliknięciu stan zmieni się na „wysyłanie”.</p>';
+        bindButtons(root);
     }
 
     function loadSlots() {
@@ -113,7 +131,6 @@
         }).then(startPolling).catch(function (error) {
             plugin.state.actions[slot] = { state: "error", error: error.message };
             render();
-            window.setTimeout(function () { delete plugin.state.actions[slot]; loadSlots(); }, 5000);
         });
     }
 
@@ -130,23 +147,6 @@
         });
     }
 
-    function handleClick(event) {
-        var target = event.target;
-        if (!target || !target.closest) return;
-        var button = target.closest("button");
-        if (!button) return;
-        if (button.id !== "workspace-refresh" && !button.classList.contains("workspace-start") && !button.classList.contains("workspace-stop")) return;
-        event.preventDefault();
-        event.stopPropagation();
-        if (button.disabled) return;
-        if (button.id === "workspace-refresh") { loadSlots(); return; }
-        var cardElement = button.closest(".workspace-card");
-        var slotId = cardElement && cardElement.getAttribute("data-slot");
-        var slot = plugin.state.slots.find(function (item) { return item.slot === slotId; });
-        if (button.classList.contains("workspace-start")) start(slotId);
-        if (button.classList.contains("workspace-stop")) stop(slot);
-    }
-
     function startPolling() {
         if (plugin.state.timer) clearInterval(plugin.state.timer);
         plugin.state.timer = setInterval(loadSlots, 1500);
@@ -157,11 +157,6 @@
         if (!window.pluginHandler || typeof window.pluginHandler.registerPluginTab !== "function") return false;
         window.pluginHandler.registerPluginTab({ tabId: "workspace-device-page", tabTitle: "Pulpit -New" });
         plugin.ensureDeviceTab();
-        var root = document.getElementById("workspace-device-page");
-        if (root && !root.getAttribute("data-workspace-click-handler")) {
-            root.setAttribute("data-workspace-click-handler", "1");
-            root.addEventListener("click", handleClick, true);
-        }
         loadSlots();
         return true;
     };

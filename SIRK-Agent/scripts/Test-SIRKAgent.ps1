@@ -17,7 +17,7 @@ $ErrorActionPreference = 'Stop'
 
 $root = (Resolve-Path -LiteralPath $BundlePath).Path
 $agent = Join-Path $root 'Agent\SIRK-Agent.exe'
-$client = Join-Path $root 'Client\SIRK-Agent.Client.exe'
+$client = Join-Path $root 'Client\SIRK-Agent-Client.exe'
 $workspaceHost = Join-Path $root 'WorkspaceHost\SIRK-WorkspaceHost.exe'
 $installer = Join-Path $root 'Scripts\Install-SIRKAgent.ps1'
 
@@ -25,6 +25,16 @@ foreach ($required in @($agent, $client, $workspaceHost, $installer)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
         throw "Missing bundle component: $required"
     }
+}
+
+$dotnet = Get-Command dotnet.exe -ErrorAction SilentlyContinue
+if (-not $dotnet) {
+    throw 'Microsoft .NET 8 Runtime x64 is required. Install it with: winget install Microsoft.DotNet.Runtime.8'
+}
+
+$runtimeInstalled = @(& $dotnet.Source --list-runtimes) -match '^Microsoft\.NETCore\.App 8\.'
+if (-not $runtimeInstalled) {
+    throw 'Microsoft .NET 8 Runtime x64 is required. Install it with: winget install Microsoft.DotNet.Runtime.8'
 }
 
 if (-not $SkipInstall) {
@@ -69,6 +79,10 @@ $report = [ordered]@{
     TestedAtUtc = [DateTime]::UtcNow.ToString('o')
     ComputerName = $env:COMPUTERNAME
     User = "$env:USERDOMAIN\$env:USERNAME"
+    Runtime = [ordered]@{
+        DotNetPath = $dotnet.Source
+        Installed = @(& $dotnet.Source --list-runtimes)
+    }
     Service = [ordered]@{
         Name = $service.Name
         Status = $service.Status.ToString()
@@ -99,6 +113,6 @@ $report = [ordered]@{
 }
 
 $report | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $ReportPath -Encoding UTF8
-Write-Host "SIRK-Agent smoke test passed."
+Write-Host 'SIRK-Agent smoke test passed.'
 Write-Host "Report: $ReportPath"
 $report

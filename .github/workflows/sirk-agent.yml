@@ -7,10 +7,12 @@ on:
       - smp-agent-foundation
     paths:
       - "SIRK-Agent/**"
+      - "SIRK-MeshAdapter/**"
       - ".github/workflows/sirk-agent.yml"
   pull_request:
     paths:
       - "SIRK-Agent/**"
+      - "SIRK-MeshAdapter/**"
       - ".github/workflows/sirk-agent.yml"
 
 permissions:
@@ -35,6 +37,7 @@ jobs:
           dotnet restore SIRK-Agent/src/SIRK.Agent/SIRK.Agent.csproj 2>&1 | Tee-Object restore-agent.log
           dotnet restore SIRK-Agent/tools/SIRK.Agent.Client/SIRK.Agent.Client.csproj 2>&1 | Tee-Object restore-client.log
           dotnet restore SIRK-Agent/tests/SIRK.Agent.IntegrationTests/SIRK.Agent.IntegrationTests.csproj 2>&1 | Tee-Object restore-tests.log
+          dotnet restore SIRK-MeshAdapter/src/SIRK.MeshAdapter/SIRK.MeshAdapter.csproj 2>&1 | Tee-Object restore-mesh-adapter.log
 
       - name: Build projects
         shell: pwsh
@@ -42,6 +45,7 @@ jobs:
           dotnet build SIRK-Agent/src/SIRK.Agent/SIRK.Agent.csproj --configuration Release --no-restore 2>&1 | Tee-Object build-agent.log
           dotnet build SIRK-Agent/tools/SIRK.Agent.Client/SIRK.Agent.Client.csproj --configuration Release --no-restore 2>&1 | Tee-Object build-client.log
           dotnet build SIRK-Agent/tests/SIRK.Agent.IntegrationTests/SIRK.Agent.IntegrationTests.csproj --configuration Release --no-restore 2>&1 | Tee-Object build-tests.log
+          dotnet build SIRK-MeshAdapter/src/SIRK.MeshAdapter/SIRK.MeshAdapter.csproj --configuration Release --no-restore 2>&1 | Tee-Object build-mesh-adapter.log
 
       - name: Validate PowerShell scripts
         shell: pwsh
@@ -72,9 +76,11 @@ jobs:
             restore-agent.log
             restore-client.log
             restore-tests.log
+            restore-mesh-adapter.log
             build-agent.log
             build-client.log
             build-tests.log
+            build-mesh-adapter.log
             integration-tests.log
           if-no-files-found: warn
           retention-days: 7
@@ -84,6 +90,9 @@ jobs:
 
       - name: Publish IPC client
         run: dotnet publish SIRK-Agent/tools/SIRK.Agent.Client/SIRK.Agent.Client.csproj --configuration Release --no-build --output artifacts/SIRK-Agent-Client
+
+      - name: Publish Mesh adapter
+        run: dotnet publish SIRK-MeshAdapter/src/SIRK.MeshAdapter/SIRK.MeshAdapter.csproj --configuration Release --no-build --output artifacts/SIRK-MeshAdapter
 
       - name: Upload agent artifact
         uses: actions/upload-artifact@v4
@@ -98,5 +107,13 @@ jobs:
         with:
           name: SIRK-Agent-Client-win-x64
           path: artifacts/SIRK-Agent-Client
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Mesh adapter artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SIRK-MeshAdapter-win-x64
+          path: artifacts/SIRK-MeshAdapter
           if-no-files-found: error
           retention-days: 14

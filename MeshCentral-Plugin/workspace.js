@@ -19,13 +19,13 @@ module.exports.workspace = function workspacePlugin(parent) {
     function sendJson(res, code, value) { send(res, code, 'application/json; charset=utf-8', JSON.stringify(value)); }
     function handlePromise(res, work) { Promise.resolve(work).then(function (value) { sendJson(res, 200, { ok: true, result: value }); }).catch(function (error) { sendJson(res, 400, { ok: false, error: String(error && error.message || error || 'Request failed.') }); }); }
 
-    obj.server_startup = function () { console.log('[MeshCentral-Workspace] Plugin 0.8.3 loaded'); };
+    obj.server_startup = function () { console.log('[MeshCentral-Workspace] Plugin 0.8.4 loaded'); };
 
     obj.onWebUIStartupEnd = function () {
         if (typeof window === 'undefined' || typeof document === 'undefined') return;
         window.MeshCentralWorkspace = window.MeshCentralWorkspace || {};
         window.MeshCentralWorkspace.bootstrapPromise = null;
-        var endpoint = function (asset) { var url = new URL('pluginadmin.ashx', window.location.href); url.searchParams.set('pin', 'workspace'); url.searchParams.set('asset', asset); url.searchParams.set('v', '0.8.3'); return url.href; };
+        var endpoint = function (asset) { var url = new URL('pluginadmin.ashx', window.location.href); url.searchParams.set('pin', 'workspace'); url.searchParams.set('asset', asset); url.searchParams.set('v', '0.8.4'); return url.href; };
         var load = function (id, source) { return new Promise(function (resolve, reject) { var existing = document.getElementById(id); if (existing) existing.remove(); var script = document.createElement('script'); script.id = id; script.src = source; script.async = false; script.onload = function () { script.setAttribute('data-loaded', '1'); resolve(); }; script.onerror = reject; (document.head || document.documentElement).appendChild(script); }); };
         var oldStyle = document.getElementById('workspace-plugin-css'); if (oldStyle) oldStyle.remove();
         var style = document.createElement('link'); style.id = 'workspace-plugin-css'; style.rel = 'stylesheet'; style.href = endpoint('main.css'); (document.head || document.documentElement).appendChild(style);

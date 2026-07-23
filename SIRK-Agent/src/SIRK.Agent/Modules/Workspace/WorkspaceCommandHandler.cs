@@ -14,6 +14,9 @@ internal sealed class WorkspaceCommandHandler(
         "Workspace.CaptureFrame"
     };
 
+    private static string WorkspaceHostPath =>
+        Path.Combine(AppContext.BaseDirectory, "SIRK-WorkspaceHost.exe");
+
     public IReadOnlyCollection<string> MessageTypes => SupportedMessages;
 
     public ProtocolResponse Handle(ProtocolEnvelope command)
@@ -29,6 +32,7 @@ internal sealed class WorkspaceCommandHandler(
     private ProtocolResponse GetCapabilities(ProtocolEnvelope command)
     {
         IReadOnlyList<WindowsSessionInfo> sessions = sessionProvider.GetSessions();
+        bool workspaceHostInstalled = File.Exists(WorkspaceHostPath);
 
         return Success(command, new
         {
@@ -50,7 +54,8 @@ internal sealed class WorkspaceCommandHandler(
             },
             workspaceHost = new
             {
-                installed = false,
+                installed = workspaceHostInstalled,
+                path = workspaceHostInstalled ? WorkspaceHostPath : null,
                 launcherSupported = workspaceHostLauncher.IsSupported,
                 launchMethod = "WTSQueryUserToken+DuplicateTokenEx+CreateProcessAsUser",
                 oneTimeHandshake = true,

@@ -125,7 +125,7 @@ internal static class Framing
     internal static async Task SendErrorAsync(Stream stream, string code, string message, CancellationToken cancellationToken)
     {
         byte[] payload = JsonSerializer.SerializeToUtf8Bytes(new { ok = false, error = new { code, message } }, JsonOptions.Value);
-        await WriteFrameAsync(stream, payload, MaximumControlMessageBytes, cancellationToken);
+        await WriteFrameAsync(stream, payload, 64 * 1024, cancellationToken);
     }
 
     internal static async Task WriteFrameAsync(Stream stream, byte[] payload, int maximumBytes, CancellationToken cancellationToken)

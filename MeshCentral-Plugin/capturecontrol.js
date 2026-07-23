@@ -37,13 +37,30 @@ module.exports.createCaptureControl = function createCaptureControl(parent, work
         const releaseBase = 'https://github.com/Eris92/MeshCentral-Workspace/releases/download/develop-latest';
         const success = resultLine(session.id, 'ready', "([ordered]@{width=$meta.width;height=$meta.height;backend=$meta.backend;image=[Convert]::ToBase64String([IO.File]::ReadAllBytes($png))})");
         const failure = resultLine(session.id, 'error', "([ordered]@{message=$_.Exception.Message})");
+        const downloadFunction = [
+            "function Get-WorkspaceFile([string]$Uri,[string]$OutFile){",
+            "$last=$null",
+            "for($attempt=1;$attempt -le 3;$attempt++){",
+            "try{",
+            "Remove-Item $OutFile -Force -ErrorAction SilentlyContinue",
+            "$curl=Get-Command curl.exe -ErrorAction SilentlyContinue",
+            "if($curl){& $curl.Source --fail --location --silent --show-error --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 180 --output $OutFile $Uri;if($LASTEXITCODE -ne 0){throw ('curl.exe zakonczyl sie kodem '+$LASTEXITCODE)}}",
+            "else{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $OutFile -TimeoutSec 180}",
+            "if(-not(Test-Path $OutFile)){throw 'Nie utworzono pobranego pliku.'}",
+            "if((Get-Item $OutFile).Length -lt 32){throw 'Pobrany plik jest pusty lub niepelny.'}",
+            "return",
+            "}catch{$last=$_;Start-Sleep -Seconds (2*$attempt)}",
+            "}",
+            "throw ('Nie mozna pobrac '+$Uri+'. '+$last.Exception.Message)",
+            "}"
+        ].join(';');
         return [
-            "$ErrorActionPreference='Stop'", "$ProgressPreference='SilentlyContinue'", 'try{',
+            "$ErrorActionPreference='Stop'", "$ProgressPreference='SilentlyContinue'", "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12", downloadFunction, 'try{',
             "$dir=Join-Path $env:ProgramData 'SirK\\Workspace'", "New-Item -Path $dir -ItemType Directory -Force|Out-Null",
             "$exe=Join-Path $dir 'WorkspaceCapture.exe'", "$shaFile=Join-Path $dir 'WorkspaceCapture.exe.sha256'", "$tmp=Join-Path $dir 'WorkspaceCapture.exe.download'",
             "$expectedVersion='0.1.0'", "$currentVersion=$null",
             "if(Test-Path $exe){try{$currentVersion=((& $exe --version 2>$null)|Select-Object -First 1).ToString().Trim()}catch{$currentVersion=$null}}",
-            "if($currentVersion -ne $expectedVersion){Remove-Item $tmp,$shaFile -Force -ErrorAction SilentlyContinue;Invoke-WebRequest -UseBasicParsing -Uri '" + releaseBase + "/WorkspaceCapture.exe' -OutFile $tmp;Invoke-WebRequest -UseBasicParsing -Uri '" + releaseBase + "/WorkspaceCapture.exe.sha256' -OutFile $shaFile;$expectedHash=((Get-Content $shaFile -Raw).Trim().Split(' ')[0]).ToUpperInvariant();$actualHash=(Get-FileHash $tmp -Algorithm SHA256).Hash.ToUpperInvariant();if($expectedHash -ne $actualHash){throw 'WorkspaceCapture SHA256 mismatch'};Move-Item $tmp $exe -Force;Unblock-File $exe -ErrorAction SilentlyContinue}",
+            "if($currentVersion -ne $expectedVersion){Remove-Item $tmp,$shaFile -Force -ErrorAction SilentlyContinue;Get-WorkspaceFile '" + releaseBase + "/WorkspaceCapture.exe' $tmp;Get-WorkspaceFile '" + releaseBase + "/WorkspaceCapture.exe.sha256' $shaFile;$expectedHash=((Get-Content $shaFile -Raw).Trim().Split(' ')[0]).ToUpperInvariant();$actualHash=(Get-FileHash $tmp -Algorithm SHA256).Hash.ToUpperInvariant();if($expectedHash -ne $actualHash){throw 'WorkspaceCapture SHA256 mismatch'};Move-Item $tmp $exe -Force;Unblock-File $exe -ErrorAction SilentlyContinue}",
             "$png=Join-Path $dir ('capture-' + [guid]::NewGuid().ToString('N') + '.png')",
             "$output=& $exe --output $png 2>&1 | Out-String", "if($LASTEXITCODE -ne 0){throw ($output.Trim())}",
             "$meta=$output|ConvertFrom-Json", "if(-not(Test-Path $png)){throw 'WorkspaceCapture did not create a PNG file.'}",

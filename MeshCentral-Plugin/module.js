@@ -7,7 +7,7 @@ module.exports.createModule = function createModule(parent) {
     const slots = new Map();
     const outputs = Object.create(null);
     const pendingByNode = Object.create(null);
-    const outputTimeoutMs = 90000;
+    const outputTimeoutMs = 120000;
     const slotDefinitions = [
         { id: 'user', label: 'User', kind: 'user' },
         { id: 'admin1', label: 'Admin 1', kind: 'admin' },
@@ -20,7 +20,8 @@ module.exports.createModule = function createModule(parent) {
     function userName(user) { return String(user && (user.name || user.realname || user._id) || 'unknown'); }
     function slotKey(nodeId, slot) { return String(nodeId) + '|' + slot; }
     function slotDefinition(slot) { return slotDefinitions.find(function (item) { return item.id === slot; }) || null; }
-    function isTerminal(state) { return state === 'stopped' || state === 'error'; }
+    function isStopped(state) { return state === 'stopped'; }
+    function isReusable(state) { return state === 'stopped' || state === 'error'; }
 
     function getWebServer() {
         return (parent && parent.parent && parent.parent.webserver) || (parent && parent.webServer) || (parent && parent.parent) || null;
@@ -44,7 +45,7 @@ module.exports.createModule = function createModule(parent) {
             monitorCount: null, primaryWidth: null, primaryHeight: null,
             virtualWidth: null, virtualHeight: null,
             testWindowReady: null, testWindowThreadId: null, testWindowTitle: null,
-            error: null, responseId: null
+            lastOutput: null, error: null, responseId: null
         };
         sessions.set(session.id, session);
         slots.set(slotKey(nodeId, slot), session.id);
@@ -55,7 +56,7 @@ module.exports.createModule = function createModule(parent) {
         const session = sessions.get(id);
         if (!session) return null;
         Object.assign(session, patch, { updatedAt: now() });
-        if (isTerminal(session.state)) {
+        if (isStopped(session.state)) {
             const key = slotKey(session.nodeId, session.slot);
             if (slots.get(key) === session.id) slots.delete(key);
         }
@@ -79,7 +80,10 @@ module.exports.createModule = function createModule(parent) {
             "Invoke-WebRequest -UseBasicParsing -Uri '" + releaseBase + "/WorkspaceHost.exe' -OutFile $tmp",
             "Invoke-WebRequest -UseBasicParsing -Uri '" + releaseBase + "/WorkspaceHost.exe.sha256' -OutFile $shaFile",
             "$expected=((Get-Content $shaFile -Raw).Trim().Split(' ')[0]).ToUpperInvariant()", "$actual=(Get-FileHash $tmp -Algorithm SHA256).Hash.ToUpperInvariant()",
-            "if($expected -ne $actual){throw 'WorkspaceHost SHA256 mismatch'}", "Move-Item $tmp $exe -Force", "Unblock-File $exe -ErrorAction SilentlyContinue",
+            "if($expected -ne $actual){throw 'WorkspaceHost SHA256 mismatch'}",
+            "$replace=$true;if(Test-Path $exe){try{$current=(Get-FileHash $exe -Algorithm SHA256).Hash.ToUpperInvariant();if($current -eq $expected){$replace=$false}}catch{}}",
+            "if($replace){Move-Item $tmp $exe -Force}else{Remove-Item $tmp -Force -ErrorAction SilentlyContinue}",
+            "Unblock-File $exe -ErrorAction SilentlyContinue",
             "$process=Start-Process -FilePath $exe -ArgumentList @('--slot','" + safeSlot + "') -PassThru -WindowStyle Hidden",
             "$pipe=[System.IO.Pipes.NamedPipeClientStream]::new('.','SirK.MeshCentral.Workspace." + safeSlot + "',[System.IO.Pipes.PipeDirection]::In,[System.IO.Pipes.PipeOptions]::None)",
             "try{$pipe.Connect(30000);$reader=[System.IO.StreamReader]::new($pipe,[System.Text.Encoding]::UTF8);try{$task=$reader.ReadLineAsync();if(-not $task.Wait([TimeSpan]::FromSeconds(30))){throw 'WorkspaceHost worker heartbeat timeout'};$line=$task.Result;if([string]::IsNullOrWhiteSpace($line)){throw 'WorkspaceHost returned empty heartbeat'};$heartbeat=$line|ConvertFrom-Json;if($heartbeat.type -ne 'heartbeat'){throw ('Unexpected heartbeat type: '+$heartbeat.type)};if($heartbeat.slot -ne '" + safeSlot + "'){throw ('Unexpected workspace slot: '+$heartbeat.slot)};$heartbeat|Add-Member -NotePropertyName bootstrapPid -NotePropertyValue $process.Id -Force;" + success + "}finally{$reader.Dispose()}}finally{$pipe.Dispose()}",
@@ -112,9 +116,9 @@ module.exports.createModule = function createModule(parent) {
             const agentCommand = { action: 'runcommands', type: 2, cmds: commandText, runAsUser: 2, sessionid: session.id, reply: true, responseid: responseId };
             const agents = webServer.wsagents || webServer.parent && webServer.parent.wsagents || parent.parent && parent.parent.wsagents || {};
             const agent = agents[nodeId];
-            outputs[responseId] = { ready: false, output: '', updatedAt: Date.now(), sessionId: session.id };
+            outputs[responseId] = { output: '', updatedAt: Date.now(), sessionId: session.id };
             pendingByNode[nodeId] = { responseId, buffer: '', updatedAt: Date.now() };
-            updateSession(session.id, { nodeId, responseId, error: null });
+            updateSession(session.id, { nodeId, responseId, error: null, lastOutput: 'Polecenie przekazane do MeshAgent.' });
             if (agent && agent.authenticated === 2 && agent.agentInfo) {
                 try { agent.send(JSON.stringify(agentCommand)); return callback(null, session); } catch (error) { return callback('Could not send command: ' + error.message); }
             }
@@ -126,18 +130,29 @@ module.exports.createModule = function createModule(parent) {
         });
     }
 
-    function consumeOutput(responseId, raw) {
+    function consumeOutput(responseId, raw, append) {
         const item = outputs[responseId];
-        if (!item) return;
-        item.output = String(raw == null ? '' : raw).slice(0, 1024 * 1024);
+        if (!item) return false;
+        const incoming = String(raw == null ? '' : raw);
+        item.output = (append ? item.output + incoming : incoming).slice(-1024 * 1024);
+        item.updatedAt = Date.now();
         const session = sessions.get(item.sessionId);
-        if (!session) return;
+        if (!session) return false;
+        const clean = item.output.trim();
+        if (clean) updateSession(session.id, { lastOutput: clean.slice(-2000) });
+        if (item.output.indexOf("Run commands can't execute, already busy.") >= 0) {
+            updateSession(session.id, { state: 'error', error: "MeshAgent jest zajety wykonywaniem innego polecenia.", lastOutput: clean.slice(-2000) });
+            return true;
+        }
         const marker = item.output.match(/__WORKSPACE_RESULT__(\{[^\r\n]+\})/);
-        if (!marker) { updateSession(session.id, { state: 'error', error: item.output.trim().slice(-2000) || 'MeshAgent did not return WorkspaceHost status.' }); return; }
+        if (!marker) return false;
         try {
             const result = JSON.parse(marker[1]);
             const data = result.data || {};
-            if (result.state === 'error') { updateSession(session.id, { state: 'error', error: data.message || 'WorkspaceHost startup failed.' }); return; }
+            if (result.state === 'error') {
+                updateSession(session.id, { state: 'error', error: data.message || 'WorkspaceHost startup failed.', lastOutput: clean.slice(-2000) });
+                return true;
+            }
             updateSession(session.id, {
                 state: result.state || 'running', pid: data.pid || session.pid || null, bootstrapPid: data.bootstrapPid || session.bootstrapPid || null,
                 windowsSessionId: data.sessionId == null ? session.windowsSessionId : data.sessionId, user: data.user || session.user || null,
@@ -151,21 +166,28 @@ module.exports.createModule = function createModule(parent) {
                 testWindowReady: data.testWindowReady == null ? session.testWindowReady : data.testWindowReady,
                 testWindowThreadId: data.testWindowThreadId == null ? session.testWindowThreadId : data.testWindowThreadId,
                 testWindowTitle: data.testWindowTitle || session.testWindowTitle || null,
-                lastHeartbeat: result.state === 'running' ? now() : session.lastHeartbeat, error: null
+                lastHeartbeat: result.state === 'running' ? now() : session.lastHeartbeat,
+                lastOutput: clean.slice(-2000), error: null
             });
-        } catch (error) { updateSession(session.id, { state: 'error', error: 'Invalid WorkspaceHost result: ' + error.message }); }
+            return true;
+        } catch (error) {
+            updateSession(session.id, { state: 'error', error: 'Invalid WorkspaceHost result: ' + error.message, lastOutput: clean.slice(-2000) });
+            return true;
+        }
     }
 
     function captureAgentData(command, agent) {
         if (!command || command.action !== 'msg') return;
-        if (command.type === 'runcommands' && typeof command.responseid === 'string' && command.responseid.indexOf('workspace-') === 0) { consumeOutput(command.responseid, command.result); return; }
+        if (command.type === 'runcommands' && typeof command.responseid === 'string' && command.responseid.indexOf('workspace-') === 0) {
+            consumeOutput(command.responseid, command.result, true);
+            return;
+        }
         if (command.type !== 'console' || !agent || !agent.dbNodeKey || typeof command.value !== 'string') return;
         const pending = pendingByNode[agent.dbNodeKey];
         if (!pending) return;
         pending.buffer = (pending.buffer + command.value).slice(-1024 * 1024);
-        if (pending.buffer.indexOf('__WORKSPACE_RESULT__') >= 0 || pending.buffer.indexOf("Run commands can't execute, already busy.") >= 0) {
-            consumeOutput(pending.responseId, pending.buffer); delete pendingByNode[agent.dbNodeKey];
-        }
+        pending.updatedAt = Date.now();
+        if (consumeOutput(pending.responseId, command.value, true)) delete pendingByNode[agent.dbNodeKey];
     }
 
     function start(user, nodeId, slot) {
@@ -175,14 +197,14 @@ module.exports.createModule = function createModule(parent) {
             const key = slotKey(nodeId, definition.id);
             const activeId = slots.get(key);
             const active = activeId && sessions.get(activeId);
-            if (active && !isTerminal(active.state)) {
+            if (active && !isReusable(active.state)) {
                 if (active.ownerId === userId(user)) { resolve(active); return; }
                 reject(new Error(definition.label + ' is occupied by ' + active.ownerName + '.')); return;
             }
             const session = createSession(nodeId, user, definition.id);
-            updateSession(session.id, { state: 'deploying' });
+            updateSession(session.id, { state: 'deploying', lastOutput: 'Oczekiwanie na wynik MeshAgent...' });
             dispatchCommand(session, user, launcherCommand(session.id, definition.id), 'workspace-start-' + session.id, function (error) {
-                if (error) { updateSession(session.id, { state: 'error', error }); reject(new Error(error)); return; }
+                if (error) { updateSession(session.id, { state: 'error', error, lastOutput: error }); reject(new Error(error)); return; }
                 resolve(session);
             });
         });
@@ -194,9 +216,9 @@ module.exports.createModule = function createModule(parent) {
             if (!session) { reject(new Error('Session not found.')); return; }
             if (session.ownerId && session.ownerId !== userId(user) && user.siteadmin !== 0xFFFFFFFF) { reject(new Error('Workspace belongs to ' + session.ownerName + '.')); return; }
             if (!session.pid) { updateSession(session.id, { state: 'stopped' }); resolve(session); return; }
-            updateSession(session.id, { state: 'stopping' });
+            updateSession(session.id, { state: 'stopping', lastOutput: 'Wysylanie polecenia zatrzymania...' });
             dispatchCommand(session, user, stopCommand(session.id, session.pid), 'workspace-stop-' + session.id, function (error) {
-                if (error) { updateSession(session.id, { state: 'error', error }); reject(new Error(error)); return; }
+                if (error) { updateSession(session.id, { state: 'error', error, lastOutput: error }); reject(new Error(error)); return; }
                 resolve(session);
             });
         });
@@ -205,7 +227,11 @@ module.exports.createModule = function createModule(parent) {
     function status(user, id) {
         const session = sessions.get(String(id || ''));
         if (!session) return null;
-        if ((session.state === 'deploying' || session.state === 'stopping') && Date.now() - new Date(session.updatedAt).getTime() > outputTimeoutMs) updateSession(session.id, { state: 'error', error: 'Timed out waiting for MeshAgent result.' });
+        if ((session.state === 'deploying' || session.state === 'stopping') && Date.now() - new Date(session.updatedAt).getTime() > outputTimeoutMs) {
+            const response = session.responseId && outputs[session.responseId];
+            const tail = response && response.output && response.output.trim().slice(-2000);
+            updateSession(session.id, { state: 'error', error: tail || 'Timed out waiting for MeshAgent result.', lastOutput: tail || session.lastOutput });
+        }
         return session;
     }
 
@@ -213,6 +239,7 @@ module.exports.createModule = function createModule(parent) {
         return slotDefinitions.map(function (definition) {
             const id = slots.get(slotKey(nodeId, definition.id));
             const session = id && sessions.get(id);
+            if (session) status(null, session.id);
             return session || { slot: definition.id, slotLabel: definition.label, kind: definition.kind, state: 'free', ownerId: null, ownerName: null };
         });
     }

@@ -15,14 +15,14 @@ MeshCentral Workspace jest osobna wtyczka i procesem Windows, ktore dodaja alter
 Docelowa architektura:
 
 ```text
-MeshCentral Plugin
-        -> MeshAgent
-        -> WorkspaceHost.exe
-        -> capture / input / clipboard / devices
+MeshCentral Plugin lub Standalone Server
+        -> Workspace transport
+        -> WorkspaceHost / WorkspaceAgent
+        -> capture / input / clipboard / devices / media
         -> izolowany lub widoczny desktop Windows
 ```
 
-Projekt ma zapewnic administratorowi osobne Workspace na tym samym hoście, z mozliwoscia rozbudowy o:
+Projekt ma zapewnic administratorowi osobne Workspace na tym samym hoscie, z mozliwoscia rozbudowy o:
 
 - zdalny obraz i sterowanie,
 - uruchamianie aplikacji,
@@ -31,11 +31,14 @@ Projekt ma zapewnic administratorowi osobne Workspace na tym samym hoście, z mo
 - PIV / Smart Card Broker,
 - USB Passthrough,
 - Virtual Media,
+- Media Broker,
+- Incident Evidence,
+- Home Monitor przez WebRTC,
 - wirtualny ekran i niezalezny kursor.
 
 ## Aktualny stan
 
-Wersja pluginu: `0.8.9`.
+Wersja pluginu: `0.9.3`.
 Wersja `WorkspaceHost.exe`: `0.7.0`.
 
 Dziala:
@@ -48,16 +51,21 @@ Dziala:
 - diagnostyka procesu, desktopu, sesji, rozdzielczosci i okna testowego,
 - UI wyboru Device Broker / USB Passthrough / Virtual Media,
 - Virtual Media z adresu HTTPS jako pierwsza wersja techniczna,
-- lista okien i uruchamianie aplikacji na wybranym desktopie.
+- lista okien i uruchamianie aplikacji na wybranym desktopie,
+- pojedyncza klatka podgladu Workspace,
+- enumeracja kamer, mikrofonow i glosnikow hosta.
 
 Jeszcze nie dziala produkcyjnie:
 
-- DXGI capture i streaming obrazu,
+- stabilny DXGI capture i streaming obrazu,
 - klawiatura i mysz,
 - clipboard,
 - biblioteka ISO i upload z przegladarki,
 - PIV Smart Card Broker,
 - USB Passthrough,
+- snapshot, nagrywanie i streaming Media Broker,
+- pakiet Incident Evidence,
+- Home Monitor i WebRTC,
 - wirtualny display driver.
 
 ## Struktura repozytorium
@@ -68,6 +76,8 @@ MeshCentral-Plugin/
   module.js          sesje Workspace i komunikacja z MeshAgent
   virtualmedia.js    montowanie i odmontowanie ISO
   appcontrol.js      lista okien i uruchamianie aplikacji
+  capturecontrol.js  pojedyncza klatka podgladu
+  mediacontrol.js    enumeracja urzadzen Media Broker
   public/            UI przegladarki
 
 WorkspaceHost/
@@ -83,15 +93,22 @@ tools/               build i testy
 ## Zasady architektury
 
 1. Nie modyfikuj core MeshCentral ani oryginalnego modulu Desktop.
-2. Operacje na hoście musza przechodzic przez sprawdzenie praw MeshCentral.
+2. Operacje na hoscie musza przechodzic przez sprawdzenie praw MeshCentral lub rownowazna kontrole adaptera standalone.
 3. Workspace administracyjne musza pozostac niewidoczne dla zwyklego uzytkownika.
 4. Kod uruchamiany jako SYSTEM ma tylko wykonac bootstrap lub operacje wymagajace uprawnien. GUI powinno dzialac w docelowej sesji interaktywnej.
 5. Nie zapisuj hasel, PIN-ow PIV, tokenow, zawartosci clipboardu ani sekretow w logach.
 6. PIV realizuj przez broker WinSCard/APDU, nie jako domyslny raw USB passthrough.
 7. USB Passthrough i Device Broker sa osobnymi trybami. To samo urzadzenie nie moze byc aktywne w obu trybach jednoczesnie.
-8. Virtual Media ma docelowo korzystac z biblioteki ISO na serwerze MeshCentral i uploadu strumieniowego. Nie przesylaj duzych ISO jako Base64 ani przez pamiec procesu Node.js.
+8. Virtual Media ma docelowo korzystac z biblioteki ISO na serwerze i uploadu strumieniowego. Nie przesylaj duzych ISO jako Base64 ani przez pamiec procesu Node.js.
 9. Kazda operacja asynchroniczna musi miec stan, timeout, blad i mozliwosc bezpiecznego ponowienia.
-10. Nie oznaczaj funkcji jako dzialajacej, dopoki transport i operacja na hoście nie zostaly zaimplementowane i zweryfikowane.
+10. Nie oznaczaj funkcji jako dzialajacej, dopoki transport i operacja na hoscie nie zostaly zaimplementowane i zweryfikowane.
+11. Media capture, recording i live streaming sa domyslnie wylaczone.
+12. Enumeracja urzadzen nie moze uruchamiac kamery ani mikrofonu.
+13. Capture wymaga osobnego uprawnienia `MediaCapture`, jawnej polityki per host oraz pelnego audytu.
+14. Tryb Incident wymaga identyfikatora incydentu, powodu, limitu czasu i manifestu artefaktow.
+15. Tryb Home Monitor moze byc aktywny tylko na jawnie oznaczonym prywatnym urzadzeniu.
+16. Nie obchodz sprzetowej sygnalizacji kamery lub mikrofonu i nie implementuj mechanizmu ukrywajacego aktywne przechwytywanie.
+17. Podglad bez nagrywania nie moze automatycznie tworzyc plikow z obrazem lub dzwiekiem.
 
 ## Wersjonowanie i publikacja
 
@@ -127,12 +144,13 @@ Przed uznaniem zmiany za gotowa:
 
 Najblizsza kolejnosc:
 
-1. ustabilizowanie listy okien i uruchamiania aplikacji,
-2. capture obrazu Workspace,
-3. streaming do przegladarki,
-4. input myszy i klawiatury,
-5. clipboard,
-6. biblioteka i upload ISO,
-7. PIV Smart Card Broker,
-8. USB Passthrough,
-9. wirtualny display.
+1. stabilizacja pojedynczej klatki Workspace,
+2. DXGI capture i streaming,
+3. input myszy i klawiatury,
+4. clipboard,
+5. biblioteka i upload ISO,
+6. PIV Smart Card Broker,
+7. USB Passthrough,
+8. Media Broker: polityka, snapshot, recording, WebRTC,
+9. Incident Evidence i Home Monitor,
+10. wirtualny display.

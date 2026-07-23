@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(WorkspaceHost VERSION 0.2.1 LANGUAGES CXX)
+project(WorkspaceHost VERSION 0.3.0 LANGUAGES CXX)
 
 add_executable(WorkspaceHost
     src/main.cpp

@@ -15,7 +15,8 @@
 
 namespace {
 constexpr wchar_t kPipeBase[] = L"\\\\.\\pipe\\SirK.MeshCentral.Workspace";
-constexpr wchar_t kVersion[] = L"0.5.0";
+constexpr wchar_t kVersion[] = L"0.6.0";
+HDESK gWorkerDesktop = nullptr;
 
 std::filesystem::path LogPath() {
     wchar_t programData[MAX_PATH]{};
@@ -132,6 +133,34 @@ std::wstring NormalizeSlot(std::wstring slot) {
 
 std::wstring PipeName(const std::wstring& slot) { return std::wstring(kPipeBase) + L"." + NormalizeSlot(slot); }
 
+std::wstring DesktopNameForSlot(const std::wstring& slot) {
+    if (slot == L"admin1") return L"SirK-Admin-1";
+    if (slot == L"admin2") return L"SirK-Admin-2";
+    return L"default";
+}
+
+bool SetupWorkerDesktop(const std::wstring& slot) {
+    if (slot == L"user") return true;
+    const std::wstring desktopName = DesktopNameForSlot(slot);
+    gWorkerDesktop = CreateDesktopW(
+        desktopName.c_str(), nullptr, nullptr, 0,
+        DESKTOP_CREATEWINDOW | DESKTOP_ENUMERATE | DESKTOP_HOOKCONTROL |
+        DESKTOP_READOBJECTS | DESKTOP_WRITEOBJECTS | DESKTOP_SWITCHDESKTOP,
+        nullptr);
+    if (gWorkerDesktop == nullptr) {
+        Log(L"CreateDesktop failed for " + desktopName + L": " + std::to_wstring(GetLastError()));
+        return false;
+    }
+    if (!SetThreadDesktop(gWorkerDesktop)) {
+        Log(L"SetThreadDesktop failed for " + desktopName + L": " + std::to_wstring(GetLastError()));
+        CloseDesktop(gWorkerDesktop);
+        gWorkerDesktop = nullptr;
+        return false;
+    }
+    Log(L"Isolated desktop ready: winsta0\\" + desktopName);
+    return true;
+}
+
 bool RelaunchInInteractiveSession(DWORD sessionId, const std::wstring& slot) {
     HANDLE userToken = nullptr;
     HANDLE primaryToken = nullptr;
@@ -180,11 +209,14 @@ std::string Heartbeat(std::chrono::steady_clock::time_point started, const std::
     const int primaryHeight = GetSystemMetrics(SM_CYSCREEN);
     const int virtualWidth = GetSystemMetrics(SM_CXVIRTUALSCREEN);
     const int virtualHeight = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    const bool isolated = slot != L"user";
     std::ostringstream json;
-    json << "{\"type\":\"heartbeat\",\"version\":\"0.5.0\",\"pid\":" << GetCurrentProcessId()
+    json << "{\"type\":\"heartbeat\",\"version\":\"0.6.0\",\"pid\":" << GetCurrentProcessId()
          << ",\"sessionId\":" << sessionId
          << ",\"slot\":\"" << JsonEscape(Utf8(slot))
-         << "\",\"user\":\"" << JsonEscape(Utf8(CurrentUser()))
+         << "\",\"workspaceType\":\"" << (isolated ? "admin" : "user")
+         << "\",\"isolatedDesktop\":" << (isolated ? "true" : "false")
+         << ",\"user\":\"" << JsonEscape(Utf8(CurrentUser()))
          << "\",\"desktop\":\"" << JsonEscape(Utf8(CurrentDesktop()))
          << "\",\"uptimeSeconds\":" << uptime
          << ",\"monitorCount\":" << monitorCount
@@ -196,9 +228,10 @@ std::string Heartbeat(std::chrono::steady_clock::time_point started, const std::
 }
 
 int RunServer(const std::wstring& slot) {
+    if (!SetupWorkerDesktop(slot)) return 5;
     const auto started = std::chrono::steady_clock::now();
     const std::wstring pipeName = PipeName(slot);
-    Log(L"WorkspaceHost worker started. Version " + std::wstring(kVersion) + L", Slot=" + slot + L", User=" + CurrentUser());
+    Log(L"WorkspaceHost worker started. Version " + std::wstring(kVersion) + L", Slot=" + slot + L", User=" + CurrentUser() + L", Desktop=" + CurrentDesktop());
     while (true) {
         HANDLE pipe = CreateNamedPipeW(pipeName.c_str(), PIPE_ACCESS_OUTBOUND,
             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1, 64 * 1024, 64 * 1024, 0, nullptr);

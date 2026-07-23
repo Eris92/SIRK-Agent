@@ -29,15 +29,19 @@ module.exports.createAppControl = function createAppControl(parent, workspaceMod
     const nativeSource = String.raw`
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
-public static class SirKWorkspaceDesktop {
+public static class SirKWorkspaceDesktop090 {
   [DllImport("user32.dll", SetLastError=true, CharSet=CharSet.Unicode)] static extern IntPtr OpenWindowStation(string name, bool inherit, uint access);
   [DllImport("user32.dll", SetLastError=true)] static extern bool SetProcessWindowStation(IntPtr station);
   [DllImport("user32.dll", SetLastError=true, CharSet=CharSet.Unicode)] static extern IntPtr OpenDesktop(string name, uint flags, bool inherit, uint access);
   [DllImport("user32.dll", SetLastError=true)] static extern bool EnumDesktopWindows(IntPtr desktop, EnumProc callback, IntPtr param);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int max);
   [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+  [DllImport("user32.dll")] static extern bool CloseDesktop(IntPtr desktop);
+  [DllImport("user32.dll")] static extern bool CloseWindowStation(IntPtr station);
   [DllImport("wtsapi32.dll", SetLastError=true)] static extern bool WTSQueryUserToken(uint sessionId, out IntPtr token);
   [DllImport("advapi32.dll", SetLastError=true)] static extern bool DuplicateTokenEx(IntPtr existing, uint access, IntPtr attrs, int level, int type, out IntPtr token);
   [DllImport("userenv.dll", SetLastError=true)] static extern bool CreateEnvironmentBlock(out IntPtr environment, IntPtr token, bool inherit);
@@ -49,34 +53,44 @@ public static class SirKWorkspaceDesktop {
   [StructLayout(LayoutKind.Sequential)] struct PROCESS_INFORMATION { public IntPtr process, thread; public int processId, threadId; }
   const uint WINSTA_ALL_ACCESS=0x37F; const uint DESKTOP_ENUMERATE=0x40, DESKTOP_READOBJECTS=0x1;
   public static string[] List(string desktopName) {
-    IntPtr station=OpenWindowStation("winsta0",false,WINSTA_ALL_ACCESS); if(station==IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
-    if(!SetProcessWindowStation(station)) throw new System.ComponentModel.Win32Exception();
-    IntPtr desktop=OpenDesktop(desktopName,0,false,DESKTOP_ENUMERATE|DESKTOP_READOBJECTS); if(desktop==IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
-    var values=new List<string>(); EnumDesktopWindows(desktop,(h,p)=>{ var b=new StringBuilder(1024); int n=GetWindowText(h,b,b.Capacity); if(n>0 && IsWindowVisible(h)) values.Add(b.ToString()); return true;},IntPtr.Zero); return values.ToArray();
+    IntPtr station=IntPtr.Zero, desktop=IntPtr.Zero;
+    try {
+      station=OpenWindowStation("winsta0",false,WINSTA_ALL_ACCESS); if(station==IntPtr.Zero) throw new Win32Exception();
+      if(!SetProcessWindowStation(station)) throw new Win32Exception();
+      desktop=OpenDesktop(desktopName,0,false,DESKTOP_ENUMERATE|DESKTOP_READOBJECTS); if(desktop==IntPtr.Zero) throw new Win32Exception();
+      var values=new List<string>();
+      if(!EnumDesktopWindows(desktop,(h,p)=>{ var b=new StringBuilder(2048); int n=GetWindowText(h,b,b.Capacity); if(n>0 && IsWindowVisible(h)){ var title=b.ToString().Replace("\r"," ").Replace("\n"," ").Trim(); if(title.Length>0) values.Add(title); } return true;},IntPtr.Zero)) throw new Win32Exception();
+      return values.ToArray();
+    } finally { if(desktop!=IntPtr.Zero) CloseDesktop(desktop); if(station!=IntPtr.Zero) CloseWindowStation(station); }
   }
   public static int Launch(uint sessionId,string desktopName,string file,string arguments) {
-    IntPtr user,primary=IntPtr.Zero,environment=IntPtr.Zero; if(!WTSQueryUserToken(sessionId,out user)) throw new System.ComponentModel.Win32Exception();
-    try { if(!DuplicateTokenEx(user,0xF01FF,IntPtr.Zero,2,1,out primary)) throw new System.ComponentModel.Win32Exception(); CreateEnvironmentBlock(out environment,primary,false);
-      var si=new STARTUPINFO(); si.cb=Marshal.SizeOf(si); si.desktop="winsta0\\"+desktopName; var pi=new PROCESS_INFORMATION(); string cmd="\""+file+"\""+(String.IsNullOrWhiteSpace(arguments)?"":" "+arguments); var sb=new StringBuilder(cmd);
-      if(!CreateProcessAsUser(primary,file,sb,IntPtr.Zero,IntPtr.Zero,false,0x400|0x10,environment,System.IO.Path.GetDirectoryName(file),ref si,out pi)) throw new System.ComponentModel.Win32Exception();
-      CloseHandle(pi.thread); CloseHandle(pi.process); return pi.processId;
-    } finally { if(environment!=IntPtr.Zero) DestroyEnvironmentBlock(environment); if(primary!=IntPtr.Zero) CloseHandle(primary); CloseHandle(user); }
+    IntPtr user=IntPtr.Zero,primary=IntPtr.Zero,environment=IntPtr.Zero;
+    if(!WTSQueryUserToken(sessionId,out user)) throw new Win32Exception();
+    try {
+      if(!DuplicateTokenEx(user,0xF01FF,IntPtr.Zero,2,1,out primary)) throw new Win32Exception();
+      if(!CreateEnvironmentBlock(out environment,primary,false)) environment=IntPtr.Zero;
+      var si=new STARTUPINFO(); si.cb=Marshal.SizeOf(si); si.desktop="winsta0\\"+desktopName;
+      var pi=new PROCESS_INFORMATION(); string cmd="\""+file+"\""+(String.IsNullOrWhiteSpace(arguments)?"":" "+arguments); var sb=new StringBuilder(cmd);
+      string cwd=Path.GetDirectoryName(file); if(String.IsNullOrWhiteSpace(cwd)) cwd=null;
+      if(!CreateProcessAsUser(primary,file,sb,IntPtr.Zero,IntPtr.Zero,false,0x400|0x10,environment,cwd,ref si,out pi)) throw new Win32Exception();
+      try { return pi.processId; } finally { if(pi.thread!=IntPtr.Zero) CloseHandle(pi.thread); if(pi.process!=IntPtr.Zero) CloseHandle(pi.process); }
+    } finally { if(environment!=IntPtr.Zero) DestroyEnvironmentBlock(environment); if(primary!=IntPtr.Zero) CloseHandle(primary); if(user!=IntPtr.Zero) CloseHandle(user); }
   }
 }`;
     const nativeBase64 = Buffer.from(nativeSource, 'utf8').toString('base64');
 
     function resultLine(sessionId, state, dataExpression) {
-        return "$r=[ordered]@{sessionId='" + escapePowerShell(sessionId) + "';state='" + escapePowerShell(state) + "';data=" + dataExpression + "};Write-Output ('__WORKSPACE_APP_RESULT__'+($r|ConvertTo-Json -Compress -Depth 8))";
+        return "$r=[ordered]@{sessionId='" + escapePowerShell(sessionId) + "';state='" + escapePowerShell(state) + "';data=" + dataExpression + "};$j=$r|ConvertTo-Json -Compress -Depth 10;$b=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($j));Write-Output ('__WORKSPACE_APP_RESULT_B64__'+$b)";
     }
-    function prelude() { return "$src=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + nativeBase64 + "'));if(-not ('SirKWorkspaceDesktop' -as [type])){Add-Type -TypeDefinition $src -Language CSharp}"; }
+    function prelude() { return "$src=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + nativeBase64 + "'));if(-not ('SirKWorkspaceDesktop090' -as [type])){Add-Type -TypeDefinition $src -Language CSharp}"; }
     function listCommand(session) {
         const desktop = escapePowerShell(desktopFor(session));
-        return ["$ErrorActionPreference='Stop'", 'try{', prelude(), "$items=[SirKWorkspaceDesktop]::List('" + desktop + "')", resultLine(session.id, 'listed', "([ordered]@{desktop='" + desktop + "';windows=@($items)})"), '}catch{' + resultLine(session.id, 'error', "([ordered]@{message=$_.Exception.Message})") + '}'].join(';');
+        return ["$ErrorActionPreference='Stop'", 'try{', prelude(), "$items=[SirKWorkspaceDesktop090]::List('" + desktop + "')", resultLine(session.id, 'listed', "([ordered]@{desktop='" + desktop + "';windows=@($items)})"), '}catch{' + resultLine(session.id, 'error', "([ordered]@{message=$_.Exception.Message})") + '}'].join(';');
     }
     function launchCommand(session, file, args) {
         const desktop = escapePowerShell(desktopFor(session));
         const safeFile = escapePowerShell(file); const safeArgs = escapePowerShell(args);
-        return ["$ErrorActionPreference='Stop'", 'try{', prelude(), "$pid=[SirKWorkspaceDesktop]::Launch(" + Number(session.windowsSessionId || 0) + ",'" + desktop + "','" + safeFile + "','" + safeArgs + "')", resultLine(session.id, 'launched', "([ordered]@{desktop='" + desktop + "';file='" + safeFile + "';pid=$pid})"), '}catch{' + resultLine(session.id, 'error', "([ordered]@{message=$_.Exception.Message})") + '}'].join(';');
+        return ["$ErrorActionPreference='Stop'", 'try{', prelude(), "$requested='" + safeFile + "'", "$resolved=if([IO.Path]::IsPathRooted($requested)){[Environment]::ExpandEnvironmentVariables($requested)}else{(Get-Command $requested -CommandType Application -ErrorAction Stop|Select-Object -First 1 -ExpandProperty Source)}", "if(-not(Test-Path -LiteralPath $resolved)){throw ('Application not found: '+$resolved)}", "$pid=[SirKWorkspaceDesktop090]::Launch([uint32]" + Number(session.windowsSessionId || 0) + ",'" + desktop + "',$resolved,'" + safeArgs + "')", resultLine(session.id, 'launched', "([ordered]@{desktop='" + desktop + "';file=$resolved;pid=$pid})"), '}catch{' + resultLine(session.id, 'error', "([ordered]@{message=$_.Exception.Message})") + '}'].join(';');
     }
 
     function dispatch(session, user, commandText, responseId) {
@@ -107,9 +121,10 @@ public static class SirKWorkspaceDesktop {
     }
     function consume(responseId, raw) {
         const item=outputs[responseId]; if(!item) return false; item.output=(item.output+String(raw==null?'':raw)).slice(-1024*1024);
-        const match=item.output.match(/__WORKSPACE_APP_RESULT__(\{[^\r\n]+\})/); if(!match) return false; const session=workspaceModule.sessions.get(item.sessionId); if(!session) return true;
-        try { const result=JSON.parse(match[1]); const data=result.data||{}; session.appsState=result.state; session.appsError=result.state==='error'?(data.message||'Application operation failed.'):null; if(Array.isArray(data.windows)) session.windows=data.windows; if(data.pid) session.lastLaunchedPid=data.pid; if(data.file) session.lastLaunchedFile=data.file; }
-        catch(error){ session.appsState='error'; session.appsError=error.message; }
+        const matches=item.output.match(/__WORKSPACE_APP_RESULT_B64__([A-Za-z0-9+/=]+)/g); if(!matches || matches.length===0) return false;
+        const marker=matches[matches.length-1]; const encoded=marker.substring('__WORKSPACE_APP_RESULT_B64__'.length); const session=workspaceModule.sessions.get(item.sessionId); if(!session) return true;
+        try { const result=JSON.parse(Buffer.from(encoded,'base64').toString('utf8')); const data=result.data||{}; session.appsState=result.state; session.appsError=result.state==='error'?(data.message||'Application operation failed.'):null; if(Array.isArray(data.windows)) session.windows=data.windows; if(data.pid) session.lastLaunchedPid=data.pid; if(data.file) session.lastLaunchedFile=data.file; }
+        catch(error){ session.appsState='error'; session.appsError='Invalid app-control response: '+error.message; }
         delete outputs[responseId]; return true;
     }
     function captureAgentData(command, agent) {

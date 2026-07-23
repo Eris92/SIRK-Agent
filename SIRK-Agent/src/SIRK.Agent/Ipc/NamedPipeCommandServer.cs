@@ -14,7 +14,8 @@ internal sealed class NamedPipeCommandServer(
     ILogger<NamedPipeCommandServer> logger)
 {
     internal const string PipeName = "SIRK.Agent.v1";
-    private const int MaximumMessageBytes = 64 * 1024;
+    private const int MaximumRequestBytes = 64 * 1024;
+    private const int MaximumResponseBytes = 16 * 1024 * 1024;
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -47,15 +48,14 @@ internal sealed class NamedPipeCommandServer(
     private static NamedPipeServerStream CreatePipe()
     {
         PipeSecurity security = CreatePipeSecurity();
-
         return NamedPipeServerStreamAcl.Create(
             PipeName,
             PipeDirection.InOut,
             1,
             PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous,
-            MaximumMessageBytes,
-            MaximumMessageBytes,
+            MaximumRequestBytes,
+            MaximumRequestBytes,
             security,
             HandleInheritability.None,
             PipeAccessRights.ChangePermissions);
@@ -65,7 +65,6 @@ internal sealed class NamedPipeCommandServer(
     {
         var security = new PipeSecurity();
         security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-
         AddAllowRule(security, new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null));
         AddAllowRule(security, new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null));
 
@@ -80,20 +79,15 @@ internal sealed class NamedPipeCommandServer(
 
     private static void AddAllowRule(PipeSecurity security, IdentityReference identity)
     {
-        const PipeAccessRights rights =
-            PipeAccessRights.ReadData |
-            PipeAccessRights.WriteData |
-            PipeAccessRights.ReadAttributes |
-            PipeAccessRights.WriteAttributes |
-            PipeAccessRights.ReadExtendedAttributes |
-            PipeAccessRights.WriteExtendedAttributes |
-            PipeAccessRights.ReadPermissions |
-            PipeAccessRights.Synchronize;
-
-        security.AddAccessRule(new PipeAccessRule(
-            identity,
-            rights,
-            AccessControlType.Allow));
+        const PipeAccessRights rights = PipeAccessRights.ReadData |
+                                        PipeAccessRights.WriteData |
+                                        PipeAccessRights.ReadAttributes |
+                                        PipeAccessRights.WriteAttributes |
+                                        PipeAccessRights.ReadExtendedAttributes |
+                                        PipeAccessRights.WriteExtendedAttributes |
+                                        PipeAccessRights.ReadPermissions |
+                                        PipeAccessRights.Synchronize;
+        security.AddAccessRule(new PipeAccessRule(identity, rights, AccessControlType.Allow));
     }
 
     private async Task ProcessConnectionAsync(Stream stream, CancellationToken cancellationToken)
@@ -115,7 +109,6 @@ internal sealed class NamedPipeCommandServer(
     private ProtocolResponse ProcessRequest(byte[] requestBytes)
     {
         ProtocolEnvelope? command;
-
         try
         {
             command = JsonSerializer.Deserialize<ProtocolEnvelope>(requestBytes, JsonOptions);
@@ -143,7 +136,6 @@ internal sealed class NamedPipeCommandServer(
     {
         byte[] header = new byte[sizeof(int)];
         int headerBytes = await ReadAtMostAsync(stream, header, cancellationToken);
-
         if (headerBytes == 0)
         {
             return null;
@@ -155,9 +147,9 @@ internal sealed class NamedPipeCommandServer(
         }
 
         int length = BinaryPrimitives.ReadInt32LittleEndian(header);
-        if (length <= 0 || length > MaximumMessageBytes)
+        if (length <= 0 || length > MaximumRequestBytes)
         {
-            throw new InvalidDataException("IPC frame length is outside the allowed limit.");
+            throw new InvalidDataException("IPC request length is outside the allowed limit.");
         }
 
         byte[] payload = new byte[length];
@@ -165,10 +157,7 @@ internal sealed class NamedPipeCommandServer(
         return payload;
     }
 
-    private static async Task<int> ReadAtMostAsync(
-        Stream stream,
-        Memory<byte> buffer,
-        CancellationToken cancellationToken)
+    private static async Task<int> ReadAtMostAsync(Stream stream, Memory<byte> buffer, CancellationToken cancellationToken)
     {
         int total = 0;
         while (total < buffer.Length)
@@ -185,19 +174,15 @@ internal sealed class NamedPipeCommandServer(
         return total;
     }
 
-    private static async Task WriteFrameAsync(
-        Stream stream,
-        byte[] payload,
-        CancellationToken cancellationToken)
+    private static async Task WriteFrameAsync(Stream stream, byte[] payload, CancellationToken cancellationToken)
     {
-        if (payload.Length > MaximumMessageBytes)
+        if (payload.Length is <= 0 || payload.Length > MaximumResponseBytes)
         {
             throw new InvalidDataException("IPC response exceeds the allowed limit.");
         }
 
         byte[] header = new byte[sizeof(int)];
         BinaryPrimitives.WriteInt32LittleEndian(header, payload.Length);
-
         await stream.WriteAsync(header, cancellationToken);
         await stream.WriteAsync(payload, cancellationToken);
         await stream.FlushAsync(cancellationToken);

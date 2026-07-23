@@ -5,7 +5,6 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
-#include <iterator>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -13,7 +12,7 @@
 
 namespace {
 constexpr wchar_t kPipeName[] = L"\\\\.\\pipe\\SirK.MeshCentral.Workspace";
-constexpr wchar_t kVersion[] = L"0.2.0";
+constexpr wchar_t kVersion[] = L"0.3.0";
 
 std::filesystem::path LogPath() {
     wchar_t programData[MAX_PATH]{};
@@ -68,17 +67,50 @@ std::wstring Wide(const std::string& value) {
     return result;
 }
 
+std::string JsonEscape(const std::string& value) {
+    std::ostringstream escaped;
+    for (const unsigned char character : value) {
+        switch (character) {
+        case '"': escaped << "\\\""; break;
+        case '\\': escaped << "\\\\"; break;
+        case '\b': escaped << "\\b"; break;
+        case '\f': escaped << "\\f"; break;
+        case '\n': escaped << "\\n"; break;
+        case '\r': escaped << "\\r"; break;
+        case '\t': escaped << "\\t"; break;
+        default:
+            if (character < 0x20) {
+                escaped << "\\u" << std::hex << std::setw(4) << std::setfill('0') << static_cast<int>(character) << std::dec;
+            } else {
+                escaped << static_cast<char>(character);
+            }
+        }
+    }
+    return escaped.str();
+}
+
 std::string Heartbeat(std::chrono::steady_clock::time_point started) {
     DWORD sessionId = 0;
     ProcessIdToSessionId(GetCurrentProcessId(), &sessionId);
     const auto uptime = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - started).count();
+    const int monitorCount = GetSystemMetrics(SM_CMONITORS);
+    const int primaryWidth = GetSystemMetrics(SM_CXSCREEN);
+    const int primaryHeight = GetSystemMetrics(SM_CYSCREEN);
+    const int virtualWidth = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    const int virtualHeight = GetSystemMetrics(SM_CYVIRTUALSCREEN);
 
     std::ostringstream json;
-    json << "{\"type\":\"heartbeat\",\"version\":\"0.2.0\",\"pid\":" << GetCurrentProcessId()
+    json << "{\"type\":\"heartbeat\",\"version\":\"0.3.0\",\"pid\":" << GetCurrentProcessId()
          << ",\"sessionId\":" << sessionId
-         << ",\"user\":\"" << Utf8(CurrentUser())
-         << "\",\"desktop\":\"" << Utf8(CurrentDesktop())
-         << "\",\"uptimeSeconds\":" << uptime << "}\n";
+         << ",\"user\":\"" << JsonEscape(Utf8(CurrentUser()))
+         << "\",\"desktop\":\"" << JsonEscape(Utf8(CurrentDesktop()))
+         << "\",\"uptimeSeconds\":" << uptime
+         << ",\"monitorCount\":" << monitorCount
+         << ",\"primaryWidth\":" << primaryWidth
+         << ",\"primaryHeight\":" << primaryHeight
+         << ",\"virtualWidth\":" << virtualWidth
+         << ",\"virtualHeight\":" << virtualHeight
+         << "}\n";
     return json.str();
 }
 

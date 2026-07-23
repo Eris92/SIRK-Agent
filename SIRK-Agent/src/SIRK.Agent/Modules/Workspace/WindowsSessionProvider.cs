@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using System.Runtime.InteropServices;
 
 namespace Sirk.Agent.Modules.Workspace;
@@ -21,7 +20,7 @@ internal sealed class WindowsSessionProvider : IWindowsSessionProvider
     {
         if (!WTSEnumerateSessionsW(CurrentServerHandle, 0, 1, out nint buffer, out int count))
         {
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "Unable to enumerate Windows sessions.");
+            return Array.Empty<WindowsSessionInfo>();
         }
 
         try

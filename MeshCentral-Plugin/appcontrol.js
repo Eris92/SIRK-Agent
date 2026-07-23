@@ -5,6 +5,8 @@ const crypto = require('crypto');
 module.exports.createAppControl = function createAppControl(parent, workspaceModule) {
     const outputs = Object.create(null);
     const pendingByNode = Object.create(null);
+    const markerStart = '__WORKSPACE_APP_RESULT_B64__';
+    const markerEnd = '__WORKSPACE_APP_RESULT_END__';
 
     function makeId() { return crypto.randomBytes(12).toString('hex'); }
     function userId(user) { return String(user && user._id || ''); }
@@ -33,7 +35,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
-public static class SirKWorkspaceDesktop090 {
+public static class SirKWorkspaceDesktop091 {
   [DllImport("user32.dll", SetLastError=true, CharSet=CharSet.Unicode)] static extern IntPtr OpenWindowStation(string name, bool inherit, uint access);
   [DllImport("user32.dll", SetLastError=true)] static extern bool SetProcessWindowStation(IntPtr station);
   [DllImport("user32.dll", SetLastError=true, CharSet=CharSet.Unicode)] static extern IntPtr OpenDesktop(string name, uint flags, bool inherit, uint access);
@@ -80,17 +82,17 @@ public static class SirKWorkspaceDesktop090 {
     const nativeBase64 = Buffer.from(nativeSource, 'utf8').toString('base64');
 
     function resultLine(sessionId, state, dataExpression) {
-        return "$r=[ordered]@{sessionId='" + escapePowerShell(sessionId) + "';state='" + escapePowerShell(state) + "';data=" + dataExpression + "};$j=$r|ConvertTo-Json -Compress -Depth 10;$b=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($j));Write-Output ('__WORKSPACE_APP_RESULT_B64__'+$b)";
+        return "$r=[ordered]@{sessionId='" + escapePowerShell(sessionId) + "';state='" + escapePowerShell(state) + "';data=" + dataExpression + "};$j=$r|ConvertTo-Json -Compress -Depth 10;$b=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($j));Write-Output ('" + markerStart + "'+$b+'" + markerEnd + "')";
     }
-    function prelude() { return "$src=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + nativeBase64 + "'));if(-not ('SirKWorkspaceDesktop090' -as [type])){Add-Type -TypeDefinition $src -Language CSharp}"; }
+    function prelude() { return "$src=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + nativeBase64 + "'));if(-not ('SirKWorkspaceDesktop091' -as [type])){Add-Type -TypeDefinition $src -Language CSharp}"; }
     function listCommand(session) {
         const desktop = escapePowerShell(desktopFor(session));
-        return ["$ErrorActionPreference='Stop'", 'try{', prelude(), "$items=[SirKWorkspaceDesktop090]::List('" + desktop + "')", resultLine(session.id, 'listed', "([ordered]@{desktop='" + desktop + "';windows=@($items)})"), '}catch{' + resultLine(session.id, 'error', "([ordered]@{message=$_.Exception.Message})") + '}'].join(';');
+        return ["$ErrorActionPreference='Stop'", 'try{', prelude(), "$items=[SirKWorkspaceDesktop091]::List('" + desktop + "')", resultLine(session.id, 'listed', "([ordered]@{desktop='" + desktop + "';windows=@($items)})"), '}catch{' + resultLine(session.id, 'error', "([ordered]@{message=$_.Exception.Message})") + '}'].join(';');
     }
     function launchCommand(session, file, args) {
         const desktop = escapePowerShell(desktopFor(session));
         const safeFile = escapePowerShell(file); const safeArgs = escapePowerShell(args);
-        return ["$ErrorActionPreference='Stop'", 'try{', prelude(), "$requested='" + safeFile + "'", "$resolved=if([IO.Path]::IsPathRooted($requested)){[Environment]::ExpandEnvironmentVariables($requested)}else{(Get-Command $requested -CommandType Application -ErrorAction Stop|Select-Object -First 1 -ExpandProperty Source)}", "if(-not(Test-Path -LiteralPath $resolved)){throw ('Application not found: '+$resolved)}", "$pid=[SirKWorkspaceDesktop090]::Launch([uint32]" + Number(session.windowsSessionId || 0) + ",'" + desktop + "',$resolved,'" + safeArgs + "')", resultLine(session.id, 'launched', "([ordered]@{desktop='" + desktop + "';file=$resolved;pid=$pid})"), '}catch{' + resultLine(session.id, 'error', "([ordered]@{message=$_.Exception.Message})") + '}'].join(';');
+        return ["$ErrorActionPreference='Stop'", 'try{', prelude(), "$requested='" + safeFile + "'", "$resolved=if([IO.Path]::IsPathRooted($requested)){[Environment]::ExpandEnvironmentVariables($requested)}else{(Get-Command $requested -CommandType Application -ErrorAction Stop|Select-Object -First 1 -ExpandProperty Source)}", "if(-not(Test-Path -LiteralPath $resolved)){throw ('Application not found: '+$resolved)}", "$pid=[SirKWorkspaceDesktop091]::Launch([uint32]" + Number(session.windowsSessionId || 0) + ",'" + desktop + "',$resolved,'" + safeArgs + "')", resultLine(session.id, 'launched', "([ordered]@{desktop='" + desktop + "';file=$resolved;pid=$pid})"), '}catch{' + resultLine(session.id, 'error', "([ordered]@{message=$_.Exception.Message})") + '}'].join(';');
     }
 
     function dispatch(session, user, commandText, responseId) {
@@ -120,11 +122,25 @@ public static class SirKWorkspaceDesktop090 {
         session.appsState='launching'; session.appsError=null; return dispatch(session,user,launchCommand(session,value,String(args||'')),'workspace-app-'+makeId());
     }
     function consume(responseId, raw) {
-        const item=outputs[responseId]; if(!item) return false; item.output=(item.output+String(raw==null?'':raw)).slice(-1024*1024);
-        const matches=item.output.match(/__WORKSPACE_APP_RESULT_B64__([A-Za-z0-9+/=]+)/g); if(!matches || matches.length===0) return false;
-        const marker=matches[matches.length-1]; const encoded=marker.substring('__WORKSPACE_APP_RESULT_B64__'.length); const session=workspaceModule.sessions.get(item.sessionId); if(!session) return true;
-        try { const result=JSON.parse(Buffer.from(encoded,'base64').toString('utf8')); const data=result.data||{}; session.appsState=result.state; session.appsError=result.state==='error'?(data.message||'Application operation failed.'):null; if(Array.isArray(data.windows)) session.windows=data.windows; if(data.pid) session.lastLaunchedPid=data.pid; if(data.file) session.lastLaunchedFile=data.file; }
-        catch(error){ session.appsState='error'; session.appsError='Invalid app-control response: '+error.message; }
+        const item=outputs[responseId]; if(!item) return false;
+        item.output=(item.output+String(raw==null?'':raw)).slice(-2*1024*1024);
+        const start=item.output.lastIndexOf(markerStart); if(start<0) return false;
+        const payloadStart=start+markerStart.length;
+        const end=item.output.indexOf(markerEnd,payloadStart); if(end<0) return false;
+        const encoded=item.output.substring(payloadStart,end).replace(/\s+/g,'');
+        if(!encoded || encoded.length%4!==0) return false;
+        const session=workspaceModule.sessions.get(item.sessionId); if(!session) { delete outputs[responseId]; return true; }
+        try {
+            const result=JSON.parse(Buffer.from(encoded,'base64').toString('utf8'));
+            const data=result.data||{};
+            session.appsState=result.state;
+            session.appsError=result.state==='error'?(data.message||'Application operation failed.'):null;
+            if(Array.isArray(data.windows)) session.windows=data.windows;
+            if(data.pid) session.lastLaunchedPid=data.pid;
+            if(data.file) session.lastLaunchedFile=data.file;
+        } catch(error) {
+            session.appsState='error'; session.appsError='Invalid app-control response: '+error.message;
+        }
         delete outputs[responseId]; return true;
     }
     function captureAgentData(command, agent) {

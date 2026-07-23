@@ -1,0 +1,18 @@
+{
+  "name": "MeshCentral Workspace",
+  "shortName": "workspace",
+  "viewmode": 122,
+  "pageText": "Pulpit -New",
+  "version": "0.3.0",
+  "author": "Eris92",
+  "description": "Alternatywny modul WorkspaceHost uruchamiany przez MeshAgent.",
+  "hasAdminPanel": false,
+  "homepage": "https://github.com/Eris92/MeshCentral-Workspace",
+  "configUrl": "https://raw.githubusercontent.com/Eris92/MeshCentral-Workspace/develop/MeshCentral-Plugin/config.json",
+  "downloadUrl": "https://github.com/Eris92/MeshCentral-Workspace/releases/download/develop-latest/MeshCentral-Workspace-Plugin-0.3.0.zip",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Eris92/MeshCentral-Workspace.git"
+  },
+  "meshCentralCompat": ">=1.1.18"
+}

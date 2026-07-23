@@ -71,9 +71,7 @@ jobs:
             $tokens = $null
             $errors = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
-            if ($errors.Count -gt 0) {
-              $errors | ForEach-Object { Write-Error $_.Message }
-            }
+            if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message } }
           }
 
       - name: Run agent IPC integration tests
@@ -109,62 +107,63 @@ jobs:
         with:
           name: SIRK-Agent-build-logs
           path: |
-            restore-agent.log
-            restore-client.log
-            restore-tests.log
-            restore-mesh-adapter.log
-            restore-workspace-host.log
-            build-agent.log
-            build-client.log
-            build-tests.log
-            build-mesh-adapter.log
-            build-workspace-host.log
+            restore-*.log
+            build-*.log
             integration-tests.log
             mesh-adapter-integration.log
             workspace-host-validation.log
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Publish agent
-        run: dotnet publish SIRK-Agent/src/SIRK.Agent/SIRK.Agent.csproj --configuration Release --no-build --output artifacts/SIRK-Agent
+      - name: Publish components
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet publish SIRK-Agent/src/SIRK.Agent/SIRK.Agent.csproj --configuration Release --no-build --output artifacts/SIRK-Agent
+          dotnet publish SIRK-Agent/tools/SIRK.Agent.Client/SIRK.Agent.Client.csproj --configuration Release --no-build --output artifacts/SIRK-Agent-Client
+          dotnet publish SIRK-MeshAdapter/src/SIRK.MeshAdapter/SIRK.MeshAdapter.csproj --configuration Release --no-build --output artifacts/SIRK-MeshAdapter
+          dotnet publish SIRK-WorkspaceHost/src/SIRK.WorkspaceHost/SIRK.WorkspaceHost.csproj --configuration Release --no-build --output artifacts/SIRK-WorkspaceHost
 
-      - name: Publish IPC client
-        run: dotnet publish SIRK-Agent/tools/SIRK.Agent.Client/SIRK.Agent.Client.csproj --configuration Release --no-build --output artifacts/SIRK-Agent-Client
+      - name: Prepare test bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundle = 'artifacts/SIRK-Agent-TestBundle'
+          New-Item "$bundle/Agent","$bundle/Client","$bundle/MeshAdapter","$bundle/WorkspaceHost","$bundle/Scripts","$bundle/Docs" -ItemType Directory -Force | Out-Null
+          Copy-Item artifacts/SIRK-Agent/* "$bundle/Agent" -Recurse -Force
+          Copy-Item artifacts/SIRK-Agent-Client/* "$bundle/Client" -Recurse -Force
+          Copy-Item artifacts/SIRK-MeshAdapter/* "$bundle/MeshAdapter" -Recurse -Force
+          Copy-Item artifacts/SIRK-WorkspaceHost/* "$bundle/WorkspaceHost" -Recurse -Force
+          Copy-Item SIRK-Agent/scripts/Install-SIRKAgent.ps1,SIRK-Agent/scripts/Uninstall-SIRKAgent.ps1,SIRK-Agent/scripts/Test-SIRKAgent.ps1 "$bundle/Scripts" -Force
+          Copy-Item SIRK-Agent/README.md "$bundle/Docs/README.md" -Force
+          Get-ChildItem $bundle -File -Recurse | Get-FileHash -Algorithm SHA256 | Select-Object Hash,Path | ConvertTo-Json -Depth 4 | Set-Content "$bundle/SHA256SUMS.json" -Encoding UTF8
+          @'
+          SIRK-Agent test bundle
 
-      - name: Publish Mesh adapter
-        run: dotnet publish SIRK-MeshAdapter/src/SIRK.MeshAdapter/SIRK.MeshAdapter.csproj --configuration Release --no-build --output artifacts/SIRK-MeshAdapter
+          1. Extract the ZIP on a Windows test computer.
+          2. Start Windows PowerShell as Administrator.
+          3. Run:
+             Set-ExecutionPolicy -Scope Process Bypass -Force
+             .\Scripts\Test-SIRKAgent.ps1 -BundlePath .
+          4. Send the generated JSON report when reporting a problem.
+          '@ | Set-Content "$bundle/TESTING.txt" -Encoding UTF8
 
-      - name: Publish WorkspaceHost
-        run: dotnet publish SIRK-WorkspaceHost/src/SIRK.WorkspaceHost/SIRK.WorkspaceHost.csproj --configuration Release --no-build --output artifacts/SIRK-WorkspaceHost
-
-      - name: Upload agent artifact
+      - name: Upload component artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: SIRK-Agent-win-x64
-          path: artifacts/SIRK-Agent
+          name: SIRK-Agent-components-win-x64
+          path: |
+            artifacts/SIRK-Agent
+            artifacts/SIRK-Agent-Client
+            artifacts/SIRK-MeshAdapter
+            artifacts/SIRK-WorkspaceHost
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload client artifact
+      - name: Upload test bundle
         uses: actions/upload-artifact@v4
         with:
-          name: SIRK-Agent-Client-win-x64
-          path: artifacts/SIRK-Agent-Client
+          name: SIRK-Agent-TestBundle-win-x64
+          path: artifacts/SIRK-Agent-TestBundle
           if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload Mesh adapter artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: SIRK-MeshAdapter-win-x64
-          path: artifacts/SIRK-MeshAdapter
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload WorkspaceHost artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: SIRK-WorkspaceHost-win-x64
-          path: artifacts/SIRK-WorkspaceHost
-          if-no-files-found: error
-          retention-days: 14
+          retention-days: 30

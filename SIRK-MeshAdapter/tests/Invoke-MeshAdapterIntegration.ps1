@@ -10,6 +10,10 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
+    $PSNativeCommandUseErrorActionPreference = $false
+}
+
 function Invoke-AdapterRequest {
     param(
         [Parameter(Mandatory)]
@@ -76,6 +80,22 @@ try {
 
     if ($status.ExitCode -ne 0 -or -not $status.Json.ok -or $status.Json.result.status -ne 'running') {
         throw "MeshAdapter status request failed."
+    }
+
+    $workspaceRequest = $baseRequest.Clone()
+    $workspaceRequest.messageType = 'Workspace.GetCapabilities'
+    $workspace = Invoke-AdapterRequest -Request $workspaceRequest
+
+    if ($workspace.ExitCode -ne 0 -or -not $workspace.Json.ok) {
+        throw "MeshAdapter workspace capabilities request failed."
+    }
+
+    if ($workspace.Json.result.module -ne 'Workspace') {
+        throw "MeshAdapter returned an unexpected Workspace module response."
+    }
+
+    if ($workspace.Json.result.capabilities -notcontains 'Workspace.GetCapabilities') {
+        throw "Workspace.GetCapabilities is missing from the capability report."
     }
 
     $blockedRequest = $baseRequest.Clone()

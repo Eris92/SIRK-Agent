@@ -1,24 +1,48 @@
-name: build
+name: Build native WorkspaceHost
 
 on:
+  workflow_dispatch:
   push:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
 
+permissions:
+  contents: read
+
 jobs:
-  build:
-    runs-on: windows-latest
+  build-windows-x64:
+    name: Windows x64
+    runs-on: windows-2022
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
-      - name: Build artifacts
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build native C++ artifacts
         shell: pwsh
         run: ./tools/build.ps1 -Configuration Release -Runtime win-x64
-      - name: Upload artifacts
+
+      - name: Package WorkspaceHost
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path ./artifacts/WorkspaceHost-win-x64/* `
+            -DestinationPath ./artifacts/WorkspaceHost-win-x64.zip `
+            -Force
+
+      - name: Upload WorkspaceHost
         uses: actions/upload-artifact@v4
         with:
-          name: MeshCentral-Workspace-0.1.0
-          path: artifacts/**
+          name: WorkspaceHost-win-x64
+          path: artifacts/WorkspaceHost-win-x64.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload MeshCentral plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: MeshCentral-Workspace-Plugin-0.2.0
+          path: artifacts/MeshCentral-Workspace-Plugin-0.2.0.zip
+          if-no-files-found: error
+          retention-days: 30

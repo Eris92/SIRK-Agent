@@ -1,5 +1,13 @@
 # MeshCentral Workspace
 
+## 0.8.1
+
+- Dodano `type="button"` do wszystkich przyciskow, aby formularz MeshCentral nie przejmowal klikniecia.
+- Obsluga klikniec korzysta teraz z delegacji zdarzen na kontenerze pluginu.
+- Po kliknieciu `Przygotuj` lub `Utworz` stan natychmiast zmienia sie na `wysylanie`.
+- Bledy wywolania sa pokazywane bezposrednio w karcie zamiast pozostawiac wrazenie, ze przycisk nic nie robi.
+- Wymuszono ponowne zaladowanie pliku `main.js` po aktualizacji pluginu.
+
 ## 0.7.0
 
 - Sesja `User` pozostaje na pulpicie `winsta0\\default`.

@@ -6,7 +6,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 
 const string PipeName = "SIRK.Agent.v1";
-const int MaximumMessageBytes = 64 * 1024;
+const int MaximumRequestBytes = 64 * 1024;
+const int MaximumResponseBytes = 16 * 1024 * 1024;
 const int MaximumInputCharacters = 32 * 1024;
 
 var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
@@ -19,7 +20,6 @@ try
 {
     string inputJson = await ReadLimitedInputAsync(Console.In, MaximumInputCharacters);
     AdapterRequest? input = JsonSerializer.Deserialize<AdapterRequest>(inputJson, jsonOptions);
-
     if (input is null)
     {
         return await WriteFailureAsync("empty_request", "Adapter request is empty.", 2, jsonOptions);
@@ -48,18 +48,13 @@ try
     };
 
     byte[] requestBytes = JsonSerializer.SerializeToUtf8Bytes(envelope, jsonOptions);
-    if (requestBytes.Length > MaximumMessageBytes)
+    if (requestBytes.Length > MaximumRequestBytes)
     {
         return await WriteFailureAsync("request_too_large", "SIRK Protocol request exceeds the IPC limit.", 2, jsonOptions);
     }
 
-    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-    await using var pipe = new NamedPipeClientStream(
-        ".",
-        PipeName,
-        PipeDirection.InOut,
-        PipeOptions.Asynchronous);
-
+    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+    await using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
     await pipe.ConnectAsync(timeout.Token);
     await WriteFrameAsync(pipe, requestBytes, timeout.Token);
     byte[] responseBytes = await ReadFrameAsync(pipe, timeout.Token);
@@ -120,7 +115,6 @@ static async Task<string> ReadLimitedInputAsync(TextReader reader, int maximumCh
 {
     char[] buffer = new char[4096];
     var builder = new StringBuilder();
-
     while (true)
     {
         int read = await reader.ReadAsync(buffer.AsMemory());
@@ -153,9 +147,8 @@ static async Task<byte[]> ReadFrameAsync(Stream stream, CancellationToken cancel
 {
     byte[] header = new byte[sizeof(int)];
     await stream.ReadExactlyAsync(header, cancellationToken);
-
     int length = BinaryPrimitives.ReadInt32LittleEndian(header);
-    if (length <= 0 || length > MaximumMessageBytes)
+    if (length <= 0 || length > MaximumResponseBytes)
     {
         throw new InvalidDataException("Agent response length is outside the allowed IPC limit.");
     }
@@ -165,11 +158,7 @@ static async Task<byte[]> ReadFrameAsync(Stream stream, CancellationToken cancel
     return payload;
 }
 
-static async Task<int> WriteFailureAsync(
-    string code,
-    string message,
-    int exitCode,
-    JsonSerializerOptions jsonOptions)
+static async Task<int> WriteFailureAsync(string code, string message, int exitCode, JsonSerializerOptions jsonOptions)
 {
     string json = JsonSerializer.Serialize(new AdapterFailure(false, new AdapterError(code, message)), jsonOptions);
     await Console.Out.WriteLineAsync(json);

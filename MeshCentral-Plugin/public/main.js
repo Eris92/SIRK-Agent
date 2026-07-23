@@ -3,15 +3,16 @@
 (function () {
     window.MeshCentralWorkspace = window.MeshCentralWorkspace || {};
     var plugin = window.MeshCentralWorkspace;
-    plugin.state = plugin.state || { nodeId: "", slots: [], timer: null, actions: {}, debugOpen: {} };
+    plugin.state = plugin.state || { nodeId: "", slots: [], timer: null, actions: {}, debugOpen: {}, devicesOpen: {} };
     plugin.state.actions = plugin.state.actions || {};
     plugin.state.debugOpen = plugin.state.debugOpen || {};
+    plugin.state.devicesOpen = plugin.state.devicesOpen || {};
 
     function assetUrl(asset, extra) {
         var url = new URL("pluginadmin.ashx", window.location.href);
         url.searchParams.set("pin", "workspace");
         url.searchParams.set("asset", asset);
-        url.searchParams.set("v", "0.8.5");
+        url.searchParams.set("v", "0.8.6");
         if (extra) Object.keys(extra).forEach(function (key) { url.searchParams.set(key, extra[key]); });
         return url.href;
     }
@@ -44,6 +45,10 @@
     function stateClass(state) { if (state === "running") return "ok"; if (state === "error") return "error"; if (busy(state)) return "pending"; return "idle"; }
     function check(label, ok, pending) { var cls = pending ? "pending" : (ok ? "ok" : "off"); var icon = pending ? "…" : (ok ? "✓" : "–"); return '<span class="workspace-check ' + cls + '"><b>' + icon + '</b>' + escapeHtml(label) + '</span>'; }
 
+    function deviceKey(slot) { return "workspace-device-mode:" + plugin.state.nodeId + ":" + slot; }
+    function getDeviceMode(slot) { try { return localStorage.getItem(deviceKey(slot)) || "broker"; } catch (error) { return "broker"; } }
+    function setDeviceMode(slot, mode) { try { localStorage.setItem(deviceKey(slot), mode); } catch (error) {} render(); }
+
     function displaySlot(slot) {
         var action = plugin.state.actions[slot.slot];
         if (!action) return slot;
@@ -66,6 +71,24 @@
             check("Input", false, false) +
             check("Clipboard", false, false) +
             '</div>';
+    }
+
+    function devicePanel(slot) {
+        var open = !!plugin.state.devicesOpen[slot.slot];
+        var mode = getDeviceMode(slot.slot);
+        function modeButton(id, label, description) {
+            return '<button type="button" class="workspace-device-mode' + (mode === id ? ' selected' : '') + '" data-mode="' + id + '"><strong>' + escapeHtml(label) + '</strong><span>' + escapeHtml(description) + '</span></button>';
+        }
+        return '<button type="button" class="workspace-devices-toggle">' + (open ? 'Ukryj urządzenia' : 'Urządzenia') + '</button>' +
+            '<div class="workspace-devices"' + (open ? '' : ' hidden') + '>' +
+            '<h4>Tryb urządzeń</h4><p>Wybór jest zapisywany dla tego hosta i Workspace. Transport urządzeń będzie uruchamiany etapami.</p>' +
+            '<div class="workspace-device-modes">' +
+            modeButton('broker', 'Device Broker', 'PIV / Smart Card, audio, kamera i urządzenia obsługiwane logicznie') +
+            modeButton('passthrough', 'USB Passthrough', 'Pełne urządzenie USB, np. dongle, programator, pendrive lub adapter') +
+            modeButton('virtual-media', 'Virtual Media', 'Obrazy ISO / IMG jako zdalny napęd CD/DVD lub dysk') +
+            '</div>' +
+            '<div class="workspace-device-status"><b>Wybrano:</b> ' + escapeHtml(mode === 'broker' ? 'Device Broker' : (mode === 'passthrough' ? 'USB Passthrough' : 'Virtual Media')) +
+            '<span>Moduł transportu: w przygotowaniu</span></div></div>';
     }
 
     function card(sourceSlot) {
@@ -91,6 +114,7 @@
             '<dt>Proces</dt><dd>' + escapeHtml(slot.pid ? ("PID " + slot.pid) : "-") + '</dd>' +
             '<dt>Ekran</dt><dd>' + escapeHtml(resolution(slot.primaryWidth, slot.primaryHeight)) + '</dd>' +
             '<dt>Monitory</dt><dd>' + escapeHtml(slot.monitorCount == null ? "-" : slot.monitorCount) + '</dd></dl>' +
+            devicePanel(slot) +
             '<button type="button" class="workspace-debug-toggle">' + (debugOpen ? "Ukryj debug" : "Pokaż debug") + '</button>' +
             '<div class="workspace-debug"' + (debugOpen ? '' : ' hidden') + '><dl class="workspace-grid">' +
             '<dt>Session ID</dt><dd>' + escapeHtml(slot.id || "-") + '</dd>' +
@@ -113,9 +137,14 @@
             var startButton = element.querySelector(".workspace-start");
             var stopButton = element.querySelector(".workspace-stop");
             var debugButton = element.querySelector(".workspace-debug-toggle");
+            var devicesButton = element.querySelector(".workspace-devices-toggle");
             if (startButton) startButton.onclick = function (event) { if (event) { event.preventDefault(); event.stopPropagation(); } start(slotId); return false; };
             if (stopButton) stopButton.onclick = function (event) { if (event) { event.preventDefault(); event.stopPropagation(); } var slot = plugin.state.slots.find(function (item) { return item.slot === slotId; }); stop(slot); return false; };
             if (debugButton) debugButton.onclick = function (event) { if (event) event.preventDefault(); plugin.state.debugOpen[slotId] = !plugin.state.debugOpen[slotId]; render(); return false; };
+            if (devicesButton) devicesButton.onclick = function (event) { if (event) event.preventDefault(); plugin.state.devicesOpen[slotId] = !plugin.state.devicesOpen[slotId]; render(); return false; };
+            Array.prototype.forEach.call(element.querySelectorAll(".workspace-device-mode"), function (button) {
+                button.onclick = function (event) { if (event) event.preventDefault(); setDeviceMode(slotId, button.getAttribute("data-mode")); return false; };
+            });
         });
     }
 

@@ -1,22 +1,36 @@
-name: build
+name: Build and publish plugin
 
 on:
   push:
-    branches: [main, develop]
-  pull_request:
-    branches: [main, develop]
+    branches: [develop]
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: workspace-develop-publish
+  cancel-in-progress: true
+
 jobs:
-  build:
+  build-publish:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout develop
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read plugin version
+        id: version
+        shell: pwsh
+        run: |
+          $config = Get-Content './MeshCentral-Plugin/config.json' -Raw | ConvertFrom-Json
+          $version = [string]$config.version
+          if ([string]::IsNullOrWhiteSpace($version)) { throw 'Plugin version is missing in config.json.' }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Plugin version: $version"
 
       - name: Build native WorkspaceHost and plugin
         shell: pwsh
@@ -28,7 +42,7 @@ jobs:
           $exe = Resolve-Path './artifacts/WorkspaceHost-win-x64/WorkspaceHost.exe'
           $vsRoot = Join-Path $env:ProgramFiles 'Microsoft Visual Studio'
           $dumpbin = Get-ChildItem $vsRoot -Filter dumpbin.exe -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match '\Hostx64\x64\dumpbin\.exe$' } |
+            Where-Object { $_.FullName -match '\\Hostx64\\x64\\dumpbin\.exe$' } |
             Select-Object -First 1 -ExpandProperty FullName
           if (-not $dumpbin) {
             $dumpbin = Get-ChildItem $vsRoot -Filter dumpbin.exe -Recurse -ErrorAction SilentlyContinue |
@@ -45,34 +59,50 @@ jobs:
         shell: pwsh
         run: ./tools/test-workspacehost.ps1 -ExePath ./artifacts/WorkspaceHost-win-x64/WorkspaceHost.exe
 
-      - name: Prepare release files
+      - name: Prepare distribution files
         shell: pwsh
         run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $pluginZip = "./artifacts/MeshCentral-Workspace-Plugin-$version.zip"
+          if (-not (Test-Path $pluginZip)) { throw "Plugin archive not found: $pluginZip" }
+
           Copy-Item ./artifacts/WorkspaceHost-win-x64/WorkspaceHost.exe ./artifacts/WorkspaceHost.exe -Force
           $hash = (Get-FileHash ./artifacts/WorkspaceHost.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           Set-Content ./artifacts/WorkspaceHost.exe.sha256 "$hash  WorkspaceHost.exe" -Encoding ascii
           Compress-Archive -Path ./artifacts/WorkspaceHost-win-x64/* -DestinationPath ./artifacts/WorkspaceHost-win-x64.zip -Force
 
-      - name: Upload WorkspaceHost
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: WorkspaceHost-win-x64
-          path: artifacts/WorkspaceHost-win-x64.zip
+          name: MeshCentral-Workspace-${{ steps.version.outputs.version }}
+          path: |
+            artifacts/MeshCentral-Workspace-Plugin-${{ steps.version.outputs.version }}.zip
+            artifacts/WorkspaceHost-win-x64.zip
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload MeshCentral plugin
-        uses: actions/upload-artifact@v4
-        with:
-          name: MeshCentral-Workspace-Plugin-0.3.0
-          path: artifacts/MeshCentral-Workspace-Plugin-0.3.0.zip
-          if-no-files-found: error
-          retention-days: 14
+      - name: Publish develop-latest runtime release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          gh release delete develop-latest --repo $env:GITHUB_REPOSITORY --cleanup-tag --yes 2>$null
+          gh release create develop-latest `
+            ./artifacts/WorkspaceHost.exe `
+            ./artifacts/WorkspaceHost.exe.sha256 `
+            ./artifacts/WorkspaceHost-win-x64.zip `
+            ./artifacts/MeshCentral-Workspace-Plugin-$version.zip `
+            --repo $env:GITHUB_REPOSITORY `
+            --target $env:GITHUB_SHA `
+            --title "Development build $version" `
+            --notes "Automatic tested build from develop commit $env:GITHUB_SHA." `
+            --prerelease
 
       - name: Publish plugin-only branch
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/develop'
         shell: pwsh
         run: |
+          $version = '${{ steps.version.outputs.version }}'
           $dist = Join-Path $env:RUNNER_TEMP 'workspace-plugin-dist'
           Remove-Item $dist -Recurse -Force -ErrorAction SilentlyContinue
           New-Item $dist -ItemType Directory -Force | Out-Null
@@ -84,23 +114,5 @@ jobs:
           git rm -rf .
           Copy-Item "$dist/*" . -Recurse -Force
           git add --all
-          git commit -m 'Publish MeshCentral Workspace plugin 0.3.0'
+          git commit -m "Publish MeshCentral Workspace plugin $version ($env:GITHUB_SHA)"
           git push origin HEAD:plugin --force
-
-      - name: Publish develop-latest release
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/develop'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release delete develop-latest --repo $env:GITHUB_REPOSITORY --cleanup-tag --yes 2>$null
-          gh release create develop-latest `
-            ./artifacts/WorkspaceHost.exe `
-            ./artifacts/WorkspaceHost.exe.sha256 `
-            ./artifacts/WorkspaceHost-win-x64.zip `
-            ./artifacts/MeshCentral-Workspace-Plugin-0.3.0.zip `
-            --repo $env:GITHUB_REPOSITORY `
-            --target $env:GITHUB_SHA `
-            --title 'Development build 0.3.0' `
-            --notes 'Automatyczny build testowy dla integracji MeshAgent -> WorkspaceHost.' `
-            --prerelease

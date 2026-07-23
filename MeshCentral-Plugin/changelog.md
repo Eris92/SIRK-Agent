@@ -1,5 +1,15 @@
 # MeshCentral Workspace
 
+## 0.6.0
+
+- Dodano trzy sloty: `User`, `Admin 1` i `Admin 2`.
+- Kazdy slot ma osobny Session ID, wlasciciela, proces bootstrap i worker.
+- Dodano blokade zajetego slotu przez innego administratora.
+- WorkspaceHost uzywa osobnego Named Pipe dla kazdego slotu.
+- Interfejs pokazuje trzy niezalezne karty i pozwala je uruchamiac oraz zatrzymywac.
+- Admin 1 i Admin 2 sa na tym etapie logicznie oddzielnymi workerami na pulpicie `default`; ukryte desktopy beda kolejnym etapem.
+- WorkspaceHost podniesiono do wersji 0.5.0.
+
 ## 0.5.0
 
 - MeshAgent uruchamia bootstrap WorkspaceHost jako SYSTEM.

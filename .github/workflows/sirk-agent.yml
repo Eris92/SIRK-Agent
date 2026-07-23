@@ -29,13 +29,34 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
-      - name: Restore
+      - name: Restore agent
         shell: pwsh
-        run: dotnet restore SIRK-Agent/src/SIRK.Agent/SIRK.Agent.csproj 2>&1 | Tee-Object restore.log
+        run: dotnet restore SIRK-Agent/src/SIRK.Agent/SIRK.Agent.csproj 2>&1 | Tee-Object restore-agent.log
 
-      - name: Build
+      - name: Restore IPC client
         shell: pwsh
-        run: dotnet build SIRK-Agent/src/SIRK.Agent/SIRK.Agent.csproj --configuration Release --no-restore 2>&1 | Tee-Object build.log
+        run: dotnet restore SIRK-Agent/tools/SIRK.Agent.Client/SIRK.Agent.Client.csproj 2>&1 | Tee-Object restore-client.log
+
+      - name: Build agent
+        shell: pwsh
+        run: dotnet build SIRK-Agent/src/SIRK.Agent/SIRK.Agent.csproj --configuration Release --no-restore 2>&1 | Tee-Object build-agent.log
+
+      - name: Build IPC client
+        shell: pwsh
+        run: dotnet build SIRK-Agent/tools/SIRK.Agent.Client/SIRK.Agent.Client.csproj --configuration Release --no-restore 2>&1 | Tee-Object build-client.log
+
+      - name: Validate PowerShell scripts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-ChildItem SIRK-Agent/scripts -Filter *.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error $_.Message }
+            }
+          }
 
       - name: Upload diagnostics
         if: always()
@@ -43,18 +64,31 @@ jobs:
         with:
           name: SIRK-Agent-build-logs
           path: |
-            restore.log
-            build.log
+            restore-agent.log
+            restore-client.log
+            build-agent.log
+            build-client.log
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Publish
+      - name: Publish agent
         run: dotnet publish SIRK-Agent/src/SIRK.Agent/SIRK.Agent.csproj --configuration Release --no-build --output artifacts/SIRK-Agent
 
-      - name: Upload artifact
+      - name: Publish IPC client
+        run: dotnet publish SIRK-Agent/tools/SIRK.Agent.Client/SIRK.Agent.Client.csproj --configuration Release --no-build --output artifacts/SIRK-Agent-Client
+
+      - name: Upload agent artifact
         uses: actions/upload-artifact@v4
         with:
           name: SIRK-Agent-win-x64
           path: artifacts/SIRK-Agent
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload client artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SIRK-Agent-Client-win-x64
+          path: artifacts/SIRK-Agent-Client
           if-no-files-found: error
           retention-days: 14

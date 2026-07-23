@@ -29,21 +29,19 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
-      - name: Restore agent
+      - name: Restore projects
         shell: pwsh
-        run: dotnet restore SIRK-Agent/src/SIRK.Agent/SIRK.Agent.csproj 2>&1 | Tee-Object restore-agent.log
+        run: |
+          dotnet restore SIRK-Agent/src/SIRK.Agent/SIRK.Agent.csproj 2>&1 | Tee-Object restore-agent.log
+          dotnet restore SIRK-Agent/tools/SIRK.Agent.Client/SIRK.Agent.Client.csproj 2>&1 | Tee-Object restore-client.log
+          dotnet restore SIRK-Agent/tests/SIRK.Agent.IntegrationTests/SIRK.Agent.IntegrationTests.csproj 2>&1 | Tee-Object restore-tests.log
 
-      - name: Restore IPC client
+      - name: Build projects
         shell: pwsh
-        run: dotnet restore SIRK-Agent/tools/SIRK.Agent.Client/SIRK.Agent.Client.csproj 2>&1 | Tee-Object restore-client.log
-
-      - name: Build agent
-        shell: pwsh
-        run: dotnet build SIRK-Agent/src/SIRK.Agent/SIRK.Agent.csproj --configuration Release --no-restore 2>&1 | Tee-Object build-agent.log
-
-      - name: Build IPC client
-        shell: pwsh
-        run: dotnet build SIRK-Agent/tools/SIRK.Agent.Client/SIRK.Agent.Client.csproj --configuration Release --no-restore 2>&1 | Tee-Object build-client.log
+        run: |
+          dotnet build SIRK-Agent/src/SIRK.Agent/SIRK.Agent.csproj --configuration Release --no-restore 2>&1 | Tee-Object build-agent.log
+          dotnet build SIRK-Agent/tools/SIRK.Agent.Client/SIRK.Agent.Client.csproj --configuration Release --no-restore 2>&1 | Tee-Object build-client.log
+          dotnet build SIRK-Agent/tests/SIRK.Agent.IntegrationTests/SIRK.Agent.IntegrationTests.csproj --configuration Release --no-restore 2>&1 | Tee-Object build-tests.log
 
       - name: Validate PowerShell scripts
         shell: pwsh
@@ -58,6 +56,13 @@ jobs:
             }
           }
 
+      - name: Run IPC integration tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $agent = Resolve-Path 'SIRK-Agent/src/SIRK.Agent/bin/Release/net8.0-windows/win-x64/SIRK-Agent.exe'
+          dotnet run --project SIRK-Agent/tests/SIRK.Agent.IntegrationTests/SIRK.Agent.IntegrationTests.csproj --configuration Release --no-build -- $agent 2>&1 | Tee-Object integration-tests.log
+
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -66,8 +71,11 @@ jobs:
           path: |
             restore-agent.log
             restore-client.log
+            restore-tests.log
             build-agent.log
             build-client.log
+            build-tests.log
+            integration-tests.log
           if-no-files-found: warn
           retention-days: 7
 

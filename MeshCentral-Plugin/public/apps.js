@@ -1,11 +1,139 @@
-"use strict";
-(function(){
-  function endpoint(asset){var u=new URL('pluginadmin.ashx',location.href);u.searchParams.set('pin','workspace');u.searchParams.set('asset',asset);u.searchParams.set('v','0.8.9-'+Date.now());return u.href;}
-  function post(asset,values){var b=new URLSearchParams();Object.keys(values||{}).forEach(function(k){b.set(k,values[k]);});return fetch(endpoint(asset),{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:b.toString()}).then(function(r){return r.json().then(function(x){if(!r.ok||x.ok===false)throw new Error(x.error||r.statusText);return x.result;});});}
-  function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
-  function getSlot(id){var p=window.MeshCentralWorkspace;return p&&p.state&&p.state.slots&&p.state.slots.find(function(x){return x.slot===id;});}
-  function panel(slot){var windows=Array.isArray(slot.windows)?slot.windows:[];return '<div class="workspace-apps"><div class="workspace-app-head"><b>Aplikacje i okna</b><button type="button" class="workspace-app-refresh">Odśwież okna</button></div><div class="workspace-app-buttons"><button data-app="explorer.exe">Explorer</button><button data-app="powershell.exe">PowerShell</button><button data-app="cmd.exe">CMD</button><button data-app="notepad.exe">Notatnik</button></div><div class="workspace-app-custom"><input class="workspace-app-path" placeholder="C:\\Program Files\\Aplikacja\\app.exe"><input class="workspace-app-args" placeholder="Argumenty"><button type="button" class="workspace-app-launch">Uruchom</button></div><div class="workspace-window-list">'+(windows.length?windows.map(function(w){return '<div>'+esc(w)+'</div>';}).join(''):'<span>Brak pobranej listy okien.</span>')+'</div>'+(slot.appsError?'<div class="workspace-app-error">'+esc(slot.appsError)+'</div>':'')+'</div>';}
-  function bind(card,slot){var refresh=card.querySelector('.workspace-app-refresh');if(refresh)refresh.onclick=function(){post('apps-list',{id:slot.id}).then(function(){setTimeout(function(){window.MeshCentralWorkspace&&window.MeshCentralWorkspace.refresh&&window.MeshCentralWorkspace.refresh(window.MeshCentralWorkspace.state.nodeId);},800);}).catch(alert);};Array.prototype.forEach.call(card.querySelectorAll('[data-app]'),function(b){b.onclick=function(){post('apps-launch',{id:slot.id,file:b.getAttribute('data-app'),args:''}).then(function(){setTimeout(function(){refresh&&refresh.click();},800);}).catch(alert);};});var launch=card.querySelector('.workspace-app-launch');if(launch)launch.onclick=function(){var p=card.querySelector('.workspace-app-path'),a=card.querySelector('.workspace-app-args');post('apps-launch',{id:slot.id,file:p&&p.value,args:a&&a.value}).then(function(){setTimeout(function(){refresh&&refresh.click();},800);}).catch(alert);};}
-  function enhance(){Array.prototype.forEach.call(document.querySelectorAll('.workspace-card'),function(card){if(card.querySelector('.workspace-apps'))return;var id=card.getAttribute('data-slot'),slot=getSlot(id);if(!slot||!slot.id)return;var debug=card.querySelector('.workspace-debug-toggle');var wrap=document.createElement('div');wrap.innerHTML=panel(slot);var node=wrap.firstChild;if(debug)card.insertBefore(node,debug);else card.appendChild(node);bind(card,slot);});}
-  var observer=new MutationObserver(function(){enhance();});observer.observe(document.documentElement,{childList:true,subtree:true});setInterval(enhance,1200);enhance();
+'use strict';
+(function () {
+    var plugin = window.MeshCentralWorkspace = window.MeshCentralWorkspace || {};
+    var busyBySession = Object.create(null);
+    var enhanceTimer = null;
+
+    function endpoint(asset) {
+        var url = new URL('pluginadmin.ashx', window.location.href);
+        url.searchParams.set('pin', 'workspace');
+        url.searchParams.set('asset', asset);
+        url.searchParams.set('v', '0.9.6-' + Date.now());
+        return url.href;
+    }
+
+    function post(asset, values) {
+        var body = new URLSearchParams();
+        Object.keys(values || {}).forEach(function (key) { body.set(key, values[key]); });
+        return fetch(endpoint(asset), {
+            method: 'POST', credentials: 'same-origin', cache: 'no-store',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+            body: body.toString()
+        }).then(function (response) {
+            return response.json().then(function (data) {
+                if (!response.ok || data.ok === false) throw new Error(data.error || response.statusText);
+                return data.result;
+            });
+        });
+    }
+
+    function esc(value) {
+        return String(value == null ? '' : value).replace(/[&<>"']/g, function (character) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character];
+        });
+    }
+
+    function getSlot(slotId) {
+        return plugin.state && Array.isArray(plugin.state.slots) ? plugin.state.slots.find(function (slot) { return slot.slot === slotId; }) : null;
+    }
+
+    function panel(slot) {
+        var windows = Array.isArray(slot.windows) ? slot.windows : [];
+        var busy = !!busyBySession[slot.id] || slot.appsState === 'loading' || slot.appsState === 'launching';
+        var state = busy ? '<span class="workspace-app-state">Oczekiwanie na wynik...</span>' : '';
+        return '<div class="workspace-apps">' +
+            '<div class="workspace-app-head"><b>Aplikacje i okna</b><button type="button" class="workspace-app-refresh"' + (busy ? ' disabled' : '') + '>Odśwież okna</button></div>' +
+            state +
+            '<div class="workspace-app-buttons"><button type="button" data-app="explorer.exe"' + (busy ? ' disabled' : '') + '>Explorer</button><button type="button" data-app="powershell.exe"' + (busy ? ' disabled' : '') + '>PowerShell</button><button type="button" data-app="cmd.exe"' + (busy ? ' disabled' : '') + '>CMD</button><button type="button" data-app="notepad.exe"' + (busy ? ' disabled' : '') + '>Notatnik</button></div>' +
+            '<div class="workspace-app-custom"><input class="workspace-app-path" placeholder="C:\\Program Files\\Aplikacja\\app.exe"><input class="workspace-app-args" placeholder="Argumenty"><button type="button" class="workspace-app-launch"' + (busy ? ' disabled' : '') + '>Uruchom</button></div>' +
+            '<div class="workspace-window-list">' + (windows.length ? windows.map(function (windowTitle) { return '<div>' + esc(windowTitle) + '</div>'; }).join('') : '<span>Brak pobranej listy okien.</span>') + '</div>' +
+            (slot.appsError ? '<div class="workspace-app-error">' + esc(slot.appsError) + '</div>' : '') +
+            '</div>';
+    }
+
+    function refreshUntilDone(sessionId, startedAt) {
+        if (!plugin.refresh || !plugin.state || !plugin.state.nodeId) return;
+        plugin.refresh(plugin.state.nodeId);
+        window.setTimeout(function () {
+            var slot = plugin.state && plugin.state.slots && plugin.state.slots.find(function (item) { return item.id === sessionId; });
+            var pending = slot && (slot.appsState === 'loading' || slot.appsState === 'launching');
+            if (pending && Date.now() - startedAt < 15000) {
+                refreshUntilDone(sessionId, startedAt);
+                return;
+            }
+            delete busyBySession[sessionId];
+            scheduleEnhance();
+        }, 900);
+    }
+
+    function execute(slot, asset, values) {
+        if (!slot || !slot.id || busyBySession[slot.id]) return;
+        busyBySession[slot.id] = true;
+        scheduleEnhance();
+        post(asset, values).then(function () {
+            refreshUntilDone(slot.id, Date.now());
+        }).catch(function (error) {
+            delete busyBySession[slot.id];
+            window.alert(error && error.message || error);
+            scheduleEnhance();
+        });
+    }
+
+    function bind(card, slot) {
+        var refresh = card.querySelector('.workspace-app-refresh');
+        if (refresh) refresh.onclick = function (event) {
+            if (event) { event.preventDefault(); event.stopPropagation(); }
+            execute(slot, 'apps-list', { id: slot.id });
+            return false;
+        };
+        Array.prototype.forEach.call(card.querySelectorAll('[data-app]'), function (button) {
+            button.onclick = function (event) {
+                if (event) { event.preventDefault(); event.stopPropagation(); }
+                execute(slot, 'apps-launch', { id: slot.id, file: button.getAttribute('data-app'), args: '' });
+                return false;
+            };
+        });
+        var launch = card.querySelector('.workspace-app-launch');
+        if (launch) launch.onclick = function (event) {
+            if (event) { event.preventDefault(); event.stopPropagation(); }
+            var path = card.querySelector('.workspace-app-path');
+            var args = card.querySelector('.workspace-app-args');
+            execute(slot, 'apps-launch', { id: slot.id, file: path && path.value || '', args: args && args.value || '' });
+            return false;
+        };
+    }
+
+    function enhance() {
+        enhanceTimer = null;
+        var root = document.getElementById('workspace-device-page');
+        if (!root) return;
+        Array.prototype.forEach.call(root.querySelectorAll('.workspace-card'), function (card) {
+            var slot = getSlot(card.getAttribute('data-slot'));
+            var existing = card.querySelector('.workspace-apps');
+            if (existing) existing.remove();
+            if (!slot || !slot.id || slot.state !== 'running') return;
+            var wrapper = document.createElement('div');
+            wrapper.innerHTML = panel(slot);
+            var node = wrapper.firstChild;
+            var debug = card.querySelector('.workspace-debug-toggle');
+            if (debug) card.insertBefore(node, debug); else card.appendChild(node);
+            bind(card, slot);
+        });
+    }
+
+    function scheduleEnhance() {
+        if (enhanceTimer != null) return;
+        enhanceTimer = window.setTimeout(enhance, 0);
+    }
+
+    var rootObserver = new MutationObserver(function (changes) {
+        for (var i = 0; i < changes.length; i++) {
+            if (changes[i].target && (changes[i].target.id === 'workspace-device-page' || changes[i].target.closest && changes[i].target.closest('#workspace-device-page'))) {
+                scheduleEnhance();
+                break;
+            }
+        }
+    });
+    rootObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
+    scheduleEnhance();
 })();

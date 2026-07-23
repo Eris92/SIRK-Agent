@@ -1,5 +1,14 @@
 # MeshCentral Workspace
 
+## 0.8.6
+
+- Dodano osobny panel `Urzadzenia` dla kazdego Workspace.
+- Dodano wybor trybu `Device Broker` dla PIV / Smart Card i urzadzen obslugiwanych logicznie.
+- Dodano wybor trybu `USB Passthrough` dla pelnych urzadzen USB, np. dongli, programatorow, pendrive i adapterow.
+- Dodano wybor trybu `Virtual Media` dla obrazow ISO / IMG jako zdalnego napedu.
+- Wybrany tryb jest zapisywany lokalnie osobno dla hosta i slotu Workspace.
+- Interfejs jasno pokazuje, ze modul transportu urzadzen jest jeszcze w przygotowaniu i nie udaje aktywnego przekierowania.
+
 ## 0.8.5
 
 - Zastapiono stale wyswietlany surowy JSON czytelnym podsumowaniem stanu.
@@ -64,7 +73,7 @@
 - Worker jest uruchamiany na `winsta0\\default` przez `CreateProcessAsUser`, z awaryjnym `CreateProcessWithTokenW`.
 - Plugin czeka na heartbeat workera zamiast wymagac, aby PID heartbeat byl PID-em bootstrapu.
 - Widok pokazuje osobno Bootstrap PID i Worker PID.
-- Pliki runtime sa zapisywane w `C:\ProgramData\SirK\Workspace`.
+- Pliki runtime sa zapisywane w `C:\\ProgramData\\SirK\\Workspace`.
 - WorkspaceHost podniesiono do wersji 0.4.0.
 
 ## 0.4.2

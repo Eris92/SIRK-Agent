@@ -9,7 +9,7 @@
         var url = new URL("pluginadmin.ashx", window.location.href);
         url.searchParams.set("pin", "workspace");
         url.searchParams.set("asset", asset);
-        url.searchParams.set("v", "0.3.1");
+        url.searchParams.set("v", "0.4.0");
         if (extra) Object.keys(extra).forEach(function (key) { url.searchParams.set(key, extra[key]); });
         return url.href;
     }
@@ -46,20 +46,22 @@
         var root = document.getElementById("workspace-device-page");
         if (!root) return;
         var s = session || {};
-        var busy = s.state === "requested" || s.state === "deploying";
+        var busy = ["requested", "deploying", "stopping"].indexOf(s.state) >= 0;
         root.className = "workspace-panel";
         root.innerHTML = '<div class="workspace-card"><div class="workspace-toolbar">' +
             '<button id="workspace-connect" class="btn btn-success btn-sm"' + (busy ? ' disabled' : '') + '>Polacz</button>' +
-            '<button id="workspace-disconnect" class="btn btn-danger btn-sm"' + (plugin.state.sessionId ? '' : ' disabled') + '>Rozlacz</button>' +
+            '<button id="workspace-disconnect" class="btn btn-danger btn-sm"' + (!plugin.state.sessionId || busy ? ' disabled' : '') + '>Rozlacz</button>' +
             '</div><h3>WorkspaceHost</h3><dl class="workspace-grid">' +
             '<dt>Host</dt><dd>' + escapeHtml(plugin.state.nodeId || '-') + '</dd>' +
             '<dt>Stan</dt><dd>' + escapeHtml(s.state || 'idle') + '</dd>' +
             '<dt>Session ID</dt><dd>' + escapeHtml(s.id || plugin.state.sessionId || '-') + '</dd>' +
             '<dt>PID</dt><dd>' + escapeHtml(s.pid || '-') + '</dd>' +
+            '<dt>Windows Session</dt><dd>' + escapeHtml(s.windowsSessionId == null ? '-' : s.windowsSessionId) + '</dd>' +
             '<dt>User</dt><dd>' + escapeHtml(s.user || '-') + '</dd>' +
             '<dt>Desktop</dt><dd>' + escapeHtml(s.desktop || '-') + '</dd>' +
             '<dt>Version</dt><dd>' + escapeHtml(s.version || '-') + '</dd>' +
-            '<dt>Ostatni status</dt><dd>' + escapeHtml(s.lastHeartbeat || s.updatedAt || '-') + '</dd>' +
+            '<dt>Uptime</dt><dd>' + escapeHtml(s.uptimeSeconds == null ? '-' : s.uptimeSeconds + ' s') + '</dd>' +
+            '<dt>Ostatni heartbeat</dt><dd>' + escapeHtml(s.lastHeartbeat || '-') + '</dd>' +
             '<dt>Blad</dt><dd>' + escapeHtml(s.error || '-') + '</dd></dl></div>';
         document.getElementById("workspace-connect").onclick = start;
         document.getElementById("workspace-disconnect").onclick = stop;
@@ -77,23 +79,27 @@
 
     function stop() {
         if (!plugin.state.sessionId) return;
+        render({ id: plugin.state.sessionId, state: "stopping" });
         post("stop", { id: plugin.state.sessionId }).then(function (session) {
-            if (plugin.state.timer) clearInterval(plugin.state.timer);
-            plugin.state.timer = null;
-            plugin.state.sessionId = "";
             render(session);
+            poll();
         }).catch(function (error) { render({ state: "error", error: error.message }); });
     }
 
     function poll() {
         if (plugin.state.timer) clearInterval(plugin.state.timer);
-        plugin.state.timer = setInterval(function () {
+        var run = function () {
             if (!plugin.state.sessionId) return;
             request("status", null, { id: plugin.state.sessionId }).then(function (session) {
                 render(session);
-                if (["running", "error", "stopped"].indexOf(session.state) >= 0) { clearInterval(plugin.state.timer); plugin.state.timer = null; }
+                if (["error", "stopped"].indexOf(session.state) >= 0) {
+                    clearInterval(plugin.state.timer); plugin.state.timer = null;
+                    if (session.state === "stopped") plugin.state.sessionId = "";
+                }
             }).catch(function (error) { render({ state: "error", error: error.message }); });
-        }, 1500);
+        };
+        run();
+        plugin.state.timer = setInterval(run, 1500);
     }
 
     plugin.ensureDeviceIntegration = function () {
@@ -111,15 +117,9 @@
         if (!anchor || !anchor.parentNode) return false;
         var tab = document.getElementById("MainDevWorkspace");
         if (!tab) {
-            tab = document.createElement("td");
-            tab.id = "MainDevWorkspace";
-            tab.tabIndex = 0;
-            tab.className = "topbar_td style3x";
-            tab.textContent = "Pulpit -New";
-            tab.onmouseup = plugin.openDeviceTab;
+            tab = document.createElement("td"); tab.id = "MainDevWorkspace"; tab.tabIndex = 0; tab.className = "topbar_td style3x"; tab.textContent = "Pulpit -New"; tab.onmouseup = plugin.openDeviceTab;
             tab.onkeypress = function (event) { if (event && event.key === "Enter") return plugin.openDeviceTab(event); };
-            mark(tab, "Pulpit -New device tab");
-            anchor.parentNode.insertBefore(tab, anchor.nextSibling);
+            mark(tab, "Pulpit -New device tab"); anchor.parentNode.insertBefore(tab, anchor.nextSibling);
         }
         tab.style.display = "";
         return true;
@@ -132,8 +132,7 @@
         window.setTimeout(function () {
             var header = document.getElementById("p19ph-workspace-device-page");
             if (header && window.pluginHandler && typeof window.pluginHandler.callPluginPage === "function") window.pluginHandler.callPluginPage("workspace-device-page", header);
-            render();
-            plugin.updateDeviceTab(19);
+            render(); plugin.updateDeviceTab(19);
         }, 0);
         if (event && event.preventDefault) event.preventDefault();
         return false;
@@ -146,30 +145,15 @@
         var activeHeader = document.querySelector("#p19headers span.on");
         var workspaceHeader = document.getElementById("p19ph-workspace-device-page");
         var active = Number(view) === 19 && activeHeader === workspaceHeader;
-        tab.classList.remove("style3x", "style3sel");
-        tab.classList.add(active ? "style3sel" : "style3x");
+        tab.classList.remove("style3x", "style3sel"); tab.classList.add(active ? "style3sel" : "style3x");
         var pluginTab = document.getElementById("MainDevPlugins");
         if (pluginTab && active) { pluginTab.classList.remove("style3sel"); pluginTab.classList.add("style3x"); }
-        var headers = document.getElementById("p19headers");
-        if (headers) headers.style.display = active ? "none" : "";
+        var headers = document.getElementById("p19headers"); if (headers) headers.style.display = active ? "none" : "";
     };
 
-    plugin.onDeviceRefreshEnd = function (nodeId) {
-        plugin.state.nodeId = String(nodeId || "");
-        if (plugin.state.nodeId) plugin.ensureDeviceIntegration();
-    };
-
-    plugin.onNativePageEnd = function (view) {
-        if (plugin.state.nodeId) plugin.ensureDeviceTab();
-        plugin.updateDeviceTab(view);
-    };
-
-    plugin.initialize = function () {
-        if (window.MeshCentralWorkspacePendingNodeId) plugin.state.nodeId = String(window.MeshCentralWorkspacePendingNodeId);
-        if (plugin.state.nodeId) plugin.ensureDeviceIntegration();
-        return Promise.resolve();
-    };
-
+    plugin.onDeviceRefreshEnd = function (nodeId) { plugin.state.nodeId = String(nodeId || ""); if (plugin.state.nodeId) plugin.ensureDeviceIntegration(); };
+    plugin.onNativePageEnd = function (view) { if (plugin.state.nodeId) plugin.ensureDeviceTab(); plugin.updateDeviceTab(view); };
+    plugin.initialize = function () { if (window.MeshCentralWorkspacePendingNodeId) plugin.state.nodeId = String(window.MeshCentralWorkspacePendingNodeId); if (plugin.state.nodeId) plugin.ensureDeviceIntegration(); return Promise.resolve(); };
     plugin.refresh = plugin.onDeviceRefreshEnd;
     plugin.start = start;
     plugin.stop = stop;

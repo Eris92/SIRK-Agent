@@ -32,14 +32,13 @@ jobs:
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "Plugin version: $version"
 
-      - name: Build native WorkspaceHost and plugin
+      - name: Build native runtime and plugin
         shell: pwsh
         run: ./tools/build.ps1 -Configuration Release -Runtime win-x64
 
       - name: Verify no Visual C++ runtime dependency
         shell: pwsh
         run: |
-          $exe = Resolve-Path './artifacts/WorkspaceHost-win-x64/WorkspaceHost.exe'
           $vsRoot = Join-Path $env:ProgramFiles 'Microsoft Visual Studio'
           $dumpbin = Get-ChildItem $vsRoot -Filter dumpbin.exe -Recurse -ErrorAction SilentlyContinue |
             Where-Object { $_.FullName -match '\\Hostx64\\x64\\dumpbin\.exe$' } |
@@ -49,15 +48,28 @@ jobs:
               Select-Object -First 1 -ExpandProperty FullName
           }
           if (-not $dumpbin) { throw "dumpbin.exe not found under $vsRoot" }
-          $dependencies = & $dumpbin /dependents $exe 2>&1 | Out-String
-          Write-Host $dependencies
-          if ($dependencies -match '(?im)^\s*(VCRUNTIME\d*(?:_\d+)?|MSVCP\d+|CONCRT\d+)\.dll\s*$') {
-            throw 'WorkspaceHost still depends on Visual C++ Redistributable DLLs.'
+          foreach ($exe in @(
+            './artifacts/WorkspaceHost-win-x64/WorkspaceHost.exe',
+            './artifacts/WorkspaceHost-win-x64/WorkspaceCapture.exe'
+          )) {
+            if (-not (Test-Path $exe)) { throw "Runtime executable not found: $exe" }
+            $dependencies = & $dumpbin /dependents (Resolve-Path $exe) 2>&1 | Out-String
+            Write-Host "Dependencies for $exe"
+            Write-Host $dependencies
+            if ($dependencies -match '(?im)^\s*(VCRUNTIME\d*(?:_\d+)?|MSVCP\d+|CONCRT\d+)\.dll\s*$') {
+              throw "$exe still depends on Visual C++ Redistributable DLLs."
+            }
           }
 
       - name: Verify WorkspaceHost heartbeat
         shell: pwsh
         run: ./tools/test-workspacehost.ps1 -ExePath ./artifacts/WorkspaceHost-win-x64/WorkspaceHost.exe
+
+      - name: Verify WorkspaceCapture version
+        shell: pwsh
+        run: |
+          $version = (& ./artifacts/WorkspaceHost-win-x64/WorkspaceCapture.exe --version | Select-Object -First 1).Trim()
+          if ($LASTEXITCODE -ne 0 -or $version -ne '0.1.0') { throw "Unexpected WorkspaceCapture version: $version" }
 
       - name: Prepare distribution files
         shell: pwsh
@@ -66,9 +78,11 @@ jobs:
           $pluginZip = "./artifacts/MeshCentral-Workspace-Plugin-$version.zip"
           if (-not (Test-Path $pluginZip)) { throw "Plugin archive not found: $pluginZip" }
 
-          Copy-Item ./artifacts/WorkspaceHost-win-x64/WorkspaceHost.exe ./artifacts/WorkspaceHost.exe -Force
-          $hash = (Get-FileHash ./artifacts/WorkspaceHost.exe -Algorithm SHA256).Hash.ToLowerInvariant()
-          Set-Content ./artifacts/WorkspaceHost.exe.sha256 "$hash  WorkspaceHost.exe" -Encoding ascii
+          foreach ($name in @('WorkspaceHost.exe','WorkspaceCapture.exe')) {
+            Copy-Item "./artifacts/WorkspaceHost-win-x64/$name" "./artifacts/$name" -Force
+            $hash = (Get-FileHash "./artifacts/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
+            Set-Content "./artifacts/$name.sha256" "$hash  $name" -Encoding ascii
+          }
           Compress-Archive -Path ./artifacts/WorkspaceHost-win-x64/* -DestinationPath ./artifacts/WorkspaceHost-win-x64.zip -Force
 
       - name: Upload build artifacts
@@ -91,6 +105,8 @@ jobs:
           gh release create develop-latest `
             ./artifacts/WorkspaceHost.exe `
             ./artifacts/WorkspaceHost.exe.sha256 `
+            ./artifacts/WorkspaceCapture.exe `
+            ./artifacts/WorkspaceCapture.exe.sha256 `
             ./artifacts/WorkspaceHost-win-x64.zip `
             ./artifacts/MeshCentral-Workspace-Plugin-$version.zip `
             --repo $env:GITHUB_REPOSITORY `

@@ -11,6 +11,7 @@ builder.Services.AddWindowsService(options =>
     options.ServiceName = "SIRK Agent";
 });
 
+builder.Services.AddSingleton<ReplayProtection>();
 builder.Services.AddSingleton<ProtocolValidator>();
 builder.Services.AddSingleton<CommandDispatcher>();
 builder.Services.AddSingleton<NamedPipeCommandServer>();

@@ -2,35 +2,64 @@
 
 Alternatywny modul zdalnego pulpitu dla MeshCentral rozwijany jako osobna wtyczka i host Windows.
 
-## Cel pierwszego etapu
+## Wersja 0.1.0
 
-Po kliknieciu **Pulpit -New -> Polacz** wtyczka ma:
+Pierwsza wersja fundamentu zawiera:
 
-1. utworzyc sesje,
-2. wyslac polecenie do wybranego urzadzenia,
-3. uruchomic `WorkspaceHost` w sesji zalogowanego uzytkownika,
-4. odebrac heartbeat,
-5. pokazac PID, SessionId, uzytkownika i stan procesu.
+- szkielet pluginu MeshCentral,
+- zakladke urzadzenia `Pulpit -New`,
+- serwerowy model sesji i endpointy start/status/heartbeat/stop,
+- `WorkspaceHost.exe` dla .NET 8,
+- heartbeat JSON przez Named Pipe,
+- log do `C:\ProgramData\SirK\Workspace\Logs\workspace.log`,
+- skrypt budowania plugin ZIP i hosta Windows,
+- GitHub Actions dla branchy `main` i `develop`,
+- dokumentacje architektury, budowania i roadmapy.
+
+## Aktualny przeplyw
+
+```text
+Browser
+  -> Pulpit -New
+  -> Workspace session API
+  -> server-side session state
+
+WorkspaceHost.exe
+  -> Named Pipe
+  -> heartbeat JSON
+```
+
+Warstwa uruchamiania `WorkspaceHost.exe` i przekazywania heartbeat przez MeshAgent jest zaplanowana jako v0.2.0. Wersja 0.1.0 przygotowuje obie strony tego polaczenia, ale nie modyfikuje jeszcze MeshAgenta.
 
 ## Struktura
 
 ```text
-MeshCentral-Plugin/
-WorkspaceHost/
-WorkspaceCommon/
-docs/
-tests/
+MeshCentral-Plugin/   plugin i UI
+WorkspaceHost/        proces Windows uruchamiany w sesji usera
+WorkspaceCommon/      wspolne modele protokolu
+docs/                 dokumentacja
+tools/                build i narzedzia
+.github/workflows/    CI
 ```
 
-## Roadmap
+## Build
 
-- v0.1 - szkielet repozytorium i dokumentacja
-- v0.2 - uruchamianie WorkspaceHost przez MeshAgent
-- v0.3 - heartbeat i diagnostyka
-- v0.4 - DXGI capture
-- v0.5 - streaming obrazu
-- v0.6 - input
-- v0.7 - virtual display
-- v1.0 - stabilny modul Pulpit -New
+```powershell
+.\tools\build.ps1 -Configuration Release -Runtime win-x64
+```
 
-Projekt jest rozwijany etapami. Oryginalny modul Desktop MeshCentral pozostaje bez zmian.
+Wyniki:
+
+```text
+artifacts\MeshCentral-Workspace-Plugin-0.1.0.zip
+artifacts\WorkspaceHost-win-x64\WorkspaceHost.exe
+```
+
+Szczegoly: `docs/BUILD.md`.
+
+## Branche
+
+- `main` - wersja stabilna,
+- `develop` - biezacy rozwoj.
+
+Oryginalny modul Desktop MeshCentral pozostaje bez zmian.

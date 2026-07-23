@@ -7,6 +7,9 @@ on:
     branches: [main, develop]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -25,14 +28,13 @@ jobs:
           $exe = Resolve-Path './artifacts/WorkspaceHost-win-x64/WorkspaceHost.exe'
           $vsRoot = Join-Path $env:ProgramFiles 'Microsoft Visual Studio'
           $dumpbin = Get-ChildItem $vsRoot -Filter dumpbin.exe -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match '\\Hostx64\\x64\\dumpbin\.exe$' } |
+            Where-Object { $_.FullName -match '\Hostx64\x64\dumpbin\.exe$' } |
             Select-Object -First 1 -ExpandProperty FullName
           if (-not $dumpbin) {
             $dumpbin = Get-ChildItem $vsRoot -Filter dumpbin.exe -Recurse -ErrorAction SilentlyContinue |
               Select-Object -First 1 -ExpandProperty FullName
           }
           if (-not $dumpbin) { throw "dumpbin.exe not found under $vsRoot" }
-          Write-Host "dumpbin: $dumpbin"
           $dependencies = & $dumpbin /dependents $exe 2>&1 | Out-String
           Write-Host $dependencies
           if ($dependencies -match '(?im)^\s*(VCRUNTIME\d*(?:_\d+)?|MSVCP\d+|CONCRT\d+)\.dll\s*$') {
@@ -43,9 +45,13 @@ jobs:
         shell: pwsh
         run: ./tools/test-workspacehost.ps1 -ExePath ./artifacts/WorkspaceHost-win-x64/WorkspaceHost.exe
 
-      - name: Package WorkspaceHost
+      - name: Prepare release files
         shell: pwsh
-        run: Compress-Archive -Path ./artifacts/WorkspaceHost-win-x64/* -DestinationPath ./artifacts/WorkspaceHost-win-x64.zip -Force
+        run: |
+          Copy-Item ./artifacts/WorkspaceHost-win-x64/WorkspaceHost.exe ./artifacts/WorkspaceHost.exe -Force
+          $hash = (Get-FileHash ./artifacts/WorkspaceHost.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content ./artifacts/WorkspaceHost.exe.sha256 "$hash  WorkspaceHost.exe" -Encoding ascii
+          Compress-Archive -Path ./artifacts/WorkspaceHost-win-x64/* -DestinationPath ./artifacts/WorkspaceHost-win-x64.zip -Force
 
       - name: Upload WorkspaceHost
         uses: actions/upload-artifact@v4
@@ -58,7 +64,25 @@ jobs:
       - name: Upload MeshCentral plugin
         uses: actions/upload-artifact@v4
         with:
-          name: MeshCentral-Workspace-Plugin-0.2.0
-          path: artifacts/MeshCentral-Workspace-Plugin-0.2.0.zip
+          name: MeshCentral-Workspace-Plugin-0.3.0
+          path: artifacts/MeshCentral-Workspace-Plugin-0.3.0.zip
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish develop-latest release
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/develop'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete develop-latest --repo $env:GITHUB_REPOSITORY --cleanup-tag --yes 2>$null
+          gh release create develop-latest `
+            ./artifacts/WorkspaceHost.exe `
+            ./artifacts/WorkspaceHost.exe.sha256 `
+            ./artifacts/WorkspaceHost-win-x64.zip `
+            ./artifacts/MeshCentral-Workspace-Plugin-0.3.0.zip `
+            --repo $env:GITHUB_REPOSITORY `
+            --target $env:GITHUB_SHA `
+            --title 'Development build 0.3.0' `
+            --notes 'Automatyczny build testowy dla integracji MeshAgent -> WorkspaceHost.' `
+            --prerelease

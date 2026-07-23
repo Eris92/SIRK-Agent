@@ -1,5 +1,16 @@
 # MeshCentral Workspace
 
+## 0.5.0
+
+- MeshAgent uruchamia bootstrap WorkspaceHost jako SYSTEM.
+- Bootstrap wyszukuje aktywna sesje konsolowa lub RDP z zalogowanym uzytkownikiem.
+- Token uzytkownika jest pobierany przez `WTSQueryUserToken` i duplikowany jako token podstawowy.
+- Worker jest uruchamiany na `winsta0\\default` przez `CreateProcessAsUser`, z awaryjnym `CreateProcessWithTokenW`.
+- Plugin czeka na heartbeat workera zamiast wymagac, aby PID heartbeat byl PID-em bootstrapu.
+- Widok pokazuje osobno Bootstrap PID i Worker PID.
+- Pliki runtime sa zapisywane w `C:\ProgramData\SirK\Workspace`.
+- WorkspaceHost podniesiono do wersji 0.4.0.
+
 ## 0.4.2
 
 - WorkspaceHost jest uruchamiany przez MeshAgent w trybie interaktywnego uzytkownika zamiast jako SYSTEM.

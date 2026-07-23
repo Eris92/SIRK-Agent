@@ -29,7 +29,7 @@ module.exports.createModule = function createModule(parent) {
         const session = {
             id: makeId(), nodeId, userId: userId || null,
             state: 'requested', createdAt: now(), updatedAt: now(),
-            pid: null, windowsSessionId: null, user: null, desktop: null,
+            pid: null, bootstrapPid: null, windowsSessionId: null, user: null, desktop: null,
             version: null, uptimeSeconds: null, lastHeartbeat: null,
             monitorCount: null, primaryWidth: null, primaryHeight: null,
             virtualWidth: null, virtualHeight: null,
@@ -60,7 +60,7 @@ module.exports.createModule = function createModule(parent) {
             "$ErrorActionPreference='Stop'",
             "$ProgressPreference='SilentlyContinue'",
             "try{",
-            "$dir=Join-Path $env:LOCALAPPDATA 'SirK\\Workspace'",
+            "$dir=Join-Path $env:ProgramData 'SirK\\Workspace'",
             "New-Item -Path $dir -ItemType Directory -Force|Out-Null",
             "$exe=Join-Path $dir 'WorkspaceHost.exe'",
             "$tmp=Join-Path $dir 'WorkspaceHost.exe.download'",
@@ -75,7 +75,7 @@ module.exports.createModule = function createModule(parent) {
             "Unblock-File $exe -ErrorAction SilentlyContinue",
             "$process=Start-Process -FilePath $exe -PassThru -WindowStyle Hidden",
             "$pipe=[System.IO.Pipes.NamedPipeClientStream]::new('.','SirK.MeshCentral.Workspace',[System.IO.Pipes.PipeDirection]::In,[System.IO.Pipes.PipeOptions]::None)",
-            "try{$pipe.Connect(20000);$reader=[System.IO.StreamReader]::new($pipe,[System.Text.Encoding]::UTF8);try{$task=$reader.ReadLineAsync();if(-not $task.Wait([TimeSpan]::FromSeconds(20))){throw 'WorkspaceHost heartbeat timeout'};$line=$task.Result;if([string]::IsNullOrWhiteSpace($line)){throw 'WorkspaceHost returned empty heartbeat'};$heartbeat=$line|ConvertFrom-Json;if($heartbeat.type -ne 'heartbeat'){throw ('Unexpected heartbeat type: '+$heartbeat.type)};if([int]$heartbeat.pid -ne [int]$process.Id){throw 'WorkspaceHost PID mismatch'};" + success + "}finally{$reader.Dispose()}}finally{$pipe.Dispose()}",
+            "try{$pipe.Connect(30000);$reader=[System.IO.StreamReader]::new($pipe,[System.Text.Encoding]::UTF8);try{$task=$reader.ReadLineAsync();if(-not $task.Wait([TimeSpan]::FromSeconds(30))){throw 'WorkspaceHost interactive worker heartbeat timeout'};$line=$task.Result;if([string]::IsNullOrWhiteSpace($line)){throw 'WorkspaceHost returned empty heartbeat'};$heartbeat=$line|ConvertFrom-Json;if($heartbeat.type -ne 'heartbeat'){throw ('Unexpected heartbeat type: '+$heartbeat.type)};$heartbeat|Add-Member -NotePropertyName bootstrapPid -NotePropertyValue $process.Id -Force;" + success + "}finally{$reader.Dispose()}}finally{$pipe.Dispose()}",
             "}catch{" + failure + "}"
         ].join(';');
     }
@@ -147,6 +147,7 @@ module.exports.createModule = function createModule(parent) {
             updateSession(session.id, {
                 state: result.state || 'running',
                 pid: data.pid || session.pid || null,
+                bootstrapPid: data.bootstrapPid || session.bootstrapPid || null,
                 windowsSessionId: data.sessionId == null ? session.windowsSessionId : data.sessionId,
                 user: data.user || session.user || null,
                 version: data.version || session.version || null,
@@ -184,7 +185,7 @@ module.exports.createModule = function createModule(parent) {
         return new Promise(function (resolve, reject) {
             const session = createSession(nodeId, user && user._id);
             updateSession(session.id, { state: 'deploying' });
-            dispatchCommand(session, user, launcherCommand(session.id), 'workspace-start-' + session.id, 1, function (error) {
+            dispatchCommand(session, user, launcherCommand(session.id), 'workspace-start-' + session.id, 2, function (error) {
                 if (error) { updateSession(session.id, { state: 'error', error }); reject(new Error(error)); return; }
                 resolve(session);
             });
@@ -198,7 +199,7 @@ module.exports.createModule = function createModule(parent) {
             if (session.userId && user && session.userId !== user._id && user.siteadmin !== 0xFFFFFFFF) { reject(new Error('Permission denied.')); return; }
             if (!session.pid) { updateSession(session.id, { state: 'stopped' }); resolve(session); return; }
             updateSession(session.id, { state: 'stopping' });
-            dispatchCommand(session, user, stopCommand(session.id, session.pid), 'workspace-stop-' + session.id, 1, function (error) {
+            dispatchCommand(session, user, stopCommand(session.id, session.pid), 'workspace-stop-' + session.id, 2, function (error) {
                 if (error) { updateSession(session.id, { state: 'error', error }); reject(new Error(error)); return; }
                 resolve(session);
             });

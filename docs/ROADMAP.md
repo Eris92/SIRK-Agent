@@ -27,27 +27,22 @@
 - wybor Device Broker / USB Passthrough / Virtual Media,
 - techniczny prototyp montowania ISO z HTTPS,
 - lista okien na wybranym desktopie,
-- uruchamianie aplikacji na wybranym desktopie.
-
-## 0.8.x - stabilizacja sterowania aplikacjami
-
-- test enumeracji okien na `default`, `SirK-Admin-1` i `SirK-Admin-2`,
-- poprawna obsluga Explorer, PowerShell, CMD i Notatnika,
-- status operacji i czytelne bledy,
-- walidacja, ze aplikacja Workspace A nie pojawia sie na pulpicie uzytkownika,
-- przeniesienie krytycznych operacji z PowerShell `Add-Type` do WorkspaceHost.
+- uruchamianie aplikacji na wybranym desktopie,
+- pojedyncza klatka podgladu Workspace,
+- enumeracja kamer, mikrofonow i glosnikow hosta.
 
 ## 0.9.x - capture obrazu
 
-- inicjalizacja DXGI Desktop Duplication,
+- stabilizacja pojedynczej klatki testowej,
+- inicjalizacja DXGI Desktop Duplication dla aktywnego pulpitu,
 - capture konkretnego Workspace,
 - obsluga zmiany rozdzielczosci,
-- klatka testowa i metryki FPS,
+- metryki FPS,
 - kompresja oraz transport do pluginu,
 - canvas w przegladarce,
 - reconnect i kontrola limitow przepustowosci.
 
-Uwaga: izolowany desktop moze wymagac innej techniki capture niz aktywny pulpit DXGI. Implementacja musi byc testowana na `default` i ukrytych HDESK, bez zalozenia ze jeden backend zadziala dla wszystkich slotow.
+Uwaga: izolowany desktop moze wymagac innej techniki capture niz aktywny pulpit DXGI. Implementacja musi byc testowana na `default` i ukrytych HDESK.
 
 ## 1.0.x - input
 
@@ -103,7 +98,41 @@ Pole HTTPS pozostanie opcja dodatkowa, a nie glownym sposobem dostarczenia ISO.
 - bezpieczne odlaczenie i odzyskanie urzadzenia lokalnie,
 - whitelist/blacklist klas urzadzen.
 
-## 1.5.x - wirtualny display
+## 1.5.x - Media Broker
+
+### Fundament
+
+- enumeracja kamer,
+- enumeracja mikrofonow,
+- enumeracja glosnikow,
+- polityka per host i profil,
+- osobne uprawnienie `MediaCapture`,
+- audyt kazdej operacji.
+
+### Incident Evidence
+
+- snapshot z kamery,
+- ograniczone czasowo nagranie wideo i audio,
+- screenshot lub nagranie pulpitu,
+- logi, procesy, sesje i polaczenia,
+- wymagany identyfikator incydentu i powod,
+- manifest, SHA-256 i szyfrowany pakiet ZIP,
+- retencja i automatyczne sprzatanie.
+
+### Home Monitor
+
+- podglad kamery i audio przez WebRTC,
+- rozmowa dwukierunkowa,
+- snapshot i nagrywanie,
+- wykrywanie ruchu,
+- powiadomienia,
+- jawne przypisanie profilu do prywatnego urzadzenia.
+
+Capture, nagrywanie i streaming pozostaja domyslnie wylaczone. Sprzetowa sygnalizacja kamery i mikrofonu nie moze byc obchodzona.
+
+Szczegoly: `docs/MEDIA-BROKER.md`.
+
+## 1.6.x - wirtualny display
 
 - sterownik wirtualnego monitora,
 - niezalezna rozdzielczosc Workspace,

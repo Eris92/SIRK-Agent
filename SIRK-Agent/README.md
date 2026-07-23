@@ -1,18 +1,24 @@
 # SIRK-Agent
 
-Ten katalog zawiera fundament niezaleznego agenta SIRK Management Platform.
+SIRK-Agent jest wykonawczym komponentem endpointowym SIRK Management Platform.
 
-## Aktualny zakres
+## Aktualny zakres testowy
 
 ```text
 SIRK-Agent.exe
 ├── Windows Service
-├── IPC.NamedPipe
-├── Command Dispatcher
-├── Protocol Validator
-├── Replay Protection
-├── Diagnostics
-└── przyszly Module Host
+├── zabezpieczony Named Pipe
+├── SIRK Protocol v1
+├── walidacja TTL, requestId i nonce
+├── replay protection
+├── modularny command dispatcher
+├── System module
+└── Workspace foundation
+    ├── enumeracja sesji lokalnych i RDS
+    ├── izolacja Session 0
+    ├── walidacja Workspace.CaptureFrame
+    ├── SIRK-WorkspaceHost
+    └── bezpieczny launcher procesu sesyjnego
 ```
 
 Dostepne polecenia:
@@ -20,85 +26,101 @@ Dostepne polecenia:
 - `System.Ping`
 - `System.GetStatus`
 - `System.GetCapabilities`
+- `Workspace.GetCapabilities`
+- `Workspace.CaptureFrame` - kontrakt, walidacja i bezpieczne bledy; rzeczywisty provider obrazu jest jeszcze w przygotowaniu
 
-`Workspace.CaptureFrame` pozostaje kolejnym etapem i nie jest jeszcze wlaczone.
+## Najprostszy test
 
-## Budowanie
+Pobierz artefakt GitHub Actions:
 
-```powershell
-dotnet restore .\src\SIRK.Agent\SIRK.Agent.csproj
-dotnet build .\src\SIRK.Agent\SIRK.Agent.csproj -c Release
-dotnet publish .\src\SIRK.Agent\SIRK.Agent.csproj -c Release -o .\artifacts\SIRK-Agent
+```text
+SIRK-Agent-TestBundle-win-x64
 ```
 
-## Instalacja uslugi
-
-Uruchom PowerShell jako administrator:
+Rozpakuj go na testowym komputerze z Windows, uruchom Windows PowerShell jako administrator i wykonaj:
 
 ```powershell
-.\scripts\Install-SIRKAgent.ps1 `
-    -SourceExe .\artifacts\SIRK-Agent\SIRK-Agent.exe
+Set-ExecutionPolicy -Scope Process Bypass -Force
+cd C:\Sciezka\Do\SIRK-Agent-TestBundle-win-x64
+.\Scripts\Test-SIRKAgent.ps1 -BundlePath .
 ```
 
-Dla pakietu produkcyjnego nalezy przekazac oczekiwany hash:
+Skrypt:
+
+- instaluje `SIRK-Agent` jako usluge,
+- instaluje `SIRK-WorkspaceHost`,
+- sprawdza status uslugi,
+- wykonuje testy IPC,
+- sprawdza raport capability,
+- sprawdza izolacje Session 0,
+- sprawdza enumeracje sesji RDS,
+- zapisuje raport JSON w `%TEMP%`.
+
+## Instalacja reczna
 
 ```powershell
-$Hash = (Get-FileHash .\artifacts\SIRK-Agent\SIRK-Agent.exe -Algorithm SHA256).Hash
-.\scripts\Install-SIRKAgent.ps1 `
-    -SourceExe .\artifacts\SIRK-Agent\SIRK-Agent.exe `
+.\Scripts\Install-SIRKAgent.ps1 `
+    -SourceExe .\Agent\SIRK-Agent.exe `
+    -WorkspaceHostSource .\WorkspaceHost\SIRK-WorkspaceHost.exe
+```
+
+Dla pakietu produkcyjnego przekaz rowniez oczekiwany SHA-256 agenta:
+
+```powershell
+$Hash = (Get-FileHash .\Agent\SIRK-Agent.exe -Algorithm SHA256).Hash
+.\Scripts\Install-SIRKAgent.ps1 `
+    -SourceExe .\Agent\SIRK-Agent.exe `
+    -WorkspaceHostSource .\WorkspaceHost\SIRK-WorkspaceHost.exe `
     -ExpectedSha256 $Hash
 ```
 
 Instalator:
 
-- kopiuje binarium do `%ProgramFiles%\SIRK\Agent`,
+- kopiuje pliki do `%ProgramFiles%\SIRK\Agent`,
 - ogranicza ACL katalogu,
 - tworzy usluge `SIRKAgent`,
 - ustawia delayed automatic start,
 - konfiguruje kontrolowane restarty po awarii,
-- uruchamia usluge i zwraca status, hash oraz stan podpisu.
+- uruchamia usluge,
+- zwraca status, hash i stan podpisu.
 
-## Test Named Pipe
+## Test reczny IPC
 
 ```powershell
-dotnet run --project .\tools\SIRK.Agent.Client\SIRK.Agent.Client.csproj -- System.Ping
-
-dotnet run --project .\tools\SIRK.Agent.Client\SIRK.Agent.Client.csproj -- System.GetStatus
-
-dotnet run --project .\tools\SIRK.Agent.Client\SIRK.Agent.Client.csproj -- System.GetCapabilities
+.\Client\SIRK-Agent.Client.exe System.Ping
+.\Client\SIRK-Agent.Client.exe System.GetStatus
+.\Client\SIRK-Agent.Client.exe System.GetCapabilities
+.\Client\SIRK-Agent.Client.exe Workspace.GetCapabilities
 ```
 
-Klient generuje nowe `requestId`, TTL oraz kryptograficzny `nonce` dla kazdego wywolania.
+Klient generuje nowe `requestId`, TTL i kryptograficzny `nonce` dla kazdego wywolania.
 
 ## Odinstalowanie
 
 ```powershell
-.\scripts\Uninstall-SIRKAgent.ps1 -Confirm:$false
+.\Scripts\Uninstall-SIRKAgent.ps1 -Confirm:$false
 ```
 
-Aby usunac usluge, ale pozostawic pliki:
+Pozostawienie plikow przy usunieciu uslugi:
 
 ```powershell
-.\scripts\Uninstall-SIRKAgent.ps1 -KeepFiles -Confirm:$false
+.\Scripts\Uninstall-SIRKAgent.ps1 -KeepFiles -Confirm:$false
 ```
 
-## Wymagania bezpieczenstwa
+## Security baseline
 
-- brak dynamicznego wykonywania kodu,
-- brak pobierania runtime podczas zwyklej operacji,
-- scisla walidacja schematu wiadomosci,
-- limity rozmiaru, czasu i kolejek,
-- ochrona przed ponownym uzyciem `nonce`,
-- osobne procesy dla operacji w sesji uzytkownika,
+- brak dynamicznego PowerShell,
+- brak `Invoke-Expression` i `DownloadString`,
+- brak pobierania runtime podczas zwyklej pracy,
+- scisla allowlista `messageType`,
+- ograniczenia rozmiaru i timeouty,
+- TTL, UUID, nonce i replay protection,
+- osobny proces dla operacji w sesji uzytkownika,
+- izolacja Windows Session 0,
+- jawne ACL lokalnego IPC,
 - logi bez sekretow i danych obrazu,
-- podpisywanie produkcyjnych binariow Authenticode,
-- docelowy ACL Named Pipe dla SYSTEM i jawnie autoryzowanego adaptera.
+- przygotowanie do podpisywania Authenticode.
 
-## Kolejnosc dalszych prac
+## Granica obecnej wersji testowej
 
-1. test integracyjny uruchamiajacy agenta i klienta,
-2. jawny ACL Named Pipe dla uslugi i SIRK-MeshAdapter,
-3. heartbeat i lokalny health state,
-4. instalacja oraz aktualizacja przez MeshAgent,
-5. `Workspace.CaptureFrame` przez proces sesyjny,
-6. transport standalone do SIRK-Server.
+Ta wersja pozwala przetestowac instalacje, usluge, IPC, protokol, adapter MeshCentral, enumeracje sesji oraz fundament WorkspaceHost. Nie przesyla jeszcze rzeczywistego obrazu pulpitu. Provider obrazu i jednorazowy handshake Agent -> WorkspaceHost sa kolejnym etapem przed testem zdalnego pulpitu.

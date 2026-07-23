@@ -28,7 +28,7 @@ module.exports.workspace = function workspacePlugin(parent) {
             .catch(function (error) { sendJson(res, 400, { ok: false, error: String(error && error.message || error || 'Request failed.') }); });
     }
 
-    obj.server_startup = function () { console.log('[MeshCentral-Workspace] Plugin 0.3.1 loaded'); };
+    obj.server_startup = function () { console.log('[MeshCentral-Workspace] Plugin 0.3.2 loaded'); };
 
     obj.onWebUIStartupEnd = function () {
         if (typeof window === 'undefined' || typeof document === 'undefined') return;
@@ -39,7 +39,7 @@ module.exports.workspace = function workspacePlugin(parent) {
             var url = new URL('pluginadmin.ashx', window.location.href);
             url.searchParams.set('pin', 'workspace');
             url.searchParams.set('asset', asset);
-            url.searchParams.set('v', '0.3.1');
+            url.searchParams.set('v', '0.3.2');
             return url.href;
         };
         var load = function (id, source) {

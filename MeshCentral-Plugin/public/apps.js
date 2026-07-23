@@ -37,11 +37,15 @@
         return plugin.state && Array.isArray(plugin.state.slots) ? plugin.state.slots.find(function (slot) { return slot.slot === slotId; }) : null;
     }
 
+    function signature(slot) {
+        return JSON.stringify({ id: slot.id, state: slot.state, appsState: slot.appsState || '', appsError: slot.appsError || '', windows: slot.windows || [], busy: !!busyBySession[slot.id] });
+    }
+
     function panel(slot) {
         var windows = Array.isArray(slot.windows) ? slot.windows : [];
         var busy = !!busyBySession[slot.id] || slot.appsState === 'loading' || slot.appsState === 'launching';
         var state = busy ? '<span class="workspace-app-state">Oczekiwanie na wynik...</span>' : '';
-        return '<div class="workspace-apps">' +
+        return '<div class="workspace-apps" data-signature="' + esc(signature(slot)) + '">' +
             '<div class="workspace-app-head"><b>Aplikacje i okna</b><button type="button" class="workspace-app-refresh"' + (busy ? ' disabled' : '') + '>Odśwież okna</button></div>' +
             state +
             '<div class="workspace-app-buttons"><button type="button" data-app="explorer.exe"' + (busy ? ' disabled' : '') + '>Explorer</button><button type="button" data-app="powershell.exe"' + (busy ? ' disabled' : '') + '>PowerShell</button><button type="button" data-app="cmd.exe"' + (busy ? ' disabled' : '') + '>CMD</button><button type="button" data-app="notepad.exe"' + (busy ? ' disabled' : '') + '>Notatnik</button></div>' +
@@ -110,13 +114,20 @@
         Array.prototype.forEach.call(root.querySelectorAll('.workspace-card'), function (card) {
             var slot = getSlot(card.getAttribute('data-slot'));
             var existing = card.querySelector('.workspace-apps');
-            if (existing) existing.remove();
-            if (!slot || !slot.id || slot.state !== 'running') return;
+            if (!slot || !slot.id || slot.state !== 'running') {
+                if (existing) existing.remove();
+                return;
+            }
+            var expected = signature(slot);
+            if (existing && existing.getAttribute('data-signature') === expected) return;
             var wrapper = document.createElement('div');
             wrapper.innerHTML = panel(slot);
             var node = wrapper.firstChild;
-            var debug = card.querySelector('.workspace-debug-toggle');
-            if (debug) card.insertBefore(node, debug); else card.appendChild(node);
+            if (existing) existing.replaceWith(node);
+            else {
+                var debug = card.querySelector('.workspace-debug-toggle');
+                if (debug) card.insertBefore(node, debug); else card.appendChild(node);
+            }
             bind(card, slot);
         });
     }
@@ -128,7 +139,8 @@
 
     var rootObserver = new MutationObserver(function (changes) {
         for (var i = 0; i < changes.length; i++) {
-            if (changes[i].target && (changes[i].target.id === 'workspace-device-page' || changes[i].target.closest && changes[i].target.closest('#workspace-device-page'))) {
+            var target = changes[i].target;
+            if (target && (target.id === 'workspace-device-page' || target.closest && target.closest('#workspace-device-page'))) {
                 scheduleEnhance();
                 break;
             }

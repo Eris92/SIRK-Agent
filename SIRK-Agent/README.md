@@ -1,24 +1,24 @@
 # SIRK-Agent
 
-SIRK-Agent jest wykonawczym komponentem endpointowym SIRK Management Platform.
+Ten katalog zawiera niezaleznego agenta endpointowego SIRK Management Platform.
 
 ## Aktualny zakres testowy
 
 ```text
 SIRK-Agent.exe
 ├── Windows Service
-├── zabezpieczony Named Pipe
+├── zabezpieczony IPC Named Pipe
 ├── SIRK Protocol v1
-├── walidacja TTL, requestId i nonce
-├── replay protection
-├── modularny command dispatcher
+├── Command Dispatcher
+├── Replay Protection
 ├── System module
-└── Workspace foundation
+└── Workspace module
     ├── enumeracja sesji lokalnych i RDS
     ├── izolacja Session 0
-    ├── walidacja Workspace.CaptureFrame
-    ├── SIRK-WorkspaceHost
-    └── bezpieczny launcher procesu sesyjnego
+    ├── launcher CreateProcessAsUser
+    ├── jednorazowy token handshake
+    └── Workspace.CaptureFrame
+        └── GDI -> JPEG
 ```
 
 Dostepne polecenia:
@@ -27,100 +27,96 @@ Dostepne polecenia:
 - `System.GetStatus`
 - `System.GetCapabilities`
 - `Workspace.GetCapabilities`
-- `Workspace.CaptureFrame` - kontrakt, walidacja i bezpieczne bledy; rzeczywisty provider obrazu jest jeszcze w przygotowaniu
+- `Workspace.CaptureFrame`
 
-## Najprostszy test
+Pierwszy provider obrazu obsluguje:
 
-Pobierz artefakt GitHub Actions:
+- aktywna sesje lokalna lub RDS,
+- `monitorId: primary`,
+- `monitorId: all`,
+- JPEG quality 20-95,
+- ograniczenie maksymalnej szerokosci i wysokosci,
+- opcjonalny kursor,
+- pojedyncza klatke obrazu.
 
-```text
-SIRK-Agent-TestBundle-win-x64
-```
+To nie jest jeszcze strumien pulpitu ani sterowanie mysza/klawiatura. Ta paczka sluzy do sprawdzenia poprawnosci uruchamiania procesu sesyjnego, handshake oraz rzeczywistego przechwycenia JPEG.
 
-Rozpakuj go na testowym komputerze z Windows, uruchom Windows PowerShell jako administrator i wykonaj:
+## Test funkcjonalny
+
+Uruchom Windows PowerShell jako administrator w katalogu rozpakowanej paczki:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass -Force
-cd C:\Sciezka\Do\SIRK-Agent-TestBundle-win-x64
 .\Scripts\Test-SIRKAgent.ps1 -BundlePath .
 ```
 
 Skrypt:
 
-- instaluje `SIRK-Agent` jako usluge,
-- instaluje `SIRK-WorkspaceHost`,
-- sprawdza status uslugi,
-- wykonuje testy IPC,
-- sprawdza raport capability,
-- sprawdza izolacje Session 0,
-- sprawdza enumeracje sesji RDS,
-- zapisuje raport JSON w `%TEMP%`.
+1. sprawdza .NET 8 Runtime,
+2. instaluje lub aktualizuje usluge,
+3. uruchamia testy IPC,
+4. wybiera aktywna sesje Windows,
+5. uruchamia `SIRK-WorkspaceHost.exe` w tej sesji,
+6. weryfikuje jednorazowy handshake,
+7. przechwytuje pulpit do JPEG,
+8. zapisuje screenshot i raport JSON w `%TEMP%`.
+
+Poprawny wynik:
+
+```text
+SIRK-Agent functional workspace test passed.
+Screenshot: ...jpg
+Report:     ...json
+Capture:    ... ms / ... bytes
+```
 
 ## Instalacja reczna
 
 ```powershell
-.\Scripts\Install-SIRKAgent.ps1 `
+.\scripts\Install-SIRKAgent.ps1 `
     -SourceExe .\Agent\SIRK-Agent.exe `
     -WorkspaceHostSource .\WorkspaceHost\SIRK-WorkspaceHost.exe
 ```
 
-Dla pakietu produkcyjnego przekaz rowniez oczekiwany SHA-256 agenta:
+Instalator kopiuje cale katalogi publikacji framework-dependent do:
 
-```powershell
-$Hash = (Get-FileHash .\Agent\SIRK-Agent.exe -Algorithm SHA256).Hash
-.\Scripts\Install-SIRKAgent.ps1 `
-    -SourceExe .\Agent\SIRK-Agent.exe `
-    -WorkspaceHostSource .\WorkspaceHost\SIRK-WorkspaceHost.exe `
-    -ExpectedSha256 $Hash
+```text
+%ProgramFiles%\SIRK\Agent
 ```
 
-Instalator:
+Uzywa stalych SID zamiast zlokalizowanych nazw kont, dlatego dziala na polskim i angielskim Windows.
 
-- kopiuje pliki do `%ProgramFiles%\SIRK\Agent`,
-- ogranicza ACL katalogu,
-- tworzy usluge `SIRKAgent`,
-- ustawia delayed automatic start,
-- konfiguruje kontrolowane restarty po awarii,
-- uruchamia usluge,
-- zwraca status, hash i stan podpisu.
+## Wymagania
 
-## Test reczny IPC
+- Windows 10/11 albo Windows Server z interaktywna sesja uzytkownika,
+- .NET 8 Runtime x64,
+- uruchomienie instalatora jako administrator,
+- usluga `SIRKAgent` dzialajaca jako LocalSystem.
 
-```powershell
-.\Client\SIRK-Agent.Client.exe System.Ping
-.\Client\SIRK-Agent.Client.exe System.GetStatus
-.\Client\SIRK-Agent.Client.exe System.GetCapabilities
-.\Client\SIRK-Agent.Client.exe Workspace.GetCapabilities
-```
+## Bezpieczenstwo
 
-Klient generuje nowe `requestId`, TTL i kryptograficzny `nonce` dla kazdego wywolania.
+- brak dynamicznego PowerShell i `Invoke-Expression`,
+- brak pobierania kodu runtime,
+- jawna allowlista `messageType`,
+- UUID, TTL, nonce i replay protection,
+- osobne limity zadania i odpowiedzi,
+- Session 0 jest blokowana,
+- WorkspaceHost sprawdza rzeczywisty numer swojej sesji,
+- nazwa pipe jest losowa,
+- token handshake ma 256 bitow i jest porownywany w stalym czasie,
+- PID procesu oraz numer sesji sa ponownie sprawdzane po polaczeniu,
+- dane obrazu nie sa zapisywane w logach agenta.
 
 ## Odinstalowanie
 
 ```powershell
-.\Scripts\Uninstall-SIRKAgent.ps1 -Confirm:$false
+.\scripts\Uninstall-SIRKAgent.ps1 -Confirm:$false
 ```
 
-Pozostawienie plikow przy usunieciu uslugi:
+## Nastepny etap
 
-```powershell
-.\Scripts\Uninstall-SIRKAgent.ps1 -KeepFiles -Confirm:$false
-```
-
-## Security baseline
-
-- brak dynamicznego PowerShell,
-- brak `Invoke-Expression` i `DownloadString`,
-- brak pobierania runtime podczas zwyklej pracy,
-- scisla allowlista `messageType`,
-- ograniczenia rozmiaru i timeouty,
-- TTL, UUID, nonce i replay protection,
-- osobny proces dla operacji w sesji uzytkownika,
-- izolacja Windows Session 0,
-- jawne ACL lokalnego IPC,
-- logi bez sekretow i danych obrazu,
-- przygotowanie do podpisywania Authenticode.
-
-## Granica obecnej wersji testowej
-
-Ta wersja pozwala przetestowac instalacje, usluge, IPC, protokol, adapter MeshCentral, enumeracje sesji oraz fundament WorkspaceHost. Nie przesyla jeszcze rzeczywistego obrazu pulpitu. Provider obrazu i jednorazowy handshake Agent -> WorkspaceHost sa kolejnym etapem przed testem zdalnego pulpitu.
+- stabilny stream wielu klatek,
+- benchmark FPS i opoznienia,
+- wejscie myszy i klawiatury,
+- pelna enumeracja monitorow,
+- DXGI Desktop Duplication jako provider docelowy.

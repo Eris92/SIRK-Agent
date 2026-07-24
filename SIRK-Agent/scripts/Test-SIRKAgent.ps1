@@ -1,21 +1,19 @@
 #requires -Version 5.1
 #requires -RunAsAdministrator
 
-[CmdletBinding()]
 param(
-    [Parameter(Mandatory)]
-    [ValidateScript({ Test-Path -LiteralPath $_ -PathType Container })]
-    [string]$BundlePath,
-
+    [string]$BundlePath = '.',
     [switch]$SkipInstall,
-
     [string]$ReportPath = "$env:TEMP\SIRK-Agent-Test-$((Get-Date).ToString('yyyyMMdd-HHmmss')).json",
-
-    [string]$ScreenshotPath
+    [string]$ScreenshotPath = ''
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+if (-not (Test-Path -LiteralPath $BundlePath -PathType Container)) {
+    throw "Bundle directory was not found: $BundlePath"
+}
 
 $root = (Resolve-Path -LiteralPath $BundlePath).Path
 $agent = Join-Path $root 'Agent\SIRK-Agent.exe'
@@ -44,8 +42,6 @@ if (-not $runtimeInstalled) {
 }
 
 if (-not $SkipInstall) {
-    # Positional invocation deliberately avoids a Windows PowerShell 5.1
-    # named-parameter binding defect observed on localized systems.
     & $installer $agent $workspaceHost
 }
 
@@ -54,9 +50,13 @@ $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(20))
 
 function Invoke-AgentCommand {
     param(
-        [Parameter(Mandatory)][string]$MessageType,
+        [string]$MessageType,
         [hashtable]$Payload = @{}
     )
+
+    if ([string]::IsNullOrWhiteSpace($MessageType)) {
+        throw 'MessageType is required.'
+    }
 
     $payloadFile = Join-Path $env:TEMP ("sirk-payload-{0}.json" -f [guid]::NewGuid())
     try {
@@ -79,10 +79,10 @@ function Invoke-AgentCommand {
     }
 }
 
-$ping = Invoke-AgentCommand -MessageType 'System.Ping'
-$status = Invoke-AgentCommand -MessageType 'System.GetStatus'
-$systemCapabilities = Invoke-AgentCommand -MessageType 'System.GetCapabilities'
-$workspaceCapabilities = Invoke-AgentCommand -MessageType 'Workspace.GetCapabilities'
+$ping = Invoke-AgentCommand 'System.Ping'
+$status = Invoke-AgentCommand 'System.GetStatus'
+$systemCapabilities = Invoke-AgentCommand 'System.GetCapabilities'
+$workspaceCapabilities = Invoke-AgentCommand 'Workspace.GetCapabilities'
 
 if ($ping.result.message -ne 'pong') { throw 'System.Ping did not return pong.' }
 if ($status.result.status -ne 'running') { throw 'System.GetStatus did not return running.' }
@@ -97,7 +97,7 @@ if (-not $interactiveSession) {
 }
 
 $captureStarted = Get-Date
-$capture = Invoke-AgentCommand -MessageType 'Workspace.CaptureFrame' -Payload @{
+$capture = Invoke-AgentCommand 'Workspace.CaptureFrame' @{
     sessionId = [int]$interactiveSession.sessionId
     monitorId = 'primary'
     format = 'jpeg'

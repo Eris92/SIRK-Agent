@@ -21,7 +21,7 @@ $client = Join-Path $root 'Client\SIRK-Agent-Client.exe'
 $workspaceHost = Join-Path $root 'WorkspaceHost\SIRK-WorkspaceHost.exe'
 $installer = Join-Path $root 'Scripts\Install-SIRKAgent.ps1'
 
-if (-not $ScreenshotPath) {
+if ([string]::IsNullOrWhiteSpace($ScreenshotPath)) {
     $ScreenshotPath = [IO.Path]::ChangeExtension($ReportPath, '.jpg')
 }
 
@@ -79,10 +79,10 @@ function Invoke-AgentCommand {
     }
 }
 
-$ping = Invoke-AgentCommand 'System.Ping'
-$status = Invoke-AgentCommand 'System.GetStatus'
-$systemCapabilities = Invoke-AgentCommand 'System.GetCapabilities'
-$workspaceCapabilities = Invoke-AgentCommand 'Workspace.GetCapabilities'
+$ping = Invoke-AgentCommand -MessageType 'System.Ping'
+$status = Invoke-AgentCommand -MessageType 'System.GetStatus'
+$systemCapabilities = Invoke-AgentCommand -MessageType 'System.GetCapabilities'
+$workspaceCapabilities = Invoke-AgentCommand -MessageType 'Workspace.GetCapabilities'
 
 if ($ping.result.message -ne 'pong') { throw 'System.Ping did not return pong.' }
 if ($status.result.status -ne 'running') { throw 'System.GetStatus did not return running.' }
@@ -96,16 +96,42 @@ if (-not $interactiveSession) {
     throw 'No active interactive Windows session is available for screenshot capture.'
 }
 
-$captureStarted = Get-Date
-$capture = Invoke-AgentCommand 'Workspace.CaptureFrame' @{
+$capturePayload = @{
     sessionId = [int]$interactiveSession.sessionId
     monitorId = 'primary'
     format = 'jpeg'
-    quality = 70
-    maxWidth = 1920
-    maxHeight = 1080
-    includeCursor = $true
+    quality = 60
+    maxWidth = 1280
+    maxHeight = 720
+    includeCursor = $false
 }
+
+$capture = $null
+$captureError = $null
+$captureStarted = Get-Date
+
+for ($attempt = 1; $attempt -le 3; $attempt++) {
+    try {
+        Write-Host "Workspace capture attempt $attempt/3..."
+        $capture = Invoke-AgentCommand -MessageType 'Workspace.CaptureFrame' -Payload $capturePayload
+        $captureError = $null
+        break
+    }
+    catch {
+        $captureError = $_
+        if ($attempt -lt 3 -and $_.Exception.Message -match 'capture_timeout|workspace_host_ipc_failed') {
+            Write-Warning 'WorkspaceHost did not return the first frame. Waiting 5 seconds and retrying.'
+            Start-Sleep -Seconds 5
+            continue
+        }
+        throw
+    }
+}
+
+if (-not $capture) {
+    throw $captureError
+}
+
 $captureMilliseconds = [int]((Get-Date) - $captureStarted).TotalMilliseconds
 
 if ($capture.result.contentType -ne 'image/jpeg' -or [string]::IsNullOrWhiteSpace($capture.result.frameBase64)) {
@@ -168,6 +194,9 @@ $report = [ordered]@{
         Provider = $workspaceCapabilities.result.capture.executionProvider
         Milliseconds = $captureMilliseconds
         JpegBytes = $frameBytes.Length
+        Quality = $capturePayload.quality
+        MaxWidth = $capturePayload.maxWidth
+        MaxHeight = $capturePayload.maxHeight
     }
     Workspace = $workspaceCapabilities.result
 }

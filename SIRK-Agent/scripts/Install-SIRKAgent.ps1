@@ -32,9 +32,17 @@ if ($ExpectedSha256 -and $ExpectedSha256 -notmatch '^[A-Fa-f0-9]{64}$') {
 }
 
 $sourceFullPath = (Resolve-Path -LiteralPath $SourceExe).Path
-$sourceDirectory = Split-Path -LiteralPath $sourceFullPath -Parent
+$sourceDirectory = [System.IO.Path]::GetDirectoryName($sourceFullPath)
 $workspaceHostFullPath = if ($WorkspaceHostSource) { (Resolve-Path -LiteralPath $WorkspaceHostSource).Path } else { $null }
-$workspaceHostDirectory = if ($workspaceHostFullPath) { Split-Path -LiteralPath $workspaceHostFullPath -Parent } else { $null }
+$workspaceHostDirectory = if ($workspaceHostFullPath) { [System.IO.Path]::GetDirectoryName($workspaceHostFullPath) } else { $null }
+
+if ([string]::IsNullOrWhiteSpace($sourceDirectory)) {
+    throw "Unable to resolve agent source directory: $sourceFullPath"
+}
+if ($workspaceHostFullPath -and [string]::IsNullOrWhiteSpace($workspaceHostDirectory)) {
+    throw "Unable to resolve WorkspaceHost source directory: $workspaceHostFullPath"
+}
+
 $targetExe = Join-Path $InstallDirectory 'SIRK-Agent.exe'
 $targetWorkspaceHost = Join-Path $InstallDirectory 'SIRK-WorkspaceHost.exe'
 

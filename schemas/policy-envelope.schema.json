@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sirk.local/schemas/policy-envelope.schema.json",
+  "title": "SIRK Agent Policy Envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "tenantId",
+    "deviceId",
+    "policyId",
+    "policyVersion",
+    "epoch",
+    "sequence",
+    "issuedAtUtc",
+    "notBeforeUtc",
+    "expiresAtUtc",
+    "mode",
+    "nonce",
+    "payload",
+    "signature"
+  ],
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "tenantId": { "type": "string", "format": "uuid" },
+    "deviceId": { "type": "string", "format": "uuid" },
+    "policyId": { "type": "string", "format": "uuid" },
+    "policyVersion": { "type": "integer", "minimum": 1 },
+    "epoch": { "type": "integer", "minimum": 0 },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "issuedAtUtc": { "type": "string", "format": "date-time" },
+    "notBeforeUtc": { "type": "string", "format": "date-time" },
+    "expiresAtUtc": { "type": "string", "format": "date-time" },
+    "mode": {
+      "type": "string",
+      "enum": ["Normal", "Security", "Investigation", "InsiderRisk", "Emergency"]
+    },
+    "caseId": { "type": ["string", "null"], "maxLength": 128 },
+    "nonce": { "type": "string", "minLength": 16, "maxLength": 512 },
+    "payload": { "type": "object" },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "keyId", "value"],
+      "properties": {
+        "algorithm": { "type": "string", "const": "ES256" },
+        "keyId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "value": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "mode": { "enum": ["Investigation", "InsiderRisk"] }
+        }
+      },
+      "then": {
+        "required": ["caseId"],
+        "properties": {
+          "caseId": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  ]
+}

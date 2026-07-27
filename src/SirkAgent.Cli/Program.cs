@@ -9,14 +9,22 @@ var command = args.FirstOrDefault()?.Trim().ToLowerInvariant() ?? "status";
 
 if (command is "status" or "process" or "flush")
 {
-    await using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-    await pipe.ConnectAsync(timeout.Token);
-    await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, leaveOpen: true) { AutoFlush = true };
-    using var reader = new StreamReader(pipe, Encoding.UTF8, false, 4096, leaveOpen: true);
-    await writer.WriteLineAsync(command);
-    Console.WriteLine(await reader.ReadLineAsync(timeout.Token));
-    return;
+    try
+    {
+        await using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        await pipe.ConnectAsync(timeout.Token);
+        await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, leaveOpen: true) { AutoFlush = true };
+        using var reader = new StreamReader(pipe, Encoding.UTF8, false, 4096, leaveOpen: true);
+        await writer.WriteLineAsync(command);
+        Console.WriteLine(await reader.ReadLineAsync(timeout.Token));
+        return;
+    }
+    catch (Exception ex) when (ex is TimeoutException or IOException or OperationCanceledException or UnauthorizedAccessException)
+    {
+        Console.WriteLine(await RunControlFileFallbackAsync(command));
+        return;
+    }
 }
 
 if (command is "create-test-policy" or "create-test-recovery")
@@ -83,5 +91,29 @@ if (command is "create-test-policy" or "create-test-recovery")
 
 Console.Error.WriteLine("Usage: sirkctl status|process|flush|create-test-policy|create-test-recovery");
 Environment.ExitCode = 2;
+
+static async Task<string> RunControlFileFallbackAsync(string command)
+{
+    var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SIRK", "Agent");
+    Directory.CreateDirectory(root);
+    var requestPath = Path.Combine(root, "control-request.json");
+    var responsePath = Path.Combine(root, "control-response.json");
+    var requestId = Guid.NewGuid();
+    if (File.Exists(responsePath)) File.Delete(responsePath);
+    var request = new { requestId, timestampUtc = DateTimeOffset.UtcNow, command };
+    await File.WriteAllTextAsync(requestPath, JsonSerializer.Serialize(request), new UTF8Encoding(false));
+    var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+    while (DateTimeOffset.UtcNow < deadline)
+    {
+        if (File.Exists(responsePath))
+        {
+            var response = await File.ReadAllTextAsync(responsePath);
+            if (response.Contains(requestId.ToString(), StringComparison.OrdinalIgnoreCase))
+                return response;
+        }
+        await Task.Delay(250);
+    }
+    throw new TimeoutException("SIRK Agent did not answer the local control request.");
+}
 
 static string Base64Url(byte[] value) => Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');

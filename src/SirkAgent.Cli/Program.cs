@@ -77,8 +77,6 @@ if (command == "status")
     };
 
     Console.WriteLine(JsonSerializer.Serialize(response, jsonOptions));
-    if (!response.ok)
-        Environment.ExitCode = 4;
     return;
 }
 

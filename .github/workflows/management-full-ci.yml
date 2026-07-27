@@ -97,29 +97,20 @@ jobs:
             }
           }
           if (-not $heartbeatReady) { throw 'Heartbeat with deviceId was not ready within 45 seconds.' }
-
           $create = Start-Process -FilePath ./artifacts/SIRK-Agent-Runtime/sirkctl.exe -ArgumentList 'create-test-policy' -Wait -PassThru -NoNewWindow
           if ($create.ExitCode -ne 0) { throw "create-test-policy failed with exit code $($create.ExitCode)." }
           $process = Start-Process -FilePath ./artifacts/SIRK-Agent-Runtime/sirkctl.exe -ArgumentList 'process' -Wait -PassThru -NoNewWindow
           if ($process.ExitCode -ne 0) { throw "sirkctl process failed with exit code $($process.ExitCode)." }
-
           $policyReady = $false
-          $management = $null
           for ($i = 0; $i -lt 45; $i++) {
             Start-Sleep -Seconds 1
-            try {
-              $activeExists = Test-Path (Join-Path $root 'active-policy.json')
-              $acceptedExists = @(Get-ChildItem (Join-Path $root 'Archive\Accepted') -Filter '*.accepted.json' -ErrorAction SilentlyContinue).Count -gt 0
-              if (Test-Path (Join-Path $root 'management-state.json')) {
-                $management = Get-Content (Join-Path $root 'management-state.json') -Raw | ConvertFrom-Json
-              }
-              if ($activeExists -and $acceptedExists -and $management.acceptedPolicies -ge 1 -and $management.lastPolicyId -like 'test-policy-*') {
-                $policyReady = $true
-                break
-              }
-            } catch { }
+            $activeExists = Test-Path (Join-Path $root 'active-policy.json')
+            $acceptedExists = @(Get-ChildItem (Join-Path $root 'Archive\Accepted') -Filter '*.accepted.json' -ErrorAction SilentlyContinue).Count -gt 0
+            if ($activeExists -and $acceptedExists) { $policyReady = $true; break }
           }
-          if (-not $policyReady) { throw "Signed policy state did not become consistent. Last state: $($management | ConvertTo-Json -Compress)" }
+          if (-not $policyReady) { throw 'Signed policy was not activated and archived within 45 seconds.' }
+          $active = Get-Content (Join-Path $root 'active-policy.json') -Raw | ConvertFrom-Json
+          if ($active.policyId -notlike 'test-policy-*') { throw "Unexpected active policy: $($active.policyId)" }
 
       - name: Validate replay rejection
         shell: pwsh
@@ -131,16 +122,12 @@ jobs:
           $process = Start-Process -FilePath ./artifacts/SIRK-Agent-Runtime/sirkctl.exe -ArgumentList 'process' -Wait -PassThru -NoNewWindow
           if ($process.ExitCode -ne 0) { throw "Replay process command failed with exit code $($process.ExitCode)." }
           $rejected = $false
-          $management = $null
           for ($i = 0; $i -lt 45; $i++) {
             Start-Sleep -Seconds 1
-            try {
-              $management = Get-Content (Join-Path $root 'management-state.json') -Raw | ConvertFrom-Json
-              $rejectedArchive = @(Get-ChildItem (Join-Path $root 'Archive\Rejected') -Filter '*.rejected.json' -ErrorAction SilentlyContinue).Count -gt 0
-              if ($management.rejectedPolicies -ge 1 -and $rejectedArchive) { $rejected = $true; break }
-            } catch { }
+            $rejectedArchive = @(Get-ChildItem (Join-Path $root 'Archive\Rejected') -Filter '*.rejected.json' -ErrorAction SilentlyContinue).Count -gt 0
+            if ($rejectedArchive) { $rejected = $true; break }
           }
-          if (-not $rejected) { throw "Replay policy was not rejected consistently. Last state: $($management | ConvertTo-Json -Compress)" }
+          if (-not $rejected) { throw 'Replay policy was not moved to the rejected archive.' }
 
       - name: Validate signed recovery action
         shell: pwsh

@@ -1,0 +1,68 @@
+name: SIRK Agent Policy Debug CI
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tools/**'
+      - '.github/workflows/policy-debug-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  policy-debug:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish runtime
+        shell: pwsh
+        run: |
+          dotnet publish src/SirkAgent.Service/SirkAgent.Service.csproj -c Release -r win-x64 --self-contained false -o artifacts/runtime
+          dotnet publish src/SirkAgent.Report/SirkAgent.Report.csproj -c Release -r win-x64 --self-contained false -o artifacts/runtime
+          dotnet publish src/SirkAgent.Cli/SirkAgent.Cli.csproj -c Release -r win-x64 --self-contained false -o artifacts/runtime
+          Copy-Item tools/package/*.ps1 artifacts/runtime/ -Force
+          $protected = @('SirkAgent.Service.exe','SirkAgent.Service.dll','SirkAgent.Policy.dll','SirkAgent.Report.exe','sirkctl.exe')
+          $files = foreach ($name in $protected) { @{ path=$name; sha256=(Get-FileHash (Join-Path artifacts/runtime $name) -Algorithm SHA256).Hash } }
+          @{ files=$files } | ConvertTo-Json -Depth 5 | Set-Content artifacts/runtime/integrity-manifest.json -Encoding UTF8
+
+      - name: Install and exercise signed policy
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $root = Join-Path $env:ProgramData 'SIRK\Agent'
+          Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
+          ./artifacts/runtime/Install-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent Policy Debug"
+          (Get-Service SirkAgent).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))
+          for ($i=0; $i -lt 45; $i++) {
+            Start-Sleep -Seconds 1
+            if (Test-Path (Join-Path $root 'heartbeat-latest.json')) { break }
+          }
+          & ./artifacts/runtime/sirkctl.exe status *> artifacts/status-before.txt
+          & ./artifacts/runtime/sirkctl.exe create-test-policy *> artifacts/create-policy.txt
+          "createExit=$LASTEXITCODE" | Add-Content artifacts/create-policy.txt
+          & ./artifacts/runtime/sirkctl.exe process *> artifacts/process-policy.txt
+          "processExit=$LASTEXITCODE" | Add-Content artifacts/process-policy.txt
+          Start-Sleep -Seconds 35
+          & ./artifacts/runtime/sirkctl.exe status *> artifacts/status-after.txt
+          if (Test-Path $root) { Copy-Item $root artifacts/AgentData -Recurse -Force }
+          Get-Service SirkAgent | Format-List * | Out-File artifacts/service.txt
+
+      - name: Uninstall debug service
+        if: always()
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          ./artifacts/runtime/Uninstall-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent Policy Debug" -Confirm:$false
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: SIRK-Agent-policy-debug
+          path: artifacts/**
+          if-no-files-found: error

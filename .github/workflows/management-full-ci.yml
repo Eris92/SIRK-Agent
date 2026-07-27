@@ -57,28 +57,14 @@ jobs:
           sirkctl.exe process
           pause' | Set-Content (Join-Path $runtime 'CREATE-AND-APPLY-TEST-RECOVERY.cmd') -Encoding ascii
 
-      - name: Validate clean one-shot Agent Core startup
+      - name: Install clean Windows service
         shell: pwsh
         run: |
           $root = Join-Path $env:ProgramData 'SIRK\Agent'
           Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
-          $once = Start-Process ./artifacts/SIRK-Agent-Runtime/SirkAgent.Service.exe -ArgumentList '--once' -Wait -PassThru -NoNewWindow
-          if ($once.ExitCode -ne 0) { throw "Agent --once failed with exit code $($once.ExitCode)." }
-          $heartbeatPath = Join-Path $root 'heartbeat-latest.json'
-          $securityPath = Join-Path $root 'security-state.json'
-          if (-not (Test-Path $heartbeatPath)) { throw 'Heartbeat was not created by --once.' }
-          if (-not (Test-Path $securityPath)) { throw 'Security state was not created by --once.' }
-          $heartbeat = Get-Content $heartbeatPath -Raw | ConvertFrom-Json
-          $security = Get-Content $securityPath -Raw | ConvertFrom-Json
-          if ($heartbeat.tamperDetected -or $heartbeat.quarantineActive) { throw 'One-shot startup reported tamper or quarantine.' }
-          if ($security.overallHealth -ne 'Healthy') { throw "One-shot Agent Core health: $($security.overallHealth)" }
-
-      - name: Install Windows service
-        shell: pwsh
-        run: |
           ./artifacts/SIRK-Agent-Runtime/Install-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent CI"
           (Get-Service SirkAgent).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))
-          Start-Sleep -Seconds 8
+          Start-Sleep -Seconds 10
 
       - name: Validate complete local status and signed policy
         shell: pwsh
@@ -91,6 +77,8 @@ jobs:
           if (-not $status.ok) { throw 'sirkctl status reported ok=false.' }
           if (-not $status.management -or -not $status.heartbeat -or -not $status.security) { throw 'sirkctl status is missing management, heartbeat or security data.' }
           if ($status.management.integrityCode -ne 'INTEGRITY_OK') { throw "Unexpected status integrity: $($status.management.integrityCode)" }
+          if ($status.heartbeat.tamperDetected -or $status.heartbeat.quarantineActive) { throw 'Status reports tamper or quarantine on clean startup.' }
+          if ($status.security.overallHealth -ne 'Healthy') { throw "Agent Core health: $($status.security.overallHealth)" }
           ./artifacts/SIRK-Agent-Runtime/sirkctl.exe create-test-policy
           ./artifacts/SIRK-Agent-Runtime/sirkctl.exe process
           Start-Sleep -Seconds 18

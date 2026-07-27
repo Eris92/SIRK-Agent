@@ -64,16 +64,13 @@ jobs:
           if ($heartbeat.stateStatus -notin @('STATE_INITIALIZED','OK')) { throw "Unexpected clean state: $($heartbeat.stateStatus)" }
           if (-not (Test-Path (Join-Path $agentRoot 'policy-state.bin'))) { throw 'Protected policy state was not initialized.' }
 
-      - name: Validate clean report classification
+      - name: Validate clean report module classification
         shell: pwsh
         run: |
           $agentRoot = Join-Path $env:ProgramData 'SIRK\Agent'
-          $reportPath = Join-Path $agentRoot 'Reports\clean-state.json'
+          $reportPath = Join-Path $agentRoot 'Reports\clean-once-state.json'
           ./artifacts/SIRK-Agent-Runtime/SirkAgent.Report.exe --json-only $reportPath
           $report = Get-Content $reportPath -Raw | ConvertFrom-Json
-          if ($report.overallStatus -ne 'Healthy') { throw "Clean report status is $($report.overallStatus)." }
-          if ($report.summary.warning -ne 0) { throw "Clean report contains $($report.summary.warning) warnings." }
-          if ($report.summary.critical -ne 0) { throw "Clean report contains $($report.summary.critical) critical modules." }
           $heartbeatModule = $report.modules | Where-Object name -eq 'Policy / Heartbeat'
           if ($heartbeatModule.status -ne 'Healthy') { throw "Heartbeat report status is $($heartbeatModule.status)." }
           $tamperModule = $report.modules | Where-Object name -eq 'Latest tamper event'
@@ -111,13 +108,20 @@ jobs:
           if (-not (Test-Path (Join-Path $env:ProgramData 'SIRK\Agent\security-state.json'))) { throw 'Security state was not generated.' }
           if (-not (Test-Path (Join-Path $env:ProgramData 'SIRK\Agent\device-identity.bin'))) { throw 'Device identity was not generated.' }
 
-      - name: Smoke test Windows service install
+      - name: Smoke test Windows service and all-green report
         shell: pwsh
         run: |
           ./artifacts/SIRK-Agent-Runtime/Install-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent CI"
           $service = Get-Service SirkAgent
           if ($service.Status -ne 'Running') { throw "Service status is $($service.Status)" }
-          Start-Sleep -Seconds 3
+          Start-Sleep -Seconds 5
+          $agentRoot = Join-Path $env:ProgramData 'SIRK\Agent'
+          $reportPath = Join-Path $agentRoot 'Reports\running-service-state.json'
+          ./artifacts/SIRK-Agent-Runtime/SirkAgent.Report.exe --json-only $reportPath
+          $report = Get-Content $reportPath -Raw | ConvertFrom-Json
+          if ($report.overallStatus -ne 'Healthy') { throw "Running service report status is $($report.overallStatus)." }
+          if ($report.summary.warning -ne 0) { throw "Running service report contains $($report.summary.warning) warnings." }
+          if ($report.summary.critical -ne 0) { throw "Running service report contains $($report.summary.critical) critical modules." }
           ./artifacts/SIRK-Agent-Runtime/Uninstall-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent CI" -Confirm:$false
 
       - name: Validate TestBundle collection

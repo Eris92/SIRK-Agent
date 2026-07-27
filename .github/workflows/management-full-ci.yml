@@ -62,10 +62,16 @@ jobs:
         run: |
           $root = Join-Path $env:ProgramData 'SIRK\Agent'
           Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
-          ./artifacts/SIRK-Agent-Runtime/SirkAgent.Service.exe --once
-          $management = Get-Content (Join-Path $root 'management-state.json') -Raw | ConvertFrom-Json
-          if ($management.integrityCode -ne 'INTEGRITY_OK') { throw "Integrity status: $($management.integrityCode)" }
-          if (-not (Test-Path (Join-Path $root 'Incoming'))) { throw 'Policy inbox was not created.' }
+          $process = Start-Process ./artifacts/SIRK-Agent-Runtime/SirkAgent.Service.exe -PassThru
+          try {
+            Start-Sleep -Seconds 6
+            $management = Get-Content (Join-Path $root 'management-state.json') -Raw | ConvertFrom-Json
+            if ($management.integrityCode -ne 'INTEGRITY_OK') { throw "Integrity status: $($management.integrityCode)" }
+            if (-not (Test-Path (Join-Path $root 'Incoming'))) { throw 'Policy inbox was not created.' }
+          }
+          finally {
+            if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+          }
 
       - name: Install Windows service
         shell: pwsh

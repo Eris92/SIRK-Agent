@@ -33,7 +33,7 @@ jobs:
         run: ./artifacts/SIRK-Agent-Policy-Test/SirkAgent.Policy.TestHarness.exe
 
       - name: Publish agent runtime
-        run: dotnet publish src/SirkAgent.Service/SirkAgent.Service.csproj --configuration Release --runtime win-x64 --self-contained false -p:PublishSingleFile=false -p:PublishTrimmed=false -p:InformationalVersion=0.2.0-test+${{ github.sha }} --output artifacts/SIRK-Agent-Runtime
+        run: dotnet publish src/SirkAgent.Service/SirkAgent.Service.csproj --configuration Release --runtime win-x64 --self-contained false -p:PublishSingleFile=false -p:PublishTrimmed=false -p:InformationalVersion=0.2.1-test+${{ github.sha }} --output artifacts/SIRK-Agent-Runtime
 
       - name: Publish diagnostics reporter
         run: dotnet publish src/SirkAgent.Report/SirkAgent.Report.csproj --configuration Release --runtime win-x64 --self-contained false -p:PublishSingleFile=false -p:PublishTrimmed=false --output artifacts/SIRK-Agent-Runtime
@@ -44,7 +44,7 @@ jobs:
           Copy-Item tools/package/*.ps1 artifacts/SIRK-Agent-Runtime/ -Force
           @{
             product = 'SIRK Agent'
-            version = '0.2.0-test'
+            version = '0.2.1-test'
             commit = '${{ github.sha }}'
             buildUtc = (Get-Date).ToUniversalTime().ToString('o')
             runtime = 'win-x64'
@@ -52,9 +52,37 @@ jobs:
             requiredRuntime = '.NET 8 x64'
           } | ConvertTo-Json | Set-Content artifacts/SIRK-Agent-Runtime/build-manifest.json -Encoding UTF8
 
-      - name: Run one agent cycle
+      - name: Validate clean first startup
         shell: pwsh
-        run: ./artifacts/SIRK-Agent-Runtime/SirkAgent.Service.exe --once
+        run: |
+          $agentRoot = Join-Path $env:ProgramData 'SIRK\Agent'
+          Remove-Item $agentRoot -Recurse -Force -ErrorAction SilentlyContinue
+          ./artifacts/SIRK-Agent-Runtime/SirkAgent.Service.exe --once
+          $heartbeat = Get-Content (Join-Path $agentRoot 'heartbeat-latest.json') -Raw | ConvertFrom-Json
+          if ($heartbeat.tamperDetected) { throw "Clean startup reported tamper: $($heartbeat.tamperReason)" }
+          if ($heartbeat.quarantineActive) { throw "Clean startup entered quarantine: $($heartbeat.quarantineReason)" }
+          if ($heartbeat.stateStatus -notin @('STATE_INITIALIZED','OK')) { throw "Unexpected clean state: $($heartbeat.stateStatus)" }
+          if (-not (Test-Path (Join-Path $agentRoot 'policy-state.bin'))) { throw 'Protected policy state was not initialized.' }
+
+      - name: Validate corrupt-state detection and test recovery
+        shell: pwsh
+        run: |
+          $agentRoot = Join-Path $env:ProgramData 'SIRK\Agent'
+          $identityPath = Join-Path $agentRoot 'device-identity.bin'
+          $identityHashBefore = (Get-FileHash $identityPath -Algorithm SHA256).Hash
+          [IO.File]::WriteAllBytes((Join-Path $agentRoot 'policy-state.bin'), [byte[]](1,2,3,4))
+          ./artifacts/SIRK-Agent-Runtime/SirkAgent.Service.exe --once
+          $broken = Get-Content (Join-Path $agentRoot 'heartbeat-latest.json') -Raw | ConvertFrom-Json
+          if (-not $broken.tamperDetected) { throw 'Corrupt state was not detected.' }
+          if (-not $broken.quarantineActive) { throw 'Corrupt state did not activate quarantine.' }
+          ./artifacts/SIRK-Agent-Runtime/Reset-SirkAgentTestState.ps1 -Confirm:$false
+          ./artifacts/SIRK-Agent-Runtime/SirkAgent.Service.exe --once
+          $recovered = Get-Content (Join-Path $agentRoot 'heartbeat-latest.json') -Raw | ConvertFrom-Json
+          if ($recovered.tamperDetected) { throw "Recovered state still reports tamper: $($recovered.tamperReason)" }
+          if ($recovered.quarantineActive) { throw "Recovered state remains quarantined: $($recovered.quarantineReason)" }
+          $identityHashAfter = (Get-FileHash $identityPath -Algorithm SHA256).Hash
+          if ($identityHashBefore -ne $identityHashAfter) { throw 'Device identity changed during test-state recovery.' }
+          if (-not (Get-ChildItem (Join-Path $agentRoot 'ResetArchive') -Filter reset-manifest.json -Recurse -ErrorAction SilentlyContinue)) { throw 'Reset archive manifest was not generated.' }
 
       - name: Generate and validate HTML and JSON reports
         shell: pwsh
@@ -102,6 +130,11 @@ jobs:
 
           '@echo off
           cd /d "%~dp0"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Reset-SirkAgentTestState.ps1" -Confirm:$false
+          pause' | Set-Content artifacts/SIRK-Agent-Runtime/RESET-TEST-STATE-AS-ADMIN.cmd -Encoding ascii
+
+          '@echo off
+          cd /d "%~dp0"
           SirkAgent.Report.exe
           pause' | Set-Content artifacts/SIRK-Agent-Runtime/GENERATE-HTML-AND-JSON-REPORT.cmd -Encoding ascii
 
@@ -111,29 +144,33 @@ jobs:
           pause' | Set-Content artifacts/SIRK-Agent-Runtime/COLLECT-TEST-BUNDLE.cmd -Encoding ascii
 
           @'
-          SIRK AGENT 0.2.0 TEST
+          SIRK AGENT 0.2.1 TEST
 
           Wymagania: Windows x64 oraz Microsoft .NET 8 Runtime x64.
 
-          1. Najpierw uruchom TEST-AGENT-ONCE.cmd.
-          2. Wygeneruj raport przez GENERATE-HTML-AND-JSON-REPORT.cmd.
+          1. Czysty pierwszy start automatycznie tworzy chroniony policy-state.bin.
+          2. Uruchom TEST-AGENT-ONCE.cmd i wygeneruj raport.
           3. Do testu stalego uruchom jako administrator INSTALL-SERVICE-AS-ADMIN.cmd.
           4. Dane agenta: C:\ProgramData\SIRK\Agent
           5. Paczka do przeslania: COLLECT-TEST-BUNDLE.cmd
           6. Usuniecie: UNINSTALL-SERVICE-AS-ADMIN.cmd
 
-          Uwaga: kwarantanna jest fail-closed i nie jest automatycznie czyszczona po odzyskaniu poprawnego stanu polityki.
+          Gdy poprzednia wersja pozostawila STATE_UNPROTECT_FAILED, uruchom jako administrator:
+          RESET-TEST-STATE-AS-ADMIN.cmd
+
+          Reset archiwizuje stan polityki i kwarantanny, ale zachowuje Device ID, Evidence Chain, Telemetry Queue i log zdarzen.
+          Funkcja resetu jest tylko dla wersji testowej. Produkcyjny recovery bedzie wymagal podpisanej Recovery Policy.
           '@ | Set-Content artifacts/SIRK-Agent-Runtime/TEST-INSTRUCTIONS.txt -Encoding UTF8
 
       - name: Create distributable ZIP
         shell: pwsh
-        run: Compress-Archive -Path artifacts/SIRK-Agent-Runtime/* -DestinationPath artifacts/SIRK-Agent-0.2.0-test-win-x64.zip -CompressionLevel Optimal -Force
+        run: Compress-Archive -Path artifacts/SIRK-Agent-Runtime/* -DestinationPath artifacts/SIRK-Agent-0.2.1-test-win-x64.zip -CompressionLevel Optimal -Force
 
       - uses: actions/upload-artifact@v4
         with:
-          name: SIRK-Agent-0.2.0-test-win-x64
+          name: SIRK-Agent-0.2.1-test-win-x64
           path: |
-            artifacts/SIRK-Agent-0.2.0-test-win-x64.zip
+            artifacts/SIRK-Agent-0.2.1-test-win-x64.zip
             artifacts/SIRK-Agent-Runtime/**
           if-no-files-found: error
 

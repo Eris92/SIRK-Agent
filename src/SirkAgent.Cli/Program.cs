@@ -7,6 +7,40 @@ using SirkAgent.Policy;
 const string pipeName = "SIRK-Agent-Control";
 var command = args.FirstOrDefault()?.Trim().ToLowerInvariant() ?? "status";
 
+if (command == "verify-integrity")
+{
+    var manifestPath = Path.Combine(AppContext.BaseDirectory, "integrity-manifest.json");
+    if (!File.Exists(manifestPath))
+    {
+        Console.Error.WriteLine("INTEGRITY_MANIFEST_MISSING");
+        Environment.ExitCode = 3;
+        return;
+    }
+
+    var manifest = JsonSerializer.Deserialize<IntegrityManifest>(await File.ReadAllBytesAsync(manifestPath))
+                   ?? throw new InvalidDataException("Integrity manifest deserialized to null.");
+    foreach (var entry in manifest.Files)
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, entry.Path);
+        if (!File.Exists(path))
+        {
+            Console.Error.WriteLine($"INTEGRITY_FILE_MISSING: {entry.Path}");
+            Environment.ExitCode = 3;
+            return;
+        }
+        await using var stream = File.OpenRead(path);
+        var actual = Convert.ToHexString(await SHA256.HashDataAsync(stream));
+        if (!string.Equals(actual, entry.Sha256, StringComparison.OrdinalIgnoreCase))
+        {
+            Console.Error.WriteLine($"INTEGRITY_HASH_MISMATCH: {entry.Path}");
+            Environment.ExitCode = 3;
+            return;
+        }
+    }
+    Console.WriteLine("INTEGRITY_OK");
+    return;
+}
+
 if (command is "status" or "process" or "flush")
 {
     try
@@ -76,10 +110,7 @@ if (command is "create-test-policy" or "create-test-recovery")
     };
     var signature = key.SignData(CanonicalJson.SerializePayloadWithoutSignature(envelope), HashAlgorithmName.SHA256,
         DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
-    envelope = envelope with
-    {
-        Signature = envelope.Signature with { Value = Base64Url(signature) }
-    };
+    envelope = envelope with { Signature = envelope.Signature with { Value = Base64Url(signature) } };
 
     var output = Path.Combine(root, "Incoming", $"{policyId}.policy.json");
     await File.WriteAllTextAsync(output,
@@ -89,7 +120,7 @@ if (command is "create-test-policy" or "create-test-recovery")
     return;
 }
 
-Console.Error.WriteLine("Usage: sirkctl status|process|flush|create-test-policy|create-test-recovery");
+Console.Error.WriteLine("Usage: sirkctl status|process|flush|verify-integrity|create-test-policy|create-test-recovery");
 Environment.ExitCode = 2;
 
 static async Task<string> RunControlFileFallbackAsync(string command)
@@ -117,3 +148,6 @@ static async Task<string> RunControlFileFallbackAsync(string command)
 }
 
 static string Base64Url(byte[] value) => Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+sealed record IntegrityManifest(IReadOnlyList<IntegrityManifestEntry> Files);
+sealed record IntegrityManifestEntry(string Path, string Sha256);

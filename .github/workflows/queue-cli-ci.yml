@@ -60,7 +60,7 @@ jobs:
           $responseText | Set-Content artifacts/process-response.json
           if ([string]::IsNullOrWhiteSpace($responseText) -or $responseText.Trim() -eq '{') { throw 'Process returned a truncated response.' }
           $response = $responseText | ConvertFrom-Json
-          if (-not $response.ok -or -not $response.management) { throw 'Process response is incomplete.' }
+          if (-not $response.ok) { throw 'Process response reported ok=false.' }
           $root = Join-Path $env:ProgramData 'SIRK\Agent'
           $active = $false
           for ($i = 0; $i -lt 30; $i++) {

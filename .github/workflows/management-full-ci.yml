@@ -120,12 +120,19 @@ jobs:
           $root = Join-Path $env:ProgramData 'SIRK\Agent'
           Set-Content (Join-Path $root 'quarantine-state.bin') 'test-placeholder'
           Set-Content (Join-Path $root 'tamper-event-latest.json') '{}'
-          Start-Sleep -Seconds 2
           ./artifacts/SIRK-Agent-Runtime/sirkctl.exe create-test-recovery
-          Start-Sleep -Seconds 18
-          if (Test-Path (Join-Path $root 'quarantine-state.bin')) { throw 'Signed recovery did not archive quarantine state.' }
-          if (Test-Path (Join-Path $root 'tamper-event-latest.json')) { throw 'Signed recovery did not archive tamper event.' }
-          if (-not (Get-ChildItem (Join-Path $root 'Archive\Recovery') -ErrorAction SilentlyContinue)) { throw 'Recovery archive is empty.' }
+          ./artifacts/SIRK-Agent-Runtime/sirkctl.exe process
+          $recovered = $false
+          for ($i = 0; $i -lt 20; $i++) {
+            Start-Sleep -Seconds 1
+            if (-not (Test-Path (Join-Path $root 'quarantine-state.bin')) -and
+                -not (Test-Path (Join-Path $root 'tamper-event-latest.json')) -and
+                (Get-ChildItem (Join-Path $root 'Archive\Recovery') -ErrorAction SilentlyContinue)) {
+              $recovered = $true
+              break
+            }
+          }
+          if (-not $recovered) { throw 'Signed recovery did not archive quarantine and tamper state.' }
 
       - name: Validate integrity failure detection
         shell: pwsh

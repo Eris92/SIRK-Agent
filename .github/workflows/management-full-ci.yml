@@ -64,19 +64,30 @@ jobs:
           Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
           ./artifacts/SIRK-Agent-Runtime/Install-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent CI"
           (Get-Service SirkAgent).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))
-          Start-Sleep -Seconds 10
 
       - name: Validate complete local status and signed policy
         shell: pwsh
         run: |
           $root = Join-Path $env:ProgramData 'SIRK\Agent'
-          $statusText = ./artifacts/SIRK-Agent-Runtime/sirkctl.exe status | Out-String
+          $status = $null
+          $statusText = $null
+          for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep -Seconds 1
+            try {
+              $candidateText = ./artifacts/SIRK-Agent-Runtime/sirkctl.exe status | Out-String
+              if (-not [string]::IsNullOrWhiteSpace($candidateText) -and $candidateText.Trim() -ne '{}') {
+                $candidate = $candidateText | ConvertFrom-Json
+                if ($candidate.ok -and $candidate.management -and $candidate.heartbeat -and $candidate.security -and
+                    $candidate.management.integrityCode -eq 'INTEGRITY_OK') {
+                  $status = $candidate
+                  $statusText = $candidateText
+                  break
+                }
+              }
+            } catch { }
+          }
+          if (-not $status) { throw 'sirkctl status did not become complete and healthy within 30 seconds.' }
           $statusText | Set-Content artifacts/status.json
-          if ([string]::IsNullOrWhiteSpace($statusText) -or $statusText.Trim() -eq '{}') { throw 'sirkctl status returned an empty object.' }
-          $status = $statusText | ConvertFrom-Json
-          if (-not $status.ok) { throw 'sirkctl status reported ok=false.' }
-          if (-not $status.management -or -not $status.heartbeat -or -not $status.security) { throw 'sirkctl status is missing management, heartbeat or security data.' }
-          if ($status.management.integrityCode -ne 'INTEGRITY_OK') { throw "Unexpected status integrity: $($status.management.integrityCode)" }
           if ($status.heartbeat.tamperDetected -or $status.heartbeat.quarantineActive) { throw 'Status reports tamper or quarantine on clean startup.' }
           if ($status.security.overallHealth -ne 'Healthy') { throw "Agent Core health: $($status.security.overallHealth)" }
           ./artifacts/SIRK-Agent-Runtime/sirkctl.exe create-test-policy

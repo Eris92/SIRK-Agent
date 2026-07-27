@@ -7,6 +7,7 @@ namespace SirkAgent.Service.Core;
 internal sealed class DeviceIdentityStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly object InitializationLock = new();
 
     private readonly string _path;
     private readonly DpapiMachineStateProtector _protector;
@@ -22,6 +23,14 @@ internal sealed class DeviceIdentityStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
 
+        lock (InitializationLock)
+        {
+            return LoadOrCreateCore(tenantId);
+        }
+    }
+
+    private DeviceIdentity LoadOrCreateCore(string tenantId)
+    {
         if (!File.Exists(_path))
         {
             var created = DeviceIdentity.Create(tenantId);

@@ -1,0 +1,88 @@
+name: SIRK Agent Management Persistence CI
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - '.github/workflows/management-persistence-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  persistence-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish runtime
+        shell: pwsh
+        run: |
+          dotnet publish src/SirkAgent.Service/SirkAgent.Service.csproj -c Release -r win-x64 --self-contained false -o artifacts/runtime
+          dotnet publish src/SirkAgent.Cli/SirkAgent.Cli.csproj -c Release -r win-x64 --self-contained false -o artifacts/runtime
+          Copy-Item tools/package/*.ps1 artifacts/runtime/ -Force
+          $runtime = Resolve-Path artifacts/runtime
+          $protected = @('SirkAgent.Service.exe','SirkAgent.Service.dll','SirkAgent.Policy.dll','sirkctl.exe')
+          $files = foreach ($name in $protected) {
+            $path = Join-Path $runtime $name
+            @{ path = $name; sha256 = (Get-FileHash $path -Algorithm SHA256).Hash }
+          }
+          @{ files = $files } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $runtime 'integrity-manifest.json') -Encoding UTF8
+
+      - name: Install and activate policies
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:ProgramData 'SIRK\Agent'
+          Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
+          ./artifacts/runtime/Install-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent Persistence CI"
+          (Get-Service SirkAgent).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))
+          for ($i = 0; $i -lt 45 -and -not (Test-Path (Join-Path $root 'heartbeat-latest.json')); $i++) { Start-Sleep 1 }
+          if (-not (Test-Path (Join-Path $root 'heartbeat-latest.json'))) { throw 'Heartbeat was not created.' }
+          1..2 | ForEach-Object {
+            ./artifacts/runtime/sirkctl.exe create-test-policy | Out-Null
+            $response = (./artifacts/runtime/sirkctl.exe process | Out-String) | ConvertFrom-Json
+            if (-not $response.ok) { throw 'Policy processing failed.' }
+            Start-Sleep 2
+          }
+          $before = (./artifacts/runtime/sirkctl.exe status | Out-String) | ConvertFrom-Json
+          if ($before.management.acceptedPolicies -lt 2 -or [string]::IsNullOrWhiteSpace($before.management.lastPolicyId)) {
+            throw 'Management state did not record accepted policies before restart.'
+          }
+          $before | ConvertTo-Json -Depth 12 | Set-Content artifacts/before-restart.json
+
+      - name: Restart and verify persistence
+        shell: pwsh
+        run: |
+          Restart-Service SirkAgent -Force
+          (Get-Service SirkAgent).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))
+          $ready = $false
+          for ($i = 0; $i -lt 45; $i++) {
+            Start-Sleep 1
+            try {
+              $after = (./artifacts/runtime/sirkctl.exe status | Out-String) | ConvertFrom-Json
+              if ($after.management.acceptedPolicies -ge 2 -and -not [string]::IsNullOrWhiteSpace($after.management.lastPolicyId)) {
+                $ready = $true
+                break
+              }
+            } catch { }
+          }
+          if (-not $ready) { throw 'Management policy history was not restored after restart.' }
+          if (-not (Test-Path (Join-Path $env:ProgramData 'SIRK\Agent\active-policy.json'))) { throw 'Active policy was lost after restart.' }
+          $after | ConvertTo-Json -Depth 12 | Set-Content artifacts/after-restart.json
+
+      - name: Cleanup
+        if: always()
+        shell: pwsh
+        run: |
+          ./artifacts/runtime/Uninstall-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent Persistence CI" -Confirm:$false -ErrorAction SilentlyContinue
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: management-persistence-results
+          path: artifacts/*-restart.json
+          if-no-files-found: ignore

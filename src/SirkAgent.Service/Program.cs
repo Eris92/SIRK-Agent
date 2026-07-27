@@ -8,5 +8,6 @@ builder.Services.AddWindowsService(options =>
     options.ServiceName = "SIRK Agent";
 });
 builder.Services.AddHostedService<AgentWorker>();
+builder.Services.AddHostedService<ManagementWorker>();
 
 await builder.Build().RunAsync();

@@ -64,7 +64,9 @@ public static class PolicyHeartbeatFactory
         string? quarantineReason = null)
     {
         ArgumentNullException.ThrowIfNull(state);
-        var tamperDetected = !string.Equals(stateStatus, "OK", StringComparison.Ordinal);
+        var stateHealthy = string.Equals(stateStatus, "OK", StringComparison.Ordinal) ||
+                           string.Equals(stateStatus, "STATE_INITIALIZED", StringComparison.Ordinal);
+        var tamperDetected = !stateHealthy;
 
         return new PolicyHeartbeat
         {

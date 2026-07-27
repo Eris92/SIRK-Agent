@@ -1,0 +1,378 @@
+using System.IO.Pipes;
+using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using SirkAgent.Policy;
+using SirkAgent.Service.Core;
+
+namespace SirkAgent.Service;
+
+internal sealed class ManagementWorker : BackgroundService
+{
+    private const string TenantId = "investa";
+    private const string PipeName = "SIRK-Agent-Control";
+    private readonly ILogger<ManagementWorker> _logger;
+    private readonly JsonSerializerOptions _json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private readonly SemaphoreSlim _processLock = new(1, 1);
+
+    public ManagementWorker(ILogger<ManagementWorker> logger) => _logger = logger;
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        var paths = ManagementPaths.CreateDefault();
+        paths.EnsureDirectories();
+        var protector = new DpapiMachineStateProtector();
+        var identity = new DeviceIdentityStore(paths.DeviceIdentityPath, protector).LoadOrCreate(TenantId);
+        var queue = new TelemetryQueue(paths.TelemetryQueueDirectory, protector, 50L * 1024 * 1024, _json);
+
+        await WriteStateAsync(paths, new ManagementState(DateTimeOffset.UtcNow, "Starting", "MANAGEMENT_STARTING",
+            null, null, 0, 0, false, null), stoppingToken);
+
+        var pipeTask = RunPipeServerAsync(paths, queue, stoppingToken);
+        var timer = new PeriodicTimer(TimeSpan.FromSeconds(15));
+        try
+        {
+            await ProcessInboxAsync(paths, identity.DeviceId, stoppingToken);
+            await ValidateIntegrityAsync(paths, stoppingToken);
+            await FlushTelemetryAsync(paths, queue, stoppingToken);
+
+            while (await timer.WaitForNextTickAsync(stoppingToken))
+            {
+                await ProcessInboxAsync(paths, identity.DeviceId, stoppingToken);
+                await ValidateIntegrityAsync(paths, stoppingToken);
+                await FlushTelemetryAsync(paths, queue, stoppingToken);
+            }
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            timer.Dispose();
+            try { await pipeTask; } catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
+        }
+    }
+
+    private async Task ProcessInboxAsync(ManagementPaths paths, string deviceId, CancellationToken token)
+    {
+        if (!await _processLock.WaitAsync(0, token))
+            return;
+
+        try
+        {
+            var keyProvider = JsonPolicyKeyProvider.Load(paths.TrustedKeysPath, _json);
+            var validator = new PolicyValidator(keyProvider);
+            var protector = new DpapiMachineStateProtector();
+            var store = new FilePolicyStateStore(paths.PolicyStatePath, protector);
+            var state = new PolicyStateHealthChecker(paths.PolicyStatePath, store).Check().State ?? PolicyState.Empty;
+            var accepted = 0;
+            var rejected = 0;
+            string? lastPolicyId = null;
+            string? lastError = null;
+
+            foreach (var file in Directory.EnumerateFiles(paths.InboxDirectory, "*.policy.json")
+                         .OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    var envelope = JsonSerializer.Deserialize<PolicyEnvelope>(await File.ReadAllBytesAsync(file, token), _json)
+                        ?? throw new InvalidDataException("Policy envelope deserialized to null.");
+                    var context = new PolicyValidationContext(TenantId, deviceId, state.Epoch, state.Version,
+                        DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5), state.SeenNonces.ToHashSet(StringComparer.Ordinal));
+                    var validation = validator.Validate(envelope, context);
+                    if (!validation.IsValid)
+                        throw new PolicyRejectedException(validation.Code, validation.Message);
+
+                    var hash = Convert.ToHexString(SHA256.HashData(CanonicalJson.SerializePayloadWithoutSignature(envelope)));
+                    var nonces = state.SeenNonces.Concat(new[] { envelope.Nonce }).TakeLast(128).ToArray();
+                    state = new PolicyState
+                    {
+                        Epoch = envelope.Epoch,
+                        Version = envelope.Version,
+                        ActivePolicyHash = hash,
+                        ActivePolicyId = envelope.PolicyId,
+                        ActiveCaseId = envelope.CaseId,
+                        AcceptedAtUtc = DateTimeOffset.UtcNow,
+                        SeenNonces = nonces
+                    };
+                    store.Save(state);
+                    AtomicFile.WriteJson(paths.ActivePolicyPath, envelope, _json);
+                    lastPolicyId = envelope.PolicyId;
+                    accepted++;
+
+                    if (envelope.Mode == AgentMode.Emergency && TryGetSetting(envelope, "recoveryAction", out var action) &&
+                        string.Equals(action, "clearQuarantine", StringComparison.OrdinalIgnoreCase))
+                    {
+                        ArchiveIfExists(paths.QuarantineProtectedPath, paths.RecoveryArchiveDirectory);
+                        ArchiveIfExists(paths.QuarantineStatusPath, paths.RecoveryArchiveDirectory);
+                        ArchiveIfExists(paths.TamperEventPath, paths.RecoveryArchiveDirectory);
+                    }
+
+                    MoveWithResult(file, paths.AcceptedDirectory, "accepted");
+                }
+                catch (Exception ex)
+                {
+                    rejected++;
+                    lastError = ex.Message;
+                    MoveWithResult(file, paths.RejectedDirectory, "rejected");
+                    await File.WriteAllTextAsync(Path.Combine(paths.RejectedDirectory,
+                        $"{Path.GetFileName(file)}.{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}.error.txt"), ex.ToString(), token);
+                }
+            }
+
+            var current = await ReadStateAsync(paths, token);
+            await WriteStateAsync(paths, current with
+            {
+                TimestampUtc = DateTimeOffset.UtcNow,
+                Status = rejected > 0 ? "Warning" : "Healthy",
+                Code = rejected > 0 ? "POLICY_REJECTED" : accepted > 0 ? "POLICY_ACCEPTED" : "POLICY_INBOX_IDLE",
+                LastPolicyId = lastPolicyId ?? current.LastPolicyId,
+                LastError = lastError,
+                AcceptedPolicies = current.AcceptedPolicies + accepted,
+                RejectedPolicies = current.RejectedPolicies + rejected
+            }, token);
+        }
+        finally
+        {
+            _processLock.Release();
+        }
+    }
+
+    private async Task ValidateIntegrityAsync(ManagementPaths paths, CancellationToken token)
+    {
+        var current = await ReadStateAsync(paths, token);
+        if (!File.Exists(paths.IntegrityManifestPath))
+        {
+            await WriteStateAsync(paths, current with
+            {
+                TimestampUtc = DateTimeOffset.UtcNow,
+                IntegrityVerified = false,
+                IntegrityCode = "INTEGRITY_MANIFEST_MISSING"
+            }, token);
+            return;
+        }
+
+        try
+        {
+            var manifest = JsonSerializer.Deserialize<IntegrityManifest>(await File.ReadAllBytesAsync(paths.IntegrityManifestPath, token), _json)
+                ?? throw new InvalidDataException("Integrity manifest deserialized to null.");
+            foreach (var entry in manifest.Files)
+            {
+                var path = Path.Combine(AppContext.BaseDirectory, entry.Path);
+                if (!File.Exists(path))
+                    throw new InvalidDataException($"Missing protected file: {entry.Path}");
+                var actual = Convert.ToHexString(await SHA256.HashDataAsync(File.OpenRead(path), token));
+                if (!string.Equals(actual, entry.Sha256, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException($"Hash mismatch: {entry.Path}");
+            }
+
+            await WriteStateAsync(paths, current with
+            {
+                TimestampUtc = DateTimeOffset.UtcNow,
+                IntegrityVerified = true,
+                IntegrityCode = "INTEGRITY_OK"
+            }, token);
+        }
+        catch (Exception ex)
+        {
+            await WriteStateAsync(paths, current with
+            {
+                TimestampUtc = DateTimeOffset.UtcNow,
+                Status = "Critical",
+                Code = "INTEGRITY_FAILED",
+                IntegrityVerified = false,
+                IntegrityCode = ex.Message,
+                LastError = ex.ToString()
+            }, token);
+        }
+    }
+
+    private async Task FlushTelemetryAsync(ManagementPaths paths, TelemetryQueue queue, CancellationToken token)
+    {
+        if (!File.Exists(paths.ManagementConfigPath))
+            return;
+        var config = JsonSerializer.Deserialize<ManagementConfig>(await File.ReadAllBytesAsync(paths.ManagementConfigPath, token), _json);
+        if (config is null || !config.Enabled || string.IsNullOrWhiteSpace(config.TelemetryEndpoint))
+            return;
+
+        var items = queue.ReadReady(Math.Clamp(config.BatchSize, 1, 100), DateTimeOffset.UtcNow);
+        if (items.Count == 0)
+            return;
+
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(Math.Clamp(config.TimeoutSeconds, 5, 120)) };
+        if (!string.IsNullOrWhiteSpace(config.BearerToken))
+            client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", config.BearerToken);
+
+        try
+        {
+            using var response = await client.PostAsJsonAsync(config.TelemetryEndpoint,
+                new { device = Environment.MachineName, events = items.Select(x => x.Envelope).ToArray() }, _json, token);
+            response.EnsureSuccessStatusCode();
+            foreach (var item in items)
+                queue.Complete(item);
+        }
+        catch (Exception ex)
+        {
+            var delay = TimeSpan.FromSeconds(Math.Min(3600, Math.Pow(2, Math.Min(10, items.Max(x => x.Envelope.Attempt) + 1)) * 15));
+            foreach (var item in items)
+                queue.Retry(item, DateTimeOffset.UtcNow + delay);
+            _logger.LogWarning(ex, "Telemetry delivery failed; retry scheduled after {Delay}.", delay);
+        }
+    }
+
+    private async Task RunPipeServerAsync(ManagementPaths paths, TelemetryQueue queue, CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            await using var pipe = new NamedPipeServerStream(PipeName, PipeDirection.InOut, 1,
+                PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+            await pipe.WaitForConnectionAsync(token);
+            using var reader = new StreamReader(pipe, Encoding.UTF8, false, 4096, leaveOpen: true);
+            await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, leaveOpen: true) { AutoFlush = true };
+            var command = (await reader.ReadLineAsync(token))?.Trim().ToLowerInvariant();
+            object response = command switch
+            {
+                "status" => new { ok = true, management = await ReadStateAsync(paths, token), heartbeat = ReadJson(paths.HeartbeatPath) },
+                "process" => await ProcessCommandAsync(paths, token),
+                "flush" => await FlushCommandAsync(paths, queue, token),
+                _ => new { ok = false, error = "Supported commands: status, process, flush." }
+            };
+            await writer.WriteLineAsync(JsonSerializer.Serialize(response, _json));
+        }
+    }
+
+    private async Task<object> ProcessCommandAsync(ManagementPaths paths, CancellationToken token)
+    {
+        var identity = new DeviceIdentityStore(paths.DeviceIdentityPath, new DpapiMachineStateProtector()).LoadOrCreate(TenantId);
+        await ProcessInboxAsync(paths, identity.DeviceId, token);
+        return new { ok = true, management = await ReadStateAsync(paths, token) };
+    }
+
+    private async Task<object> FlushCommandAsync(ManagementPaths paths, TelemetryQueue queue, CancellationToken token)
+    {
+        await FlushTelemetryAsync(paths, queue, token);
+        return new { ok = true, queuedFiles = queue.SnapshotFiles().Count, queuedBytes = queue.TotalBytes() };
+    }
+
+    private async Task<ManagementState> ReadStateAsync(ManagementPaths paths, CancellationToken token)
+    {
+        if (!File.Exists(paths.ManagementStatePath))
+            return new ManagementState(DateTimeOffset.UtcNow, "Starting", "MANAGEMENT_STARTING", null, null, 0, 0, false, null);
+        return JsonSerializer.Deserialize<ManagementState>(await File.ReadAllBytesAsync(paths.ManagementStatePath, token), _json)
+               ?? new ManagementState(DateTimeOffset.UtcNow, "Warning", "MANAGEMENT_STATE_INVALID", null, null, 0, 0, false, null);
+    }
+
+    private Task WriteStateAsync(ManagementPaths paths, ManagementState state, CancellationToken token)
+    {
+        AtomicFile.WriteJson(paths.ManagementStatePath, state, _json);
+        return Task.CompletedTask;
+    }
+
+    private static JsonElement? ReadJson(string path)
+    {
+        if (!File.Exists(path)) return null;
+        using var doc = JsonDocument.Parse(File.ReadAllBytes(path));
+        return doc.RootElement.Clone();
+    }
+
+    private static bool TryGetSetting(PolicyEnvelope envelope, string name, out string? value)
+    {
+        value = null;
+        if (!envelope.Settings.TryGetValue(name, out var raw) || raw is null) return false;
+        if (raw is JsonElement element)
+        {
+            value = element.ValueKind == JsonValueKind.String ? element.GetString() : element.ToString();
+            return true;
+        }
+        value = Convert.ToString(raw, System.Globalization.CultureInfo.InvariantCulture);
+        return true;
+    }
+
+    private static void ArchiveIfExists(string path, string archiveDirectory)
+    {
+        if (!File.Exists(path)) return;
+        Directory.CreateDirectory(archiveDirectory);
+        File.Move(path, Path.Combine(archiveDirectory,
+            $"{Path.GetFileName(path)}.{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}.bak"), overwrite: false);
+    }
+
+    private static void MoveWithResult(string source, string directory, string suffix)
+    {
+        Directory.CreateDirectory(directory);
+        File.Move(source, Path.Combine(directory,
+            $"{Path.GetFileNameWithoutExtension(source)}.{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}.{suffix}.json"), overwrite: false);
+    }
+
+    private sealed class PolicyRejectedException : Exception
+    {
+        public PolicyRejectedException(string code, string message) : base($"{code}: {message}") { }
+    }
+}
+
+internal sealed record ManagementState(DateTimeOffset TimestampUtc, string Status, string Code,
+    string? LastPolicyId, string? LastError, long AcceptedPolicies, long RejectedPolicies,
+    bool IntegrityVerified, string? IntegrityCode);
+
+internal sealed record ManagementConfig(bool Enabled, string? TelemetryEndpoint, string? BearerToken,
+    int BatchSize = 25, int TimeoutSeconds = 30);
+internal sealed record IntegrityManifest(IReadOnlyList<IntegrityManifestEntry> Files);
+internal sealed record IntegrityManifestEntry(string Path, string Sha256);
+
+internal sealed record ManagementPaths(string Root, string InboxDirectory, string AcceptedDirectory,
+    string RejectedDirectory, string RecoveryArchiveDirectory, string TrustedKeysPath,
+    string ManagementConfigPath, string ManagementStatePath, string ActivePolicyPath,
+    string IntegrityManifestPath, string PolicyStatePath, string DeviceIdentityPath,
+    string TelemetryQueueDirectory, string HeartbeatPath, string QuarantineProtectedPath,
+    string QuarantineStatusPath, string TamperEventPath)
+{
+    public static ManagementPaths CreateDefault()
+    {
+        var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SIRK", "Agent");
+        return new ManagementPaths(root, Path.Combine(root, "Incoming"), Path.Combine(root, "Archive", "Accepted"),
+            Path.Combine(root, "Archive", "Rejected"), Path.Combine(root, "Archive", "Recovery"),
+            Path.Combine(root, "trusted-keys.json"), Path.Combine(root, "management.json"),
+            Path.Combine(root, "management-state.json"), Path.Combine(root, "active-policy.json"),
+            Path.Combine(AppContext.BaseDirectory, "integrity-manifest.json"), Path.Combine(root, "policy-state.bin"),
+            Path.Combine(root, "device-identity.bin"), Path.Combine(root, "TelemetryQueue"),
+            Path.Combine(root, "heartbeat-latest.json"), Path.Combine(root, "quarantine-state.bin"),
+            Path.Combine(root, "quarantine-status.json"), Path.Combine(root, "tamper-event-latest.json"));
+    }
+
+    public void EnsureDirectories()
+    {
+        Directory.CreateDirectory(Root);
+        Directory.CreateDirectory(InboxDirectory);
+        Directory.CreateDirectory(AcceptedDirectory);
+        Directory.CreateDirectory(RejectedDirectory);
+        Directory.CreateDirectory(RecoveryArchiveDirectory);
+        Directory.CreateDirectory(TelemetryQueueDirectory);
+    }
+}
+
+internal sealed class JsonPolicyKeyProvider : IPolicyPublicKeyProvider
+{
+    private readonly IReadOnlyDictionary<string, string> _keys;
+    private JsonPolicyKeyProvider(IReadOnlyDictionary<string, string> keys) => _keys = keys;
+
+    public static JsonPolicyKeyProvider Load(string path, JsonSerializerOptions options)
+    {
+        if (!File.Exists(path)) return new JsonPolicyKeyProvider(new Dictionary<string, string>());
+        var document = JsonSerializer.Deserialize<TrustedKeyDocument>(File.ReadAllBytes(path), options)
+                       ?? new TrustedKeyDocument(Array.Empty<TrustedKeyEntry>());
+        return new JsonPolicyKeyProvider(document.Keys.ToDictionary(x => x.KeyId, x => x.PublicKeyPem, StringComparer.Ordinal));
+    }
+
+    public ECDsa? GetKey(string keyId)
+    {
+        if (!_keys.TryGetValue(keyId, out var pem)) return null;
+        var key = ECDsa.Create();
+        key.ImportFromPem(pem);
+        return key;
+    }
+}
+
+internal sealed record TrustedKeyDocument(IReadOnlyList<TrustedKeyEntry> Keys);
+internal sealed record TrustedKeyEntry(string KeyId, string PublicKeyPem);

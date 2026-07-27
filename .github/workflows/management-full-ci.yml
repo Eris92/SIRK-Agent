@@ -25,7 +25,7 @@ jobs:
       - name: Publish runtime reporter and CLI
         shell: pwsh
         run: |
-          dotnet publish src/SirkAgent.Service/SirkAgent.Service.csproj -c Release -r win-x64 --self-contained false -p:InformationalVersion=0.3.0-test+${{ github.sha }} -o artifacts/SIRK-Agent-Runtime
+          dotnet publish src/SirkAgent.Service/SirkAgent.Service.csproj -c Release -r win-x64 --self-contained false -p:InformationalVersion=0.3.1-test+${{ github.sha }} -o artifacts/SIRK-Agent-Runtime
           dotnet publish src/SirkAgent.Report/SirkAgent.Report.csproj -c Release -r win-x64 --self-contained false -o artifacts/SIRK-Agent-Runtime
           dotnet publish src/SirkAgent.Cli/SirkAgent.Cli.csproj -c Release -r win-x64 --self-contained false -o artifacts/SIRK-Agent-Runtime
           Copy-Item tools/package/*.ps1 artifacts/SIRK-Agent-Runtime/ -Force
@@ -41,7 +41,7 @@ jobs:
             @{ path = $name; sha256 = (Get-FileHash $path -Algorithm SHA256).Hash }
           }
           @{ files = $files } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $runtime 'integrity-manifest.json') -Encoding UTF8
-          @{ product='SIRK Agent'; version='0.3.0-test'; commit='${{ github.sha }}'; runtime='win-x64'; requiredRuntime='.NET 8 x64' } | ConvertTo-Json | Set-Content (Join-Path $runtime 'build-manifest.json') -Encoding UTF8
+          @{ product='SIRK Agent'; version='0.3.1-test'; commit='${{ github.sha }}'; runtime='win-x64'; requiredRuntime='.NET 8 x64' } | ConvertTo-Json | Set-Content (Join-Path $runtime 'build-manifest.json') -Encoding UTF8
           '@echo off
           cd /d "%~dp0"
           sirkctl.exe status
@@ -77,11 +77,17 @@ jobs:
           (Get-Service SirkAgent).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))
           Start-Sleep -Seconds 5
 
-      - name: Validate local CLI and signed policy
+      - name: Validate complete local status and signed policy
         shell: pwsh
         run: |
           $root = Join-Path $env:ProgramData 'SIRK\Agent'
-          ./artifacts/SIRK-Agent-Runtime/sirkctl.exe status | Set-Content artifacts/status.json
+          $statusText = ./artifacts/SIRK-Agent-Runtime/sirkctl.exe status | Out-String
+          $statusText | Set-Content artifacts/status.json
+          if ([string]::IsNullOrWhiteSpace($statusText) -or $statusText.Trim() -eq '{}') { throw 'sirkctl status returned an empty object.' }
+          $status = $statusText | ConvertFrom-Json
+          if (-not $status.ok) { throw 'sirkctl status reported ok=false.' }
+          if (-not $status.management -or -not $status.heartbeat -or -not $status.security) { throw 'sirkctl status is missing management, heartbeat or security data.' }
+          if ($status.management.integrityCode -ne 'INTEGRITY_OK') { throw "Unexpected status integrity: $($status.management.integrityCode)" }
           ./artifacts/SIRK-Agent-Runtime/sirkctl.exe create-test-policy
           ./artifacts/SIRK-Agent-Runtime/sirkctl.exe process
           Start-Sleep -Seconds 18
@@ -158,13 +164,13 @@ jobs:
         shell: pwsh
         run: |
           ./artifacts/SIRK-Agent-Runtime/Uninstall-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent CI" -Confirm:$false
-          Compress-Archive -Path artifacts/SIRK-Agent-Runtime/* -DestinationPath artifacts/SIRK-Agent-0.3.0-test-win-x64.zip -CompressionLevel Optimal -Force
+          Compress-Archive -Path artifacts/SIRK-Agent-Runtime/* -DestinationPath artifacts/SIRK-Agent-0.3.1-test-win-x64.zip -CompressionLevel Optimal -Force
 
       - uses: actions/upload-artifact@v4
         with:
-          name: SIRK-Agent-0.3.0-test-win-x64
+          name: SIRK-Agent-0.3.1-test-win-x64
           path: |
-            artifacts/SIRK-Agent-0.3.0-test-win-x64.zip
+            artifacts/SIRK-Agent-0.3.1-test-win-x64.zip
             artifacts/SIRK-Agent-Runtime/**
             artifacts/TestBundles/*.zip
           if-no-files-found: error

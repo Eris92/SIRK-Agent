@@ -39,6 +39,15 @@ public sealed record PolicyHeartbeat
 
     [JsonPropertyName("trigger")]
     public required string Trigger { get; init; }
+
+    [JsonPropertyName("quarantineActive")]
+    public required bool QuarantineActive { get; init; }
+
+    [JsonPropertyName("quarantineSinceUtc")]
+    public DateTimeOffset? QuarantineSinceUtc { get; init; }
+
+    [JsonPropertyName("quarantineReason")]
+    public string? QuarantineReason { get; init; }
 }
 
 public static class PolicyHeartbeatFactory
@@ -49,10 +58,12 @@ public static class PolicyHeartbeatFactory
         string deviceId,
         DateTimeOffset timestampUtc,
         string stateStatus = "OK",
-        string trigger = "Interval")
+        string trigger = "Interval",
+        bool quarantineActive = false,
+        DateTimeOffset? quarantineSinceUtc = null,
+        string? quarantineReason = null)
     {
         ArgumentNullException.ThrowIfNull(state);
-
         var tamperDetected = !string.Equals(stateStatus, "OK", StringComparison.Ordinal);
 
         return new PolicyHeartbeat
@@ -68,7 +79,10 @@ public static class PolicyHeartbeatFactory
             StateStatus = stateStatus,
             TamperDetected = tamperDetected,
             TamperReason = tamperDetected ? stateStatus : null,
-            Trigger = trigger
+            Trigger = trigger,
+            QuarantineActive = quarantineActive,
+            QuarantineSinceUtc = quarantineSinceUtc,
+            QuarantineReason = quarantineReason
         };
     }
 }

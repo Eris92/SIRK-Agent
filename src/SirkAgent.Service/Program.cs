@@ -16,7 +16,7 @@ Console.WriteLine("SIRK Agent Runtime");
 Console.WriteLine($"Device:    {deviceId}");
 Console.WriteLine($"State:     {statePath}");
 Console.WriteLine($"Heartbeat: {heartbeatPath}");
-Console.WriteLine(runOnce ? "Mode:      once" : $"Mode:      loop ({interval.TotalSeconds:0}s)");
+Console.WriteLine(runOnce ? "Mode:      once" : $"Mode:      loop ({interval.TotalSeconds:0}s + watcher)");
 
 var store = new FilePolicyStateStore(statePath, new DpapiMachineStateProtector());
 var checker = new PolicyStateHealthChecker(statePath, store);
@@ -29,8 +29,42 @@ Console.CancelKeyPress += (_, eventArgs) =>
     cancellation.Cancel();
 };
 
+using var changeSignal = new SemaphoreSlim(0, 1);
+using var watcher = new FileSystemWatcher(agentDirectory, Path.GetFileName(statePath))
+{
+    NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.CreationTime,
+    IncludeSubdirectories = false,
+    EnableRaisingEvents = !runOnce
+};
+
+void SignalStateChange(string changeType)
+{
+    Console.WriteLine($"{DateTimeOffset.UtcNow:O} watcher={changeType}");
+    if (changeSignal.CurrentCount == 0)
+        changeSignal.Release();
+}
+
+watcher.Changed += (_, _) => SignalStateChange("Changed");
+watcher.Created += (_, _) => SignalStateChange("Created");
+watcher.Deleted += (_, _) => SignalStateChange("Deleted");
+watcher.Renamed += (_, _) => SignalStateChange("Renamed");
+watcher.Error += (_, eventArgs) => SignalStateChange("WatcherError:" + eventArgs.GetException().GetType().Name);
+
+var trigger = "Startup";
 while (!cancellation.IsCancellationRequested)
 {
+    if (string.Equals(trigger, "FileSystemWatcher", StringComparison.Ordinal))
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(350), cancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            break;
+        }
+    }
+
     var timestamp = DateTimeOffset.UtcNow;
     var health = checker.Check();
     var state = health.State ?? PolicyState.Empty;
@@ -40,19 +74,30 @@ while (!cancellation.IsCancellationRequested)
         tenantId,
         deviceId,
         timestamp,
-        health.Code);
+        health.Code,
+        trigger);
 
     WriteAtomically(heartbeatPath, JsonSerializer.SerializeToUtf8Bytes(heartbeat, jsonOptions));
-    AppendEvent(eventLogPath, new AgentEvent(timestamp, health.Code, health.Message, state.ActivePolicyId, state.ActivePolicyHash));
+    AppendEvent(eventLogPath, new AgentEvent(
+        timestamp,
+        trigger,
+        health.Code,
+        health.Message,
+        !health.IsHealthy,
+        state.ActivePolicyId,
+        state.ActivePolicyHash));
 
-    Console.WriteLine($"{timestamp:O} heartbeat={health.Code} policy={state.ActivePolicyId ?? "none"} version={state.Version}");
+    Console.WriteLine($"{timestamp:O} trigger={trigger} heartbeat={health.Code} tamper={!health.IsHealthy} policy={state.ActivePolicyId ?? "none"} version={state.Version}");
 
     if (runOnce)
         break;
 
     try
     {
-        await Task.Delay(interval, cancellation.Token);
+        var delayTask = Task.Delay(interval, cancellation.Token);
+        var signalTask = changeSignal.WaitAsync(cancellation.Token);
+        var completed = await Task.WhenAny(delayTask, signalTask);
+        trigger = completed == signalTask ? "FileSystemWatcher" : "Interval";
     }
     catch (OperationCanceledException)
     {
@@ -77,7 +122,9 @@ static void AppendEvent(string path, AgentEvent agentEvent)
 
 internal sealed record AgentEvent(
     DateTimeOffset TimestampUtc,
+    string Trigger,
     string Code,
     string Message,
+    bool TamperDetected,
     string? ActivePolicyId,
     string? ActivePolicyHash);

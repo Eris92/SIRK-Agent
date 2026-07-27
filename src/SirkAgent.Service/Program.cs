@@ -19,7 +19,7 @@ Console.WriteLine($"Heartbeat: {heartbeatPath}");
 Console.WriteLine(runOnce ? "Mode:      once" : $"Mode:      loop ({interval.TotalSeconds:0}s)");
 
 var store = new FilePolicyStateStore(statePath, new DpapiMachineStateProtector());
-var monitor = new PolicyStateHealthMonitor(store, statePath);
+var checker = new PolicyStateHealthChecker(statePath, store);
 var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
 
 using var cancellation = new CancellationTokenSource();
@@ -32,18 +32,8 @@ Console.CancelKeyPress += (_, eventArgs) =>
 while (!cancellation.IsCancellationRequested)
 {
     var timestamp = DateTimeOffset.UtcNow;
-    var health = monitor.Check();
-    PolicyState state;
-
-    try
-    {
-        state = health.IsHealthy ? store.Load() : PolicyState.Empty;
-    }
-    catch (Exception exception)
-    {
-        health = new PolicyStateHealthResult(false, "STATE_LOAD_FAILED", exception.Message);
-        state = PolicyState.Empty;
-    }
+    var health = checker.Check();
+    var state = health.State ?? PolicyState.Empty;
 
     var heartbeat = PolicyHeartbeatFactory.Create(
         state,

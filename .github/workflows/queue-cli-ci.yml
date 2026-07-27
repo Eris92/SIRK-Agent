@@ -1,0 +1,102 @@
+name: SIRK Agent Queue CLI CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tools/**'
+      - '.github/workflows/queue-cli-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  queue-cli-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish 0.3.2 runtime
+        shell: pwsh
+        run: |
+          dotnet publish src/SirkAgent.Service/SirkAgent.Service.csproj -c Release -r win-x64 --self-contained false -p:InformationalVersion=0.3.2-test+${{ github.sha }} -o artifacts/SIRK-Agent-Runtime
+          dotnet publish src/SirkAgent.Report/SirkAgent.Report.csproj -c Release -r win-x64 --self-contained false -o artifacts/SIRK-Agent-Runtime
+          dotnet publish src/SirkAgent.Cli/SirkAgent.Cli.csproj -c Release -r win-x64 --self-contained false -o artifacts/SIRK-Agent-Runtime
+          Copy-Item tools/package/*.ps1 artifacts/SIRK-Agent-Runtime/ -Force
+          $runtime = Resolve-Path artifacts/SIRK-Agent-Runtime
+          $protected = @('SirkAgent.Service.exe','SirkAgent.Service.dll','SirkAgent.Policy.dll','SirkAgent.Report.exe','sirkctl.exe')
+          $files = foreach ($name in $protected) {
+            $path = Join-Path $runtime $name
+            @{ path = $name; sha256 = (Get-FileHash $path -Algorithm SHA256).Hash }
+          }
+          @{ files = $files } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $runtime 'integrity-manifest.json') -Encoding UTF8
+          @{ product='SIRK Agent'; version='0.3.2-test'; commit='${{ github.sha }}'; runtime='win-x64'; requiredRuntime='.NET 8 x64' } | ConvertTo-Json | Set-Content (Join-Path $runtime 'build-manifest.json') -Encoding UTF8
+
+      - name: Install service and wait for heartbeat
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:ProgramData 'SIRK\Agent'
+          Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
+          ./artifacts/SIRK-Agent-Runtime/Install-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent Queue CI"
+          (Get-Service SirkAgent).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))
+          $ready = $false
+          for ($i = 0; $i -lt 45; $i++) {
+            Start-Sleep -Seconds 1
+            if (Test-Path (Join-Path $root 'heartbeat-latest.json')) { $ready = $true; break }
+          }
+          if (-not $ready) { throw 'Heartbeat was not created.' }
+
+      - name: Validate complete process response
+        shell: pwsh
+        run: |
+          ./artifacts/SIRK-Agent-Runtime/sirkctl.exe create-test-policy | Out-Null
+          $responseText = ./artifacts/SIRK-Agent-Runtime/sirkctl.exe process | Out-String
+          $responseText | Set-Content artifacts/process-response.json
+          if ([string]::IsNullOrWhiteSpace($responseText) -or $responseText.Trim() -eq '{') { throw 'Process returned a truncated response.' }
+          $response = $responseText | ConvertFrom-Json
+          if (-not $response.ok -or -not $response.management) { throw 'Process response is incomplete.' }
+          $root = Join-Path $env:ProgramData 'SIRK\Agent'
+          $active = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep -Seconds 1
+            if (Test-Path (Join-Path $root 'active-policy.json')) { $active = $true; break }
+          }
+          if (-not $active) { throw 'Policy was not activated.' }
+
+      - name: Validate telemetry queue commands and throttling
+        shell: pwsh
+        run: |
+          $beforeText = ./artifacts/SIRK-Agent-Runtime/sirkctl.exe queue-status | Out-String
+          $before = $beforeText | ConvertFrom-Json
+          if (-not $before.ok -or $before.queuedFiles -lt 0 -or $before.retention.maxFiles -ne 5000 -or $before.retention.maxAgeDays -ne 14) { throw 'queue-status returned invalid data.' }
+          Start-Sleep -Seconds 65
+          $after = (./artifacts/SIRK-Agent-Runtime/sirkctl.exe queue-status | Out-String) | ConvertFrom-Json
+          if (($after.queuedFiles - $before.queuedFiles) -gt 2) { throw "Normal cycle telemetry was not throttled. Queue growth: $($after.queuedFiles - $before.queuedFiles)" }
+          $refused = Start-Process -FilePath ./artifacts/SIRK-Agent-Runtime/sirkctl.exe -ArgumentList 'queue-clear-test' -Wait -PassThru -NoNewWindow
+          if ($refused.ExitCode -eq 0) { throw 'Queue clear did not require explicit confirmation.' }
+          $clearText = ./artifacts/SIRK-Agent-Runtime/sirkctl.exe queue-clear-test --confirm-test-clear | Out-String
+          $clear = $clearText | ConvertFrom-Json
+          if (-not $clear.ok) { throw 'Confirmed test queue clear failed.' }
+          $empty = (./artifacts/SIRK-Agent-Runtime/sirkctl.exe queue-status | Out-String) | ConvertFrom-Json
+          if ($empty.queuedFiles -ne 0) { throw 'Telemetry queue is not empty after confirmed test clear.' }
+
+      - name: Uninstall and package
+        shell: pwsh
+        run: |
+          ./artifacts/SIRK-Agent-Runtime/Uninstall-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent Queue CI" -Confirm:$false
+          Compress-Archive -Path artifacts/SIRK-Agent-Runtime/* -DestinationPath artifacts/SIRK-Agent-0.3.2-test-win-x64.zip -CompressionLevel Optimal -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SIRK-Agent-0.3.2-test-win-x64
+          path: |
+            artifacts/SIRK-Agent-0.3.2-test-win-x64.zip
+            artifacts/SIRK-Agent-Runtime/**
+            artifacts/process-response.json
+          if-no-files-found: error

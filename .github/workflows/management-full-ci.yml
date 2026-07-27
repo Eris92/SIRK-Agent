@@ -61,12 +61,23 @@ jobs:
         shell: pwsh
         run: |
           $root = Join-Path $env:ProgramData 'SIRK\Agent'
+          $statePath = Join-Path $root 'management-state.json'
           Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
           $process = Start-Process ./artifacts/SIRK-Agent-Runtime/SirkAgent.Service.exe -PassThru
           try {
-            Start-Sleep -Seconds 6
-            $management = Get-Content (Join-Path $root 'management-state.json') -Raw | ConvertFrom-Json
-            if ($management.integrityCode -ne 'INTEGRITY_OK') { throw "Integrity status: $($management.integrityCode)" }
+            $ready = $false
+            $management = $null
+            for ($i = 0; $i -lt 30; $i++) {
+              Start-Sleep -Seconds 1
+              if (Test-Path $statePath) {
+                try {
+                  $management = Get-Content $statePath -Raw | ConvertFrom-Json
+                  if ($management.integrityCode -eq 'INTEGRITY_OK') { $ready = $true; break }
+                } catch { }
+              }
+              if ($process.HasExited) { throw "Agent exited during clean startup with code $($process.ExitCode)." }
+            }
+            if (-not $ready) { throw "Management startup did not become ready. Last state: $($management | ConvertTo-Json -Compress)" }
             if (-not (Test-Path (Join-Path $root 'Incoming'))) { throw 'Policy inbox was not created.' }
           }
           finally {

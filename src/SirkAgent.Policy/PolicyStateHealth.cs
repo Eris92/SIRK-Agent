@@ -37,8 +37,12 @@ public sealed class PolicyStateHealthChecker
     {
         try
         {
+            var initialized = false;
             if (!File.Exists(_path))
-                return new(PolicyStateHealthStatus.Missing, null, "STATE_MISSING", "Policy state file does not exist.");
+            {
+                _store.Save(PolicyState.Empty);
+                initialized = true;
+            }
 
             var info = new FileInfo(_path);
             if (info.Length == 0)
@@ -51,7 +55,9 @@ public sealed class PolicyStateHealthChecker
             if (state.Version > 0 && string.IsNullOrWhiteSpace(state.ActivePolicyHash))
                 return new(PolicyStateHealthStatus.Corrupt, null, "STATE_HASH_MISSING", "Accepted policy state has no active policy hash.");
 
-            return new(PolicyStateHealthStatus.Ok, state, "OK", "Policy state is healthy.");
+            return initialized
+                ? new(PolicyStateHealthStatus.Ok, state, "STATE_INITIALIZED", "A new DPAPI-protected empty policy state was initialized.")
+                : new(PolicyStateHealthStatus.Ok, state, "OK", "Policy state is healthy.");
         }
         catch (System.Security.Cryptography.CryptographicException ex)
         {

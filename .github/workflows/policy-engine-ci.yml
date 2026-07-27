@@ -24,7 +24,7 @@ jobs:
         with:
           dotnet-version: '8.0.x'
       - name: Publish Windows test harness
-        run: dotnet publish tools/SirkAgent.Policy.TestHarness/SirkAgent.Policy.TestHarness.csproj --configuration Release --runtime win-x64 --self-contained true --output artifacts/SIRK-Agent-Policy-Test
+        run: dotnet publish tools/SirkAgent.Policy.TestHarness/SirkAgent.Policy.TestHarness.csproj --configuration Release --runtime win-x64 --self-contained false -p:PublishSingleFile=false -p:PublishTrimmed=false --output artifacts/SIRK-Agent-Policy-Test
       - name: Run test harness
         shell: pwsh
         run: ./artifacts/SIRK-Agent-Policy-Test/SirkAgent.Policy.TestHarness.exe
@@ -33,12 +33,20 @@ jobs:
         run: |
           '@echo off
           cd /d "%~dp0"
+          dotnet --list-runtimes | findstr /i "Microsoft.NETCore.App 8." >nul
+          if errorlevel 1 (
+            echo Brak Microsoft .NET 8 Runtime x64.
+            echo Zainstaluj runtime przez: winget install Microsoft.DotNet.Runtime.8
+            echo.
+            pause
+            exit /b 1
+          )
           SirkAgent.Policy.TestHarness.exe
           echo.
           pause' | Set-Content -Path artifacts/SIRK-Agent-Policy-Test/TEST-POLICY-ENGINE.cmd -Encoding ascii
       - uses: actions/upload-artifact@v4
         with:
-          name: SIRK-Agent-Policy-Test-win-x64
+          name: SIRK-Agent-Policy-Test-win-x64-framework-dependent
           path: artifacts/SIRK-Agent-Policy-Test/**
           if-no-files-found: error
 

@@ -46,10 +46,11 @@ internal sealed class AgentScheduler
         if (_runOnce)
             yield break;
 
-        var changes = Channel.CreateUnbounded<string>(new UnboundedChannelOptions
+        var changes = Channel.CreateBounded<string>(new BoundedChannelOptions(64)
         {
             SingleReader = true,
             SingleWriter = false,
+            FullMode = BoundedChannelFullMode.DropOldest,
             AllowSynchronousContinuations = false
         });
 
@@ -73,13 +74,16 @@ internal sealed class AgentScheduler
 
         while (!cancellationToken.IsCancellationRequested)
         {
-            var intervalTask = Task.Delay(_interval, cancellationToken);
-            var changeTask = changes.Reader.ReadAsync(cancellationToken).AsTask();
+            using var iterationCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var token = iterationCancellation.Token;
+            var intervalTask = Task.Delay(_interval, token);
+            var changeTask = changes.Reader.ReadAsync(token).AsTask();
 
             Task completed;
             try
             {
                 completed = await Task.WhenAny(intervalTask, changeTask).ConfigureAwait(false);
+                iterationCancellation.Cancel();
             }
             catch (OperationCanceledException)
             {
@@ -88,9 +92,12 @@ internal sealed class AgentScheduler
 
             if (completed == intervalTask)
             {
+                await IgnoreCancellationAsync(changeTask).ConfigureAwait(false);
                 yield return new SchedulerTrigger("Interval", DateTimeOffset.UtcNow);
                 continue;
             }
+
+            await IgnoreCancellationAsync(intervalTask).ConfigureAwait(false);
 
             string detail;
             try
@@ -108,6 +115,17 @@ internal sealed class AgentScheduler
                 detail = additionalDetail;
 
             yield return new SchedulerTrigger("FileSystemWatcher", DateTimeOffset.UtcNow, detail);
+        }
+    }
+
+    private static async Task IgnoreCancellationAsync(Task task)
+    {
+        try
+        {
+            await task.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
         }
     }
 }

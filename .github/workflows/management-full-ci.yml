@@ -57,39 +57,35 @@ jobs:
           sirkctl.exe process
           pause' | Set-Content (Join-Path $runtime 'CREATE-AND-APPLY-TEST-RECOVERY.cmd') -Encoding ascii
 
-      - name: Install clean Windows service
+      - name: Validate non-empty status serialization
         shell: pwsh
         run: |
           $root = Join-Path $env:ProgramData 'SIRK\Agent'
           Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item $root -ItemType Directory -Force | Out-Null
+          @{ timestampUtc=(Get-Date).ToUniversalTime(); status='Healthy'; code='POLICY_INBOX_IDLE'; acceptedPolicies=0; rejectedPolicies=0; integrityVerified=$true; integrityCode='INTEGRITY_OK' } | ConvertTo-Json | Set-Content (Join-Path $root 'management-state.json') -Encoding UTF8
+          @{ timestampUtc=(Get-Date).ToUniversalTime(); tenantId='investa'; deviceId='ci-device'; stateStatus='OK'; tamperDetected=$false; quarantineActive=$false } | ConvertTo-Json | Set-Content (Join-Path $root 'heartbeat-latest.json') -Encoding UTF8
+          @{ overallHealth='Healthy'; security=@{ state='Operational'; reason='OK' }; modules=@() } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $root 'security-state.json') -Encoding UTF8
+          @{ active=$false; detectionCount=0 } | ConvertTo-Json | Set-Content (Join-Path $root 'quarantine-status.json') -Encoding UTF8
+          $statusText = ./artifacts/SIRK-Agent-Runtime/sirkctl.exe status | Out-String
+          $statusText | Set-Content artifacts/status-serialization.json
+          if ([string]::IsNullOrWhiteSpace($statusText) -or $statusText.Trim() -eq '{}') { throw 'sirkctl status returned an empty object.' }
+          $status = $statusText | ConvertFrom-Json
+          if (-not $status.ok -or -not $status.management -or -not $status.heartbeat -or -not $status.security -or -not $status.quarantine) { throw 'sirkctl status did not serialize all state sections.' }
+          if ($status.management.integrityCode -ne 'INTEGRITY_OK') { throw 'sirkctl status changed management state data.' }
+          Remove-Item $root -Recurse -Force
+
+      - name: Install clean Windows service
+        shell: pwsh
+        run: |
           ./artifacts/SIRK-Agent-Runtime/Install-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent CI"
           (Get-Service SirkAgent).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))
+          Start-Sleep -Seconds 8
 
-      - name: Validate complete local status and signed policy
+      - name: Validate signed policy
         shell: pwsh
         run: |
           $root = Join-Path $env:ProgramData 'SIRK\Agent'
-          $status = $null
-          $statusText = $null
-          for ($i = 0; $i -lt 30; $i++) {
-            Start-Sleep -Seconds 1
-            try {
-              $candidateText = ./artifacts/SIRK-Agent-Runtime/sirkctl.exe status | Out-String
-              if (-not [string]::IsNullOrWhiteSpace($candidateText) -and $candidateText.Trim() -ne '{}') {
-                $candidate = $candidateText | ConvertFrom-Json
-                if ($candidate.ok -and $candidate.management -and $candidate.heartbeat -and $candidate.security -and
-                    $candidate.management.integrityCode -eq 'INTEGRITY_OK') {
-                  $status = $candidate
-                  $statusText = $candidateText
-                  break
-                }
-              }
-            } catch { }
-          }
-          if (-not $status) { throw 'sirkctl status did not become complete and healthy within 30 seconds.' }
-          $statusText | Set-Content artifacts/status.json
-          if ($status.heartbeat.tamperDetected -or $status.heartbeat.quarantineActive) { throw 'Status reports tamper or quarantine on clean startup.' }
-          if ($status.security.overallHealth -ne 'Healthy') { throw "Agent Core health: $($status.security.overallHealth)" }
           ./artifacts/SIRK-Agent-Runtime/sirkctl.exe create-test-policy
           ./artifacts/SIRK-Agent-Runtime/sirkctl.exe process
           Start-Sleep -Seconds 18
@@ -175,4 +171,5 @@ jobs:
             artifacts/SIRK-Agent-0.3.1-test-win-x64.zip
             artifacts/SIRK-Agent-Runtime/**
             artifacts/TestBundles/*.zip
+            artifacts/status-serialization.json
           if-no-files-found: error

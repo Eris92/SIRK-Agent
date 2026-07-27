@@ -80,16 +80,31 @@ jobs:
         run: |
           ./artifacts/SIRK-Agent-Runtime/Install-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent CI"
           (Get-Service SirkAgent).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))
-          Start-Sleep -Seconds 8
 
       - name: Validate signed policy
         shell: pwsh
         run: |
           $root = Join-Path $env:ProgramData 'SIRK\Agent'
+          $heartbeatPath = Join-Path $root 'heartbeat-latest.json'
+          $heartbeatReady = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep -Seconds 1
+            if (Test-Path $heartbeatPath) {
+              try {
+                $heartbeat = Get-Content $heartbeatPath -Raw | ConvertFrom-Json
+                if (-not [string]::IsNullOrWhiteSpace($heartbeat.deviceId)) { $heartbeatReady = $true; break }
+              } catch { }
+            }
+          }
+          if (-not $heartbeatReady) { throw 'Heartbeat with deviceId was not ready within 30 seconds.' }
           ./artifacts/SIRK-Agent-Runtime/sirkctl.exe create-test-policy
           ./artifacts/SIRK-Agent-Runtime/sirkctl.exe process
-          Start-Sleep -Seconds 18
-          if (-not (Test-Path (Join-Path $root 'active-policy.json'))) { throw 'Signed policy was not activated.' }
+          $activated = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep -Seconds 1
+            if (Test-Path (Join-Path $root 'active-policy.json')) { $activated = $true; break }
+          }
+          if (-not $activated) { throw 'Signed policy was not activated within 30 seconds.' }
           $management = Get-Content (Join-Path $root 'management-state.json') -Raw | ConvertFrom-Json
           if ($management.acceptedPolicies -lt 1) { throw 'Accepted policy counter was not updated.' }
           if ($management.lastPolicyId -notlike 'test-policy-*') { throw "Unexpected policy: $($management.lastPolicyId)" }

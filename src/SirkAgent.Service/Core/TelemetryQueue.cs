@@ -63,7 +63,7 @@ internal sealed class TelemetryQueue
         var plaintext = JsonSerializer.SerializeToUtf8Bytes(envelope, _jsonOptions);
         var protectedBytes = _protector.Protect(plaintext);
         var fileName = $"{envelope.TimestampUtc:yyyyMMddHHmmssfffffff}-{(int)priority}-{envelope.EventId:N}.bin";
-        AtomicFile.WriteBytes(Path.Combine(_directory, fileName), protectedBytes);
+        AtomicFile.Write(Path.Combine(_directory, fileName), protectedBytes);
         EnforceLimit();
         return envelope;
     }

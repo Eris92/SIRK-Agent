@@ -7,6 +7,7 @@ using SirkAgent.Policy;
 const string pipeName = "SIRK-Agent-Control";
 var command = args.FirstOrDefault()?.Trim().ToLowerInvariant() ?? "status";
 var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
+var agentRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SIRK", "Agent");
 
 if (command == "verify-integrity")
 {
@@ -58,18 +59,17 @@ if (command == "verify-integrity")
 
 if (command == "status")
 {
-    var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SIRK", "Agent");
-    var management = ReadJsonFile(Path.Combine(root, "management-state.json"));
-    var heartbeat = ReadJsonFile(Path.Combine(root, "heartbeat-latest.json"));
-    var security = ReadJsonFile(Path.Combine(root, "security-state.json"));
-    var quarantine = ReadJsonFile(Path.Combine(root, "quarantine-status.json"));
+    var management = ReadJsonFile(Path.Combine(agentRoot, "management-state.json"));
+    var heartbeat = ReadJsonFile(Path.Combine(agentRoot, "heartbeat-latest.json"));
+    var security = ReadJsonFile(Path.Combine(agentRoot, "security-state.json"));
+    var quarantine = ReadJsonFile(Path.Combine(agentRoot, "quarantine-status.json"));
 
     var response = new
     {
         ok = management is not null || heartbeat is not null || security is not null,
         machineName = Environment.MachineName,
         generatedAtUtc = DateTimeOffset.UtcNow,
-        agentDataPath = root,
+        agentDataPath = agentRoot,
         management,
         heartbeat,
         security,
@@ -80,17 +80,78 @@ if (command == "status")
     return;
 }
 
+if (command == "queue-status")
+{
+    var queuePath = Path.Combine(agentRoot, "TelemetryQueue");
+    var files = Directory.Exists(queuePath)
+        ? Directory.EnumerateFiles(queuePath, "*.bin", SearchOption.TopDirectoryOnly)
+            .Select(path => new FileInfo(path))
+            .OrderBy(file => file.CreationTimeUtc)
+            .ToArray()
+        : Array.Empty<FileInfo>();
+    var corrupt = Directory.Exists(queuePath)
+        ? Directory.EnumerateFiles(queuePath, "*.corrupt.*", SearchOption.TopDirectoryOnly).Count()
+        : 0;
+
+    Console.WriteLine(JsonSerializer.Serialize(new
+    {
+        ok = true,
+        path = queuePath,
+        queuedFiles = files.Length,
+        queuedBytes = files.Sum(file => file.Length),
+        oldestUtc = files.FirstOrDefault()?.CreationTimeUtc,
+        newestUtc = files.LastOrDefault()?.CreationTimeUtc,
+        corruptFiles = corrupt,
+        retention = new { maxBytes = 50L * 1024 * 1024, maxFiles = 5000, maxAgeDays = 14 }
+    }, jsonOptions));
+    return;
+}
+
+if (command == "queue-clear-test")
+{
+    if (!args.Skip(1).Any(value => string.Equals(value, "--confirm-test-clear", StringComparison.OrdinalIgnoreCase)))
+    {
+        Console.Error.WriteLine("Refusing to clear telemetry queue. Add --confirm-test-clear for this test-only operation.");
+        Environment.ExitCode = 2;
+        return;
+    }
+
+    var queuePath = Path.Combine(agentRoot, "TelemetryQueue");
+    var deleted = 0;
+    var failed = 0;
+    if (Directory.Exists(queuePath))
+    {
+        foreach (var path in Directory.EnumerateFiles(queuePath, "*.bin", SearchOption.TopDirectoryOnly))
+        {
+            try { File.Delete(path); deleted++; }
+            catch { failed++; }
+        }
+    }
+
+    Console.WriteLine(JsonSerializer.Serialize(new
+    {
+        ok = failed == 0,
+        testOnly = true,
+        path = queuePath,
+        deletedFiles = deleted,
+        failedFiles = failed
+    }, jsonOptions));
+    if (failed > 0) Environment.ExitCode = 5;
+    return;
+}
+
 if (command is "process" or "flush")
 {
     try
     {
         await using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         await pipe.ConnectAsync(timeout.Token);
         await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, leaveOpen: true) { AutoFlush = true };
         using var reader = new StreamReader(pipe, Encoding.UTF8, false, 4096, leaveOpen: true);
         await writer.WriteLineAsync(command);
-        Console.WriteLine(await reader.ReadLineAsync(timeout.Token));
+        var response = await reader.ReadToEndAsync(timeout.Token);
+        Console.WriteLine(string.IsNullOrWhiteSpace(response) ? "{\"ok\":false,\"error\":\"Empty control response.\"}" : response.Trim());
         return;
     }
     catch (Exception ex) when (ex is TimeoutException or IOException or OperationCanceledException or UnauthorizedAccessException)
@@ -102,17 +163,16 @@ if (command is "process" or "flush")
 
 if (command is "create-test-policy" or "create-test-recovery")
 {
-    var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SIRK", "Agent");
-    var heartbeatPath = Path.Combine(root, "heartbeat-latest.json");
+    var heartbeatPath = Path.Combine(agentRoot, "heartbeat-latest.json");
     if (!File.Exists(heartbeatPath))
         throw new FileNotFoundException("Heartbeat not found. Start the agent first.", heartbeatPath);
 
     using var heartbeat = JsonDocument.Parse(await File.ReadAllBytesAsync(heartbeatPath));
     var deviceId = heartbeat.RootElement.GetProperty("deviceId").GetString()
                    ?? throw new InvalidDataException("Heartbeat deviceId is empty.");
-    Directory.CreateDirectory(Path.Combine(root, "Incoming"));
+    Directory.CreateDirectory(Path.Combine(agentRoot, "Incoming"));
 
-    var privateKeyPath = Path.Combine(root, "test-signing-key.pem");
+    var privateKeyPath = Path.Combine(agentRoot, "test-signing-key.pem");
     using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
     if (File.Exists(privateKeyPath))
         key.ImportFromPem(await File.ReadAllTextAsync(privateKeyPath));
@@ -124,7 +184,7 @@ if (command is "create-test-policy" or "create-test-recovery")
     {
         keys = new[] { new { keyId, publicKeyPem = key.ExportSubjectPublicKeyInfoPem() } }
     };
-    await File.WriteAllTextAsync(Path.Combine(root, "trusted-keys.json"),
+    await File.WriteAllTextAsync(Path.Combine(agentRoot, "trusted-keys.json"),
         JsonSerializer.Serialize(trusted, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }),
         new UTF8Encoding(false));
 
@@ -151,7 +211,7 @@ if (command is "create-test-policy" or "create-test-recovery")
         DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
     envelope = envelope with { Signature = envelope.Signature with { Value = Base64Url(signature) } };
 
-    var output = Path.Combine(root, "Incoming", $"{policyId}.policy.json");
+    var output = Path.Combine(agentRoot, "Incoming", $"{policyId}.policy.json");
     await File.WriteAllTextAsync(output,
         JsonSerializer.Serialize(envelope, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }),
         new UTF8Encoding(false));
@@ -159,7 +219,7 @@ if (command is "create-test-policy" or "create-test-recovery")
     return;
 }
 
-Console.Error.WriteLine("Usage: sirkctl status|process|flush|verify-integrity|create-test-policy|create-test-recovery");
+Console.Error.WriteLine("Usage: sirkctl status|process|flush|queue-status|queue-clear-test --confirm-test-clear|verify-integrity|create-test-policy|create-test-recovery");
 Environment.ExitCode = 2;
 
 static JsonElement? ReadJsonFile(string path)

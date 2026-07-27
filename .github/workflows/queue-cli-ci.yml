@@ -22,10 +22,10 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Publish 0.3.2 runtime
+      - name: Publish 0.3.3 runtime
         shell: pwsh
         run: |
-          dotnet publish src/SirkAgent.Service/SirkAgent.Service.csproj -c Release -r win-x64 --self-contained false -p:InformationalVersion=0.3.2-test+${{ github.sha }} -o artifacts/SIRK-Agent-Runtime
+          dotnet publish src/SirkAgent.Service/SirkAgent.Service.csproj -c Release -r win-x64 --self-contained false -p:InformationalVersion=0.3.3-test+${{ github.sha }} -o artifacts/SIRK-Agent-Runtime
           dotnet publish src/SirkAgent.Report/SirkAgent.Report.csproj -c Release -r win-x64 --self-contained false -o artifacts/SIRK-Agent-Runtime
           dotnet publish src/SirkAgent.Cli/SirkAgent.Cli.csproj -c Release -r win-x64 --self-contained false -o artifacts/SIRK-Agent-Runtime
           Copy-Item tools/package/*.ps1 artifacts/SIRK-Agent-Runtime/ -Force
@@ -36,7 +36,7 @@ jobs:
             @{ path = $name; sha256 = (Get-FileHash $path -Algorithm SHA256).Hash }
           }
           @{ files = $files } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $runtime 'integrity-manifest.json') -Encoding UTF8
-          @{ product='SIRK Agent'; version='0.3.2-test'; commit='${{ github.sha }}'; runtime='win-x64'; requiredRuntime='.NET 8 x64' } | ConvertTo-Json | Set-Content (Join-Path $runtime 'build-manifest.json') -Encoding UTF8
+          @{ product='SIRK Agent'; version='0.3.3-test'; commit='${{ github.sha }}'; runtime='win-x64'; requiredRuntime='.NET 8 x64' } | ConvertTo-Json | Set-Content (Join-Path $runtime 'build-manifest.json') -Encoding UTF8
 
       - name: Install service and wait for heartbeat
         shell: pwsh
@@ -52,15 +52,26 @@ jobs:
           }
           if (-not $ready) { throw 'Heartbeat was not created.' }
 
-      - name: Validate complete process response
+      - name: Validate exactly one process response
         shell: pwsh
         run: |
           ./artifacts/SIRK-Agent-Runtime/sirkctl.exe create-test-policy | Out-Null
-          $responseText = ./artifacts/SIRK-Agent-Runtime/sirkctl.exe process | Out-String
-          $responseText | Set-Content artifacts/process-response.json
-          if ([string]::IsNullOrWhiteSpace($responseText) -or $responseText.Trim() -eq '{') { throw 'Process returned a truncated response.' }
-          $response = $responseText | ConvertFrom-Json
-          if (-not $response.ok) { throw 'Process response reported ok=false.' }
+          $responses = @()
+          for ($i = 0; $i -lt 3; $i++) {
+            $responseText = ./artifacts/SIRK-Agent-Runtime/sirkctl.exe process | Out-String
+            if ([string]::IsNullOrWhiteSpace($responseText) -or $responseText.Trim() -eq '{') { throw 'Process returned a truncated response.' }
+            try {
+              $document = [System.Text.Json.JsonDocument]::Parse($responseText)
+              $response = $responseText | ConvertFrom-Json
+              if (-not $response.ok) { throw 'Process response reported ok=false.' }
+              $document.Dispose()
+            }
+            catch {
+              throw "Process did not return exactly one valid JSON document: $responseText"
+            }
+            $responses += $responseText.Trim()
+          }
+          $responses -join "`r`n---`r`n" | Set-Content artifacts/process-response.json
           $root = Join-Path $env:ProgramData 'SIRK\Agent'
           $active = $false
           for ($i = 0; $i -lt 30; $i++) {
@@ -90,13 +101,13 @@ jobs:
         shell: pwsh
         run: |
           ./artifacts/SIRK-Agent-Runtime/Uninstall-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent Queue CI" -Confirm:$false
-          Compress-Archive -Path artifacts/SIRK-Agent-Runtime/* -DestinationPath artifacts/SIRK-Agent-0.3.2-test-win-x64.zip -CompressionLevel Optimal -Force
+          Compress-Archive -Path artifacts/SIRK-Agent-Runtime/* -DestinationPath artifacts/SIRK-Agent-0.3.3-test-win-x64.zip -CompressionLevel Optimal -Force
 
       - uses: actions/upload-artifact@v4
         with:
-          name: SIRK-Agent-0.3.2-test-win-x64
+          name: SIRK-Agent-0.3.3-test-win-x64
           path: |
-            artifacts/SIRK-Agent-0.3.2-test-win-x64.zip
+            artifacts/SIRK-Agent-0.3.3-test-win-x64.zip
             artifacts/SIRK-Agent-Runtime/**
             artifacts/process-response.json
           if-no-files-found: error

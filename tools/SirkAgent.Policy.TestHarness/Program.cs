@@ -56,14 +56,46 @@ Console.WriteLine($"Policy result: {result.Validation.Code} - {result.Validation
 if (!result.IsAccepted)
     return 2;
 
-var heartbeat = PolicyHeartbeatFactory.Create(result.State, tenantId, deviceId, DateTimeOffset.UtcNow);
+var checker = new PolicyStateHealthChecker(statePath, store);
+var healthy = checker.Check();
+Console.WriteLine($"State health: {healthy.Code} - {healthy.Message}");
+if (!healthy.IsHealthy)
+    return 3;
+
+var heartbeat = PolicyHeartbeatFactory.Create(
+    result.State,
+    tenantId,
+    deviceId,
+    DateTimeOffset.UtcNow,
+    healthy.Code);
 Console.WriteLine(JsonSerializer.Serialize(heartbeat, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
 
 var replay = service.ValidateAndAccept(policy, tenantId, deviceId, DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5));
 Console.WriteLine($"Replay test: {replay.Validation.Code}");
-
 if (replay.Validation.Code != "VERSION_ROLLBACK" && replay.Validation.Code != "REPLAY")
-    return 3;
+    return 4;
+
+var originalState = File.ReadAllBytes(statePath);
+try
+{
+    var tampered = originalState.ToArray();
+    tampered[tampered.Length / 2] ^= 0x5A;
+    File.WriteAllBytes(statePath, tampered);
+
+    var tamperResult = checker.Check();
+    Console.WriteLine($"Tamper test: {tamperResult.Code} - {tamperResult.Message}");
+    if (tamperResult.IsHealthy)
+        return 5;
+}
+finally
+{
+    File.WriteAllBytes(statePath, originalState);
+}
+
+var restored = checker.Check();
+Console.WriteLine($"Restore test: {restored.Code}");
+if (!restored.IsHealthy)
+    return 6;
 
 Console.WriteLine("TEST PASSED");
 return 0;

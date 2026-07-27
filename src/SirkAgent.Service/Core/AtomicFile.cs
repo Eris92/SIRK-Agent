@@ -38,6 +38,8 @@ internal static class AtomicFile
         }
     }
 
+    public static void WriteBytes(string path, ReadOnlySpan<byte> content) => Write(path, content);
+
     public static void WriteJson<T>(string path, T value, JsonSerializerOptions options)
         => Write(path, JsonSerializer.SerializeToUtf8Bytes(value, options));
 

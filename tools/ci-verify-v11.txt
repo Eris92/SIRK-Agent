@@ -1,0 +1,1 @@
+trigger full management CI after deterministic --once startup validation

@@ -86,7 +86,7 @@ public sealed class PolicyValidator
             throw new FormatException("Empty base64url value.");
 
         var padded = value.Replace('-', '+').Replace('_', '/');
-        padded += padded.Length % 4 switch
+        padded += (padded.Length % 4) switch
         {
             0 => string.Empty,
             2 => "==",

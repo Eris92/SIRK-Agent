@@ -1,32 +1,31 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using SirkAgent.Policy;
+using SirkAgent.Service.Core;
 
 const string tenantId = "investa";
-var deviceId = Environment.MachineName;
-var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
-var agentDirectory = Path.Combine(programData, "SIRK", "Agent");
-var statePath = Path.Combine(agentDirectory, "policy-state.bin");
-var heartbeatPath = Path.Combine(agentDirectory, "heartbeat-latest.json");
-var eventLogPath = Path.Combine(agentDirectory, "agent-events.jsonl");
-var tamperEventPath = Path.Combine(agentDirectory, "tamper-event-latest.json");
-var quarantineProtectedPath = Path.Combine(agentDirectory, "quarantine-state.bin");
-var quarantineStatusPath = Path.Combine(agentDirectory, "quarantine-status.json");
-var legacyQuarantinePath = Path.Combine(agentDirectory, "quarantine-state.json");
+var paths = AgentPaths.CreateDefault();
 var interval = TimeSpan.FromSeconds(30);
 var runOnce = args.Any(a => string.Equals(a, "--once", StringComparison.OrdinalIgnoreCase));
 
-Directory.CreateDirectory(agentDirectory);
-Console.WriteLine("SIRK Agent Runtime");
-Console.WriteLine($"Device:      {deviceId}");
-Console.WriteLine($"State:       {statePath}");
-Console.WriteLine($"Heartbeat:   {heartbeatPath}");
-Console.WriteLine($"Quarantine:  {quarantineProtectedPath}");
-Console.WriteLine(runOnce ? "Mode:        once" : $"Mode:        loop ({interval.TotalSeconds:0}s + watcher)");
+paths.EnsureDirectories();
 
 var protector = new DpapiMachineStateProtector();
-var store = new FilePolicyStateStore(statePath, protector);
-var checker = new PolicyStateHealthChecker(statePath, store);
+var identityStore = new DeviceIdentityStore(paths.DeviceIdentityPath, protector);
+var identity = identityStore.LoadOrCreate(tenantId);
+var deviceId = identity.DeviceId;
+
+Console.WriteLine("SIRK Agent Runtime");
+Console.WriteLine($"Machine:     {Environment.MachineName}");
+Console.WriteLine($"Device ID:   {deviceId}");
+Console.WriteLine($"Identity:    {paths.DeviceIdentityPath}");
+Console.WriteLine($"State:       {paths.PolicyStatePath}");
+Console.WriteLine($"Heartbeat:   {paths.HeartbeatPath}");
+Console.WriteLine($"Quarantine:  {paths.QuarantineProtectedPath}");
+Console.WriteLine(runOnce ? "Mode:        once" : $"Mode:        loop ({interval.TotalSeconds:0}s + watcher)");
+
+var store = new FilePolicyStateStore(paths.PolicyStatePath, protector);
+var checker = new PolicyStateHealthChecker(paths.PolicyStatePath, store);
 var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
 var compactJsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 var quarantine = LoadQuarantineState();
@@ -39,7 +38,7 @@ Console.CancelKeyPress += (_, eventArgs) =>
 };
 
 using var changeSignal = new SemaphoreSlim(0, 1);
-using var watcher = new FileSystemWatcher(agentDirectory, Path.GetFileName(statePath))
+using var watcher = new FileSystemWatcher(paths.AgentDirectory, Path.GetFileName(paths.PolicyStatePath))
 {
     NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.CreationTime,
     IncludeSubdirectories = false,
@@ -99,16 +98,16 @@ while (!cancellation.IsCancellationRequested)
                 DetectionCount: 1);
 
         SaveQuarantineState(quarantine);
-        WriteAtomically(tamperEventPath, JsonSerializer.SerializeToUtf8Bytes(new TamperEvent(
+        AtomicFile.WriteJson(paths.TamperEventPath, new TamperEvent(
             timestamp,
             tenantId,
             deviceId,
             trigger,
             health.Code,
             health.Message,
-            statePath,
+            paths.PolicyStatePath,
             quarantine.SinceUtc,
-            quarantine.DetectionCount), jsonOptions));
+            quarantine.DetectionCount), jsonOptions);
     }
     else if (quarantine.Active)
     {
@@ -121,7 +120,7 @@ while (!cancellation.IsCancellationRequested)
         SaveQuarantineState(quarantine);
     }
 
-    WriteAtomically(quarantineStatusPath, JsonSerializer.SerializeToUtf8Bytes(quarantine, jsonOptions));
+    AtomicFile.WriteJson(paths.QuarantineStatusPath, quarantine, jsonOptions);
 
     var heartbeat = PolicyHeartbeatFactory.Create(
         state,
@@ -134,8 +133,8 @@ while (!cancellation.IsCancellationRequested)
         quarantine.Active ? quarantine.SinceUtc : null,
         quarantine.Active ? quarantine.Reason : null);
 
-    WriteAtomically(heartbeatPath, JsonSerializer.SerializeToUtf8Bytes(heartbeat, jsonOptions));
-    AppendEvent(eventLogPath, new AgentEvent(
+    AtomicFile.WriteJson(paths.HeartbeatPath, heartbeat, jsonOptions);
+    AtomicFile.AppendJsonLine(paths.EventLogPath, new AgentEvent(
         timestamp,
         trigger,
         health.Code,
@@ -171,9 +170,9 @@ QuarantineState LoadQuarantineState()
 {
     try
     {
-        if (File.Exists(quarantineProtectedPath))
+        if (File.Exists(paths.QuarantineProtectedPath))
         {
-            var encrypted = File.ReadAllBytes(quarantineProtectedPath);
+            var encrypted = File.ReadAllBytes(paths.QuarantineProtectedPath);
             if (encrypted.Length == 0)
                 throw new InvalidDataException("Protected quarantine state is empty.");
 
@@ -182,12 +181,12 @@ QuarantineState LoadQuarantineState()
                    ?? throw new InvalidDataException("Protected quarantine state could not be deserialized.");
         }
 
-        if (File.Exists(legacyQuarantinePath))
+        if (File.Exists(paths.LegacyQuarantinePath))
         {
-            var migrated = JsonSerializer.Deserialize<QuarantineState>(File.ReadAllBytes(legacyQuarantinePath), compactJsonOptions)
+            var migrated = JsonSerializer.Deserialize<QuarantineState>(File.ReadAllBytes(paths.LegacyQuarantinePath), compactJsonOptions)
                            ?? throw new InvalidDataException("Legacy quarantine state could not be deserialized.");
             SaveQuarantineState(migrated);
-            File.Move(legacyQuarantinePath, legacyQuarantinePath + ".migrated", overwrite: true);
+            File.Move(paths.LegacyQuarantinePath, paths.LegacyQuarantinePath + ".migrated", overwrite: true);
             return migrated;
         }
 
@@ -215,43 +214,18 @@ void SaveQuarantineState(QuarantineState value)
 {
     var plaintext = JsonSerializer.SerializeToUtf8Bytes(value, compactJsonOptions);
     var encrypted = protector.Protect(plaintext);
-    WriteAtomically(quarantineProtectedPath, encrypted);
+    AtomicFile.Write(paths.QuarantineProtectedPath, encrypted);
 }
 
 void PreserveCorruptedQuarantineFile()
 {
-    if (!File.Exists(quarantineProtectedPath))
+    if (!File.Exists(paths.QuarantineProtectedPath))
         return;
 
     var evidencePath = Path.Combine(
-        agentDirectory,
+        paths.AgentDirectory,
         $"quarantine-state.tampered.{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}.bin");
-    File.Copy(quarantineProtectedPath, evidencePath, overwrite: false);
-}
-
-static void WriteAtomically(string path, byte[] content)
-{
-    var tempPath = path + ".tmp." + Guid.NewGuid().ToString("N");
-    try
-    {
-        using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
-        {
-            stream.Write(content);
-            stream.Flush(flushToDisk: true);
-        }
-        File.Move(tempPath, path, overwrite: true);
-    }
-    finally
-    {
-        if (File.Exists(tempPath))
-            File.Delete(tempPath);
-    }
-}
-
-static void AppendEvent(string path, AgentEvent agentEvent)
-{
-    var line = JsonSerializer.Serialize(agentEvent, new JsonSerializerOptions(JsonSerializerDefaults.Web));
-    File.AppendAllText(path, line + Environment.NewLine);
+    File.Copy(paths.QuarantineProtectedPath, evidencePath, overwrite: false);
 }
 
 internal sealed record QuarantineState(

@@ -8,19 +8,23 @@ var agentDirectory = Path.Combine(programData, "SIRK", "Agent");
 var statePath = Path.Combine(agentDirectory, "policy-state.bin");
 var heartbeatPath = Path.Combine(agentDirectory, "heartbeat-latest.json");
 var eventLogPath = Path.Combine(agentDirectory, "agent-events.jsonl");
+var tamperEventPath = Path.Combine(agentDirectory, "tamper-event-latest.json");
+var quarantinePath = Path.Combine(agentDirectory, "quarantine-state.json");
 var interval = TimeSpan.FromSeconds(30);
 var runOnce = args.Any(a => string.Equals(a, "--once", StringComparison.OrdinalIgnoreCase));
 
 Directory.CreateDirectory(agentDirectory);
 Console.WriteLine("SIRK Agent Runtime");
-Console.WriteLine($"Device:    {deviceId}");
-Console.WriteLine($"State:     {statePath}");
-Console.WriteLine($"Heartbeat: {heartbeatPath}");
-Console.WriteLine(runOnce ? "Mode:      once" : $"Mode:      loop ({interval.TotalSeconds:0}s + watcher)");
+Console.WriteLine($"Device:     {deviceId}");
+Console.WriteLine($"State:      {statePath}");
+Console.WriteLine($"Heartbeat:  {heartbeatPath}");
+Console.WriteLine($"Quarantine: {quarantinePath}");
+Console.WriteLine(runOnce ? "Mode:       once" : $"Mode:       loop ({interval.TotalSeconds:0}s + watcher)");
 
 var store = new FilePolicyStateStore(statePath, new DpapiMachineStateProtector());
 var checker = new PolicyStateHealthChecker(statePath, store);
 var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
+var quarantine = LoadQuarantine(quarantinePath);
 
 using var cancellation = new CancellationTokenSource();
 Console.CancelKeyPress += (_, eventArgs) =>
@@ -69,13 +73,38 @@ while (!cancellation.IsCancellationRequested)
     var health = checker.Check();
     var state = health.State ?? PolicyState.Empty;
 
+    if (!health.IsHealthy)
+    {
+        quarantine ??= new QuarantineState(
+            Active: true,
+            SinceUtc: timestamp,
+            Reason: health.Code,
+            Trigger: trigger,
+            LastUpdatedUtc: timestamp);
+
+        quarantine = quarantine with
+        {
+            Active = true,
+            Reason = health.Code,
+            Trigger = trigger,
+            LastUpdatedUtc = timestamp
+        };
+
+        WriteAtomically(quarantinePath, JsonSerializer.SerializeToUtf8Bytes(quarantine, jsonOptions));
+        var tamperEvent = new TamperEvent(timestamp, tenantId, deviceId, trigger, health.Code, health.Message, statePath, quarantine.SinceUtc);
+        WriteAtomically(tamperEventPath, JsonSerializer.SerializeToUtf8Bytes(tamperEvent, jsonOptions));
+    }
+
     var heartbeat = PolicyHeartbeatFactory.Create(
         state,
         tenantId,
         deviceId,
         timestamp,
         health.Code,
-        trigger);
+        trigger,
+        quarantineActive: quarantine?.Active == true,
+        quarantineSinceUtc: quarantine?.SinceUtc,
+        quarantineReason: quarantine?.Reason);
 
     WriteAtomically(heartbeatPath, JsonSerializer.SerializeToUtf8Bytes(heartbeat, jsonOptions));
     AppendEvent(eventLogPath, new AgentEvent(
@@ -84,10 +113,13 @@ while (!cancellation.IsCancellationRequested)
         health.Code,
         health.Message,
         !health.IsHealthy,
+        quarantine?.Active == true,
+        quarantine?.SinceUtc,
+        quarantine?.Reason,
         state.ActivePolicyId,
         state.ActivePolicyHash));
 
-    Console.WriteLine($"{timestamp:O} trigger={trigger} heartbeat={health.Code} tamper={!health.IsHealthy} policy={state.ActivePolicyId ?? "none"} version={state.Version}");
+    Console.WriteLine($"{timestamp:O} trigger={trigger} heartbeat={health.Code} tamper={!health.IsHealthy} quarantine={quarantine?.Active == true} policy={state.ActivePolicyId ?? "none"} version={state.Version}");
 
     if (runOnce)
         break;
@@ -107,6 +139,21 @@ while (!cancellation.IsCancellationRequested)
 
 return 0;
 
+static QuarantineState? LoadQuarantine(string path)
+{
+    try
+    {
+        if (!File.Exists(path))
+            return null;
+
+        return JsonSerializer.Deserialize<QuarantineState>(File.ReadAllBytes(path), new JsonSerializerOptions(JsonSerializerDefaults.Web));
+    }
+    catch
+    {
+        return new QuarantineState(true, DateTimeOffset.UtcNow, "QUARANTINE_STATE_INVALID", "Startup", DateTimeOffset.UtcNow);
+    }
+}
+
 static void WriteAtomically(string path, byte[] content)
 {
     var tempPath = path + ".tmp." + Guid.NewGuid().ToString("N");
@@ -120,11 +167,31 @@ static void AppendEvent(string path, AgentEvent agentEvent)
     File.AppendAllText(path, line + Environment.NewLine);
 }
 
+internal sealed record QuarantineState(
+    bool Active,
+    DateTimeOffset SinceUtc,
+    string Reason,
+    string Trigger,
+    DateTimeOffset LastUpdatedUtc);
+
+internal sealed record TamperEvent(
+    DateTimeOffset TimestampUtc,
+    string TenantId,
+    string DeviceId,
+    string Trigger,
+    string Code,
+    string Message,
+    string StatePath,
+    DateTimeOffset QuarantineSinceUtc);
+
 internal sealed record AgentEvent(
     DateTimeOffset TimestampUtc,
     string Trigger,
     string Code,
     string Message,
     bool TamperDetected,
+    bool QuarantineActive,
+    DateTimeOffset? QuarantineSinceUtc,
+    string? QuarantineReason,
     string? ActivePolicyId,
     string? ActivePolicyHash);

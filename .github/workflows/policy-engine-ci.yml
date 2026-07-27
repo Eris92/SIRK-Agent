@@ -9,20 +9,39 @@ on:
     paths:
       - 'src/SirkAgent.Policy/**'
       - 'tests/SirkAgent.Policy.Tests/**'
+      - 'tools/SirkAgent.Policy.TestHarness/**'
       - '.github/workflows/policy-engine-ci.yml'
 
 permissions:
   contents: read
 
 jobs:
-  test:
+  test-and-package:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
-      - name: Restore
+      - name: Restore tests
         run: dotnet restore tests/SirkAgent.Policy.Tests/SirkAgent.Policy.Tests.csproj
       - name: Test
         run: dotnet test tests/SirkAgent.Policy.Tests/SirkAgent.Policy.Tests.csproj --configuration Release --no-restore
+      - name: Publish Windows test harness
+        run: dotnet publish tools/SirkAgent.Policy.TestHarness/SirkAgent.Policy.TestHarness.csproj --configuration Release --runtime win-x64 --self-contained true --output artifacts/SIRK-Agent-Policy-Test
+      - name: Run test harness
+        shell: pwsh
+        run: ./artifacts/SIRK-Agent-Policy-Test/SirkAgent.Policy.TestHarness.exe
+      - name: Add test launcher
+        shell: pwsh
+        run: |
+          '@echo off
+          cd /d "%~dp0"
+          SirkAgent.Policy.TestHarness.exe
+          echo.
+          pause' | Set-Content -Path artifacts/SIRK-Agent-Policy-Test/TEST-POLICY-ENGINE.cmd -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SIRK-Agent-Policy-Test-win-x64
+          path: artifacts/SIRK-Agent-Policy-Test/**
+          if-no-files-found: error

@@ -121,19 +121,18 @@ jobs:
         run: |
           $installed = Join-Path $env:ProgramFiles 'SIRK Agent CI'
           $cli = Join-Path $installed 'sirkctl.exe'
-          & $cli verify-integrity
-          if ($LASTEXITCODE -ne 0) { throw 'Clean integrity verification failed.' }
+          $clean = Start-Process -FilePath $cli -ArgumentList 'verify-integrity' -Wait -PassThru -NoNewWindow
+          if ($clean.ExitCode -ne 0) { throw 'Clean integrity verification failed.' }
           $target = Join-Path $installed 'SirkAgent.Report.exe'
           $backup = "$target.ci-backup"
           Copy-Item $target $backup -Force
           Add-Content $target 'tamper'
-          & $cli verify-integrity
-          $tamperedExitCode = $LASTEXITCODE
+          $tampered = Start-Process -FilePath $cli -ArgumentList 'verify-integrity' -Wait -PassThru -NoNewWindow
           Copy-Item $backup $target -Force
           Remove-Item $backup -Force
-          if ($tamperedExitCode -eq 0) { throw 'Modified executable was not detected.' }
-          & $cli verify-integrity
-          if ($LASTEXITCODE -ne 0) { throw 'Integrity did not recover after file restoration.' }
+          if ($tampered.ExitCode -eq 0) { throw 'Modified executable was not detected.' }
+          $restored = Start-Process -FilePath $cli -ArgumentList 'verify-integrity' -Wait -PassThru -NoNewWindow
+          if ($restored.ExitCode -ne 0) { throw 'Integrity did not recover after file restoration.' }
 
       - name: Validate diagnostics and TestBundle
         shell: pwsh

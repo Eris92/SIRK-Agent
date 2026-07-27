@@ -21,6 +21,8 @@ internal sealed record TelemetryEnvelope(
     DateTimeOffset? NextAttemptUtc,
     JsonElement Data);
 
+internal sealed record TelemetryQueueItem(string Path, TelemetryEnvelope Envelope);
+
 internal sealed class TelemetryQueue
 {
     private readonly string _directory;
@@ -60,10 +62,7 @@ internal sealed class TelemetryQueue
             null,
             JsonSerializer.SerializeToElement(data, _jsonOptions));
 
-        var plaintext = JsonSerializer.SerializeToUtf8Bytes(envelope, _jsonOptions);
-        var protectedBytes = _protector.Protect(plaintext);
-        var fileName = $"{envelope.TimestampUtc:yyyyMMddHHmmssfffffff}-{(int)priority}-{envelope.EventId:N}.bin";
-        AtomicFile.Write(Path.Combine(_directory, fileName), protectedBytes);
+        WriteEnvelope(envelope);
         EnforceLimit();
         return envelope;
     }
@@ -73,7 +72,69 @@ internal sealed class TelemetryQueue
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
+    public IReadOnlyList<TelemetryQueueItem> ReadReady(int maximum, DateTimeOffset utcNow)
+    {
+        if (maximum <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maximum));
+
+        var result = new List<TelemetryQueueItem>();
+        foreach (var path in SnapshotFiles())
+        {
+            try
+            {
+                var plaintext = _protector.Unprotect(File.ReadAllBytes(path));
+                var envelope = JsonSerializer.Deserialize<TelemetryEnvelope>(plaintext, _jsonOptions)
+                    ?? throw new InvalidDataException("Telemetry envelope deserialized to null.");
+                if (envelope.NextAttemptUtc is null || envelope.NextAttemptUtc <= utcNow)
+                    result.Add(new TelemetryQueueItem(path, envelope));
+            }
+            catch
+            {
+                PreserveCorrupt(path);
+            }
+
+            if (result.Count >= maximum)
+                break;
+        }
+
+        return result;
+    }
+
+    public void Complete(TelemetryQueueItem item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        if (File.Exists(item.Path))
+            File.Delete(item.Path);
+    }
+
+    public void Retry(TelemetryQueueItem item, DateTimeOffset nextAttemptUtc)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        var updated = item.Envelope with
+        {
+            Attempt = checked(item.Envelope.Attempt + 1),
+            NextAttemptUtc = nextAttemptUtc
+        };
+        var plaintext = JsonSerializer.SerializeToUtf8Bytes(updated, _jsonOptions);
+        AtomicFile.Write(item.Path, _protector.Protect(plaintext));
+    }
+
     public long TotalBytes() => SnapshotFiles().Sum(path => new FileInfo(path).Length);
+
+    private void WriteEnvelope(TelemetryEnvelope envelope)
+    {
+        var plaintext = JsonSerializer.SerializeToUtf8Bytes(envelope, _jsonOptions);
+        var protectedBytes = _protector.Protect(plaintext);
+        var fileName = $"{envelope.TimestampUtc:yyyyMMddHHmmssfffffff}-{(int)envelope.Priority}-{envelope.EventId:N}.bin";
+        AtomicFile.Write(Path.Combine(_directory, fileName), protectedBytes);
+    }
+
+    private void PreserveCorrupt(string path)
+    {
+        var destination = path + $".corrupt.{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}";
+        try { File.Move(path, destination, overwrite: false); }
+        catch { }
+    }
 
     private void EnforceLimit()
     {

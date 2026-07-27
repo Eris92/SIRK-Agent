@@ -9,5 +9,6 @@ builder.Services.AddWindowsService(options =>
 });
 builder.Services.AddHostedService<AgentWorker>();
 builder.Services.AddHostedService<ManagementWorker>();
+builder.Services.AddHostedService<ControlFileWorker>();
 
 await builder.Build().RunAsync();

@@ -119,20 +119,20 @@ jobs:
       - name: Validate integrity failure detection
         shell: pwsh
         run: |
-          $installed = Join-Path $env:ProgramFiles 'SIRK Agent CI'
-          $target = Join-Path $installed 'SirkAgent.Report.exe'
+          $runtime = Resolve-Path artifacts/SIRK-Agent-Runtime
+          & (Join-Path $runtime 'sirkctl.exe') verify-integrity
+          if ($LASTEXITCODE -ne 0) { throw 'Clean integrity verification failed.' }
+          $target = Join-Path $runtime 'SirkAgent.Report.exe'
           $backup = "$target.ci-backup"
           Copy-Item $target $backup -Force
           Add-Content $target 'tamper'
-          $detected = $false
-          for ($i = 0; $i -lt 12; $i++) {
-            Start-Sleep -Seconds 5
-            $management = Get-Content "$env:ProgramData\SIRK\Agent\management-state.json" -Raw | ConvertFrom-Json
-            if (-not $management.integrityVerified -and $management.code -eq 'INTEGRITY_FAILED') { $detected = $true; break }
-          }
+          & (Join-Path $runtime 'sirkctl.exe') verify-integrity
+          $tamperedExitCode = $LASTEXITCODE
           Copy-Item $backup $target -Force
           Remove-Item $backup -Force
-          if (-not $detected) { throw "Modified executable was not detected. Last state: $($management | ConvertTo-Json -Compress)" }
+          if ($tamperedExitCode -eq 0) { throw 'Modified executable was not detected.' }
+          & (Join-Path $runtime 'sirkctl.exe') verify-integrity
+          if ($LASTEXITCODE -ne 0) { throw 'Integrity did not recover after file restoration.' }
 
       - name: Validate diagnostics and TestBundle
         shell: pwsh

@@ -32,15 +32,19 @@ jobs:
         run: ./artifacts/SIRK-Agent-Policy-Test/SirkAgent.Policy.TestHarness.exe
       - name: Publish agent runtime
         run: dotnet publish src/SirkAgent.Service/SirkAgent.Service.csproj --configuration Release --runtime win-x64 --self-contained false -p:PublishSingleFile=false -p:PublishTrimmed=false --output artifacts/SIRK-Agent-Runtime
-      - name: Publish HTML reporter
+      - name: Publish diagnostics reporter
         run: dotnet publish src/SirkAgent.Report/SirkAgent.Report.csproj --configuration Release --runtime win-x64 --self-contained false -p:PublishSingleFile=false -p:PublishTrimmed=false --output artifacts/SIRK-Agent-Runtime
       - name: Run one heartbeat
         shell: pwsh
         run: ./artifacts/SIRK-Agent-Runtime/SirkAgent.Service.exe --once
-      - name: Generate HTML report
+      - name: Generate HTML and JSON reports
         shell: pwsh
         continue-on-error: true
-        run: ./artifacts/SIRK-Agent-Runtime/SirkAgent.Report.exe --no-open
+        run: |
+          ./artifacts/SIRK-Agent-Runtime/SirkAgent.Report.exe --no-open
+          $reports = Join-Path $env:ProgramData 'SIRK\Agent\Reports'
+          if (-not (Get-ChildItem $reports -Filter '*.json' -ErrorAction SilentlyContinue)) { throw 'JSON report was not generated.' }
+          if (-not (Get-ChildItem $reports -Filter '*.html' -ErrorAction SilentlyContinue)) { throw 'HTML report was not generated.' }
       - name: Add launchers
         shell: pwsh
         run: |
@@ -69,7 +73,16 @@ jobs:
           '@echo off
           cd /d "%~dp0"
           SirkAgent.Report.exe
-          pause' | Set-Content -Path artifacts/SIRK-Agent-Runtime/GENERATE-HTML-REPORT.cmd -Encoding ascii
+          echo.
+          echo Raport HTML i JSON zapisano w C:\ProgramData\SIRK\Agent\Reports
+          pause' | Set-Content -Path artifacts/SIRK-Agent-Runtime/GENERATE-HTML-AND-JSON-REPORT.cmd -Encoding ascii
+
+          '@echo off
+          cd /d "%~dp0"
+          SirkAgent.Report.exe --json-only
+          echo.
+          echo Raport JSON zapisano w C:\ProgramData\SIRK\Agent\Reports
+          pause' | Set-Content -Path artifacts/SIRK-Agent-Runtime/EXPORT-DIAGNOSTICS-JSON.cmd -Encoding ascii
       - uses: actions/upload-artifact@v4
         with:
           name: SIRK-Agent-Policy-Test-win-x64-framework-dependent

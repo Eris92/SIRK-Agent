@@ -11,7 +11,7 @@ public sealed class PolicyStateHealthCheckerTests
         try
         {
             var path = Path.Combine(directory, "policy-state.bin");
-            var store = new RecordingPolicyStateStore();
+            var store = new RecordingPolicyStateStore(path);
             var checker = new PolicyStateHealthChecker(path, store);
 
             var result = checker.Check();
@@ -64,6 +64,10 @@ public sealed class PolicyStateHealthCheckerTests
 
     private sealed class RecordingPolicyStateStore : IPolicyStateStore
     {
+        private readonly string _path;
+
+        public RecordingPolicyStateStore(string path) => _path = path;
+
         public int SaveCount { get; private set; }
         public PolicyState? SavedState { get; private set; }
 
@@ -73,10 +77,8 @@ public sealed class PolicyStateHealthCheckerTests
         {
             SaveCount++;
             SavedState = state;
-            File.WriteAllBytes(CurrentPath.Value!, [42]);
+            File.WriteAllBytes(_path, [42]);
         }
-
-        public static readonly AsyncLocal<string?> CurrentPath = new();
     }
 
     private sealed class ThrowingPolicyStateStore : IPolicyStateStore

@@ -1,0 +1,148 @@
+name: SIRK Agent Full Management CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tools/**'
+      - '.github/workflows/management-full-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  full-management-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish runtime reporter and CLI
+        shell: pwsh
+        run: |
+          dotnet publish src/SirkAgent.Service/SirkAgent.Service.csproj -c Release -r win-x64 --self-contained false -p:InformationalVersion=0.3.0-test+${{ github.sha }} -o artifacts/SIRK-Agent-Runtime
+          dotnet publish src/SirkAgent.Report/SirkAgent.Report.csproj -c Release -r win-x64 --self-contained false -o artifacts/SIRK-Agent-Runtime
+          dotnet publish src/SirkAgent.Cli/SirkAgent.Cli.csproj -c Release -r win-x64 --self-contained false -o artifacts/SIRK-Agent-Runtime
+          Copy-Item tools/package/*.ps1 artifacts/SIRK-Agent-Runtime/ -Force
+
+      - name: Generate integrity manifest and launchers
+        shell: pwsh
+        run: |
+          $runtime = Resolve-Path artifacts/SIRK-Agent-Runtime
+          $protected = @('SirkAgent.Service.exe','SirkAgent.Service.dll','SirkAgent.Policy.dll','SirkAgent.Report.exe','sirkctl.exe')
+          $files = foreach ($name in $protected) {
+            $path = Join-Path $runtime $name
+            if (-not (Test-Path $path)) { throw "Missing protected file $name" }
+            @{ path = $name; sha256 = (Get-FileHash $path -Algorithm SHA256).Hash }
+          }
+          @{ files = $files } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $runtime 'integrity-manifest.json') -Encoding UTF8
+          @{ product='SIRK Agent'; version='0.3.0-test'; commit='${{ github.sha }}'; runtime='win-x64'; requiredRuntime='.NET 8 x64' } | ConvertTo-Json | Set-Content (Join-Path $runtime 'build-manifest.json') -Encoding UTF8
+          '@echo off
+          cd /d "%~dp0"
+          sirkctl.exe status
+          pause' | Set-Content (Join-Path $runtime 'STATUS.cmd') -Encoding ascii
+          '@echo off
+          cd /d "%~dp0"
+          sirkctl.exe create-test-policy
+          sirkctl.exe process
+          pause' | Set-Content (Join-Path $runtime 'CREATE-AND-APPLY-TEST-POLICY.cmd') -Encoding ascii
+          '@echo off
+          cd /d "%~dp0"
+          sirkctl.exe create-test-recovery
+          sirkctl.exe process
+          pause' | Set-Content (Join-Path $runtime 'CREATE-AND-APPLY-TEST-RECOVERY.cmd') -Encoding ascii
+
+      - name: Validate clean startup and management state
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:ProgramData 'SIRK\Agent'
+          Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
+          ./artifacts/SIRK-Agent-Runtime/SirkAgent.Service.exe --once
+          $management = Get-Content (Join-Path $root 'management-state.json') -Raw | ConvertFrom-Json
+          if ($management.integrityCode -ne 'INTEGRITY_OK') { throw "Integrity status: $($management.integrityCode)" }
+          if (-not (Test-Path (Join-Path $root 'Incoming'))) { throw 'Policy inbox was not created.' }
+
+      - name: Install Windows service
+        shell: pwsh
+        run: |
+          ./artifacts/SIRK-Agent-Runtime/Install-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent CI"
+          (Get-Service SirkAgent).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))
+          Start-Sleep -Seconds 5
+
+      - name: Validate local CLI and signed policy
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:ProgramData 'SIRK\Agent'
+          ./artifacts/SIRK-Agent-Runtime/sirkctl.exe status | Set-Content artifacts/status.json
+          ./artifacts/SIRK-Agent-Runtime/sirkctl.exe create-test-policy
+          ./artifacts/SIRK-Agent-Runtime/sirkctl.exe process
+          Start-Sleep -Seconds 18
+          if (-not (Test-Path (Join-Path $root 'active-policy.json'))) { throw 'Signed policy was not activated.' }
+          $management = Get-Content (Join-Path $root 'management-state.json') -Raw | ConvertFrom-Json
+          if ($management.acceptedPolicies -lt 1) { throw 'Accepted policy counter was not updated.' }
+          if ($management.lastPolicyId -notlike 'test-policy-*') { throw "Unexpected policy: $($management.lastPolicyId)" }
+
+      - name: Validate replay rejection
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:ProgramData 'SIRK\Agent'
+          $accepted = Get-ChildItem (Join-Path $root 'Archive\Accepted') -Filter '*.accepted.json' | Select-Object -First 1
+          Copy-Item $accepted.FullName (Join-Path $root 'Incoming\replay.policy.json')
+          Start-Sleep -Seconds 18
+          $management = Get-Content (Join-Path $root 'management-state.json') -Raw | ConvertFrom-Json
+          if ($management.rejectedPolicies -lt 1) { throw 'Replay policy was not rejected.' }
+
+      - name: Validate signed recovery action
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:ProgramData 'SIRK\Agent'
+          Set-Content (Join-Path $root 'quarantine-state.bin') 'test-placeholder'
+          Set-Content (Join-Path $root 'tamper-event-latest.json') '{}'
+          Start-Sleep -Seconds 2
+          ./artifacts/SIRK-Agent-Runtime/sirkctl.exe create-test-recovery
+          Start-Sleep -Seconds 18
+          if (Test-Path (Join-Path $root 'quarantine-state.bin')) { throw 'Signed recovery did not archive quarantine state.' }
+          if (Test-Path (Join-Path $root 'tamper-event-latest.json')) { throw 'Signed recovery did not archive tamper event.' }
+          if (-not (Get-ChildItem (Join-Path $root 'Archive\Recovery') -ErrorAction SilentlyContinue)) { throw 'Recovery archive is empty.' }
+
+      - name: Validate integrity failure detection
+        shell: pwsh
+        run: |
+          $installed = Join-Path $env:ProgramFiles 'SIRK Agent CI'
+          $target = Join-Path $installed 'SirkAgent.Report.exe'
+          $backup = "$target.ci-backup"
+          Copy-Item $target $backup -Force
+          Add-Content $target 'tamper'
+          Start-Sleep -Seconds 18
+          $management = Get-Content "$env:ProgramData\SIRK\Agent\management-state.json" -Raw | ConvertFrom-Json
+          if ($management.integrityVerified) { throw 'Modified executable was not detected.' }
+          Copy-Item $backup $target -Force
+          Remove-Item $backup -Force
+
+      - name: Validate diagnostics and TestBundle
+        shell: pwsh
+        run: |
+          ./artifacts/SIRK-Agent-Runtime/SirkAgent.Report.exe --no-open
+          $out = Join-Path $PWD 'artifacts/TestBundles'
+          ./artifacts/SIRK-Agent-Runtime/Collect-SirkAgent-TestBundle.ps1 -OutputDirectory $out
+          if (-not (Get-ChildItem $out -Filter '*.zip')) { throw 'TestBundle was not generated.' }
+
+      - name: Uninstall service and create package
+        shell: pwsh
+        run: |
+          ./artifacts/SIRK-Agent-Runtime/Uninstall-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent CI" -Confirm:$false
+          Compress-Archive -Path artifacts/SIRK-Agent-Runtime/* -DestinationPath artifacts/SIRK-Agent-0.3.0-test-win-x64.zip -CompressionLevel Optimal -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SIRK-Agent-0.3.0-test-win-x64
+          path: |
+            artifacts/SIRK-Agent-0.3.0-test-win-x64.zip
+            artifacts/SIRK-Agent-Runtime/**
+            artifacts/TestBundles/*.zip
+          if-no-files-found: error

@@ -16,17 +16,13 @@ permissions:
   contents: read
 
 jobs:
-  test-and-package:
+  package-test-version:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
-      - name: Restore tests
-        run: dotnet restore tests/SirkAgent.Policy.Tests/SirkAgent.Policy.Tests.csproj
-      - name: Test
-        run: dotnet test tests/SirkAgent.Policy.Tests/SirkAgent.Policy.Tests.csproj --configuration Release --no-restore
       - name: Publish Windows test harness
         run: dotnet publish tools/SirkAgent.Policy.TestHarness/SirkAgent.Policy.TestHarness.csproj --configuration Release --runtime win-x64 --self-contained true --output artifacts/SIRK-Agent-Policy-Test
       - name: Run test harness
@@ -45,3 +41,24 @@ jobs:
           name: SIRK-Agent-Policy-Test-win-x64
           path: artifacts/SIRK-Agent-Policy-Test/**
           if-no-files-found: error
+
+  unit-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Restore tests
+        run: dotnet restore tests/SirkAgent.Policy.Tests/SirkAgent.Policy.Tests.csproj
+      - name: Test
+        shell: pwsh
+        run: |
+          dotnet test tests/SirkAgent.Policy.Tests/SirkAgent.Policy.Tests.csproj --configuration Release --no-restore --logger "console;verbosity=detailed" 2>&1 | Tee-Object -FilePath unit-test.log
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: SIRK-Agent-Policy-Unit-Test-Log
+          path: unit-test.log
+          if-no-files-found: warn

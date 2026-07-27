@@ -150,13 +150,16 @@ if (command is "process" or "flush")
         await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, leaveOpen: true) { AutoFlush = true };
         using var reader = new StreamReader(pipe, Encoding.UTF8, false, 4096, leaveOpen: true);
         await writer.WriteLineAsync(command);
-        var response = await reader.ReadToEndAsync(timeout.Token);
-        Console.WriteLine(string.IsNullOrWhiteSpace(response) ? "{\"ok\":false,\"error\":\"Empty control response.\"}" : response.Trim());
+        var response = await ReadSingleJsonAsync(reader, timeout.Token);
+        using var document = JsonDocument.Parse(response);
+        Console.WriteLine(JsonSerializer.Serialize(document.RootElement, jsonOptions));
         return;
     }
-    catch (Exception ex) when (ex is TimeoutException or IOException or OperationCanceledException or UnauthorizedAccessException)
+    catch (Exception ex) when (ex is TimeoutException or IOException or OperationCanceledException or UnauthorizedAccessException or JsonException)
     {
-        Console.WriteLine(await RunControlFileFallbackAsync(command));
+        var fallback = await RunControlFileFallbackAsync(command);
+        using var document = JsonDocument.Parse(fallback);
+        Console.WriteLine(JsonSerializer.Serialize(document.RootElement, jsonOptions));
         return;
     }
 }
@@ -240,6 +243,66 @@ static JsonElement? ReadJsonFile(string path)
     {
         return null;
     }
+}
+
+static async Task<string> ReadSingleJsonAsync(StreamReader reader, CancellationToken token)
+{
+    var builder = new StringBuilder();
+    var buffer = new char[1];
+    var depth = 0;
+    var started = false;
+    var inString = false;
+    var escaped = false;
+
+    while (await reader.ReadAsync(buffer.AsMemory(0, 1), token) > 0)
+    {
+        var value = buffer[0];
+        builder.Append(value);
+
+        if (!started)
+        {
+            if (char.IsWhiteSpace(value))
+                continue;
+            if (value is not ('{' or '['))
+                throw new JsonException("Control response does not start with a JSON object or array.");
+            started = true;
+            depth = 1;
+            continue;
+        }
+
+        if (inString)
+        {
+            if (escaped)
+            {
+                escaped = false;
+            }
+            else if (value == '\\')
+            {
+                escaped = true;
+            }
+            else if (value == '"')
+            {
+                inString = false;
+            }
+            continue;
+        }
+
+        if (value == '"')
+        {
+            inString = true;
+            continue;
+        }
+
+        if (value is '{' or '[')
+            depth++;
+        else if (value is '}' or ']')
+            depth--;
+
+        if (started && depth == 0)
+            return builder.ToString().Trim();
+    }
+
+    throw new EndOfStreamException("Control response ended before a complete JSON document was received.");
 }
 
 static async Task<string> RunControlFileFallbackAsync(string command)

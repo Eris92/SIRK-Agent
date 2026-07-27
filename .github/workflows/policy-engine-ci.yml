@@ -1,0 +1,116 @@
+name: Policy Engine CI
+
+on:
+  push:
+    branches:
+      - main
+      - policy-engine-foundation
+  pull_request:
+    paths:
+      - 'src/SirkAgent.Policy/**'
+      - 'src/SirkAgent.Service/**'
+      - 'src/SirkAgent.Report/**'
+      - 'tests/SirkAgent.Policy.Tests/**'
+      - 'tools/SirkAgent.Policy.TestHarness/**'
+      - '.github/workflows/policy-engine-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  package-test-version:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Publish Windows test harness
+        run: dotnet publish tools/SirkAgent.Policy.TestHarness/SirkAgent.Policy.TestHarness.csproj --configuration Release --runtime win-x64 --self-contained false -p:PublishSingleFile=false -p:PublishTrimmed=false --output artifacts/SIRK-Agent-Policy-Test
+      - name: Run test harness
+        shell: pwsh
+        run: ./artifacts/SIRK-Agent-Policy-Test/SirkAgent.Policy.TestHarness.exe
+      - name: Publish agent runtime
+        run: dotnet publish src/SirkAgent.Service/SirkAgent.Service.csproj --configuration Release --runtime win-x64 --self-contained false -p:PublishSingleFile=false -p:PublishTrimmed=false --output artifacts/SIRK-Agent-Runtime
+      - name: Publish diagnostics reporter
+        run: dotnet publish src/SirkAgent.Report/SirkAgent.Report.csproj --configuration Release --runtime win-x64 --self-contained false -p:PublishSingleFile=false -p:PublishTrimmed=false --output artifacts/SIRK-Agent-Runtime
+      - name: Run one heartbeat
+        shell: pwsh
+        run: ./artifacts/SIRK-Agent-Runtime/SirkAgent.Service.exe --once
+      - name: Generate HTML and JSON reports
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          ./artifacts/SIRK-Agent-Runtime/SirkAgent.Report.exe --no-open
+          $reports = Join-Path $env:ProgramData 'SIRK\Agent\Reports'
+          if (-not (Get-ChildItem $reports -Filter '*.json' -ErrorAction SilentlyContinue)) { throw 'JSON report was not generated.' }
+          if (-not (Get-ChildItem $reports -Filter '*.html' -ErrorAction SilentlyContinue)) { throw 'HTML report was not generated.' }
+      - name: Add launchers
+        shell: pwsh
+        run: |
+          '@echo off
+          cd /d "%~dp0"
+          dotnet --list-runtimes | findstr /i "Microsoft.NETCore.App 8." >nul
+          if errorlevel 1 (
+            echo Brak Microsoft .NET 8 Runtime x64.
+            echo Zainstaluj runtime przez: winget install Microsoft.DotNet.Runtime.8
+            pause
+            exit /b 1
+          )
+          SirkAgent.Policy.TestHarness.exe
+          pause' | Set-Content -Path artifacts/SIRK-Agent-Policy-Test/TEST-POLICY-ENGINE.cmd -Encoding ascii
+
+          '@echo off
+          cd /d "%~dp0"
+          SirkAgent.Service.exe --once
+          pause' | Set-Content -Path artifacts/SIRK-Agent-Runtime/TEST-AGENT-ONCE.cmd -Encoding ascii
+
+          '@echo off
+          cd /d "%~dp0"
+          SirkAgent.Service.exe
+          pause' | Set-Content -Path artifacts/SIRK-Agent-Runtime/RUN-AGENT-LOOP.cmd -Encoding ascii
+
+          '@echo off
+          cd /d "%~dp0"
+          SirkAgent.Report.exe
+          echo.
+          echo Raport HTML i JSON zapisano w C:\ProgramData\SIRK\Agent\Reports
+          pause' | Set-Content -Path artifacts/SIRK-Agent-Runtime/GENERATE-HTML-AND-JSON-REPORT.cmd -Encoding ascii
+
+          '@echo off
+          cd /d "%~dp0"
+          SirkAgent.Report.exe --json-only
+          echo.
+          echo Raport JSON zapisano w C:\ProgramData\SIRK\Agent\Reports
+          pause' | Set-Content -Path artifacts/SIRK-Agent-Runtime/EXPORT-DIAGNOSTICS-JSON.cmd -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SIRK-Agent-Policy-Test-win-x64-framework-dependent
+          path: artifacts/SIRK-Agent-Policy-Test/**
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SIRK-Agent-Runtime-win-x64-framework-dependent
+          path: artifacts/SIRK-Agent-Runtime/**
+          if-no-files-found: error
+
+  unit-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Restore tests
+        run: dotnet restore tests/SirkAgent.Policy.Tests/SirkAgent.Policy.Tests.csproj
+      - name: Test
+        shell: pwsh
+        run: |
+          dotnet test tests/SirkAgent.Policy.Tests/SirkAgent.Policy.Tests.csproj --configuration Release --no-restore --logger "console;verbosity=detailed" 2>&1 | Tee-Object -FilePath unit-test.log
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: SIRK-Agent-Policy-Unit-Test-Log
+          path: unit-test.log
+          if-no-files-found: warn

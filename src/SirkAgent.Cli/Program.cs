@@ -6,6 +6,7 @@ using SirkAgent.Policy;
 
 const string pipeName = "SIRK-Agent-Control";
 var command = args.FirstOrDefault()?.Trim().ToLowerInvariant() ?? "status";
+var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
 
 if (command == "verify-integrity")
 {
@@ -55,7 +56,33 @@ if (command == "verify-integrity")
     return;
 }
 
-if (command is "status" or "process" or "flush")
+if (command == "status")
+{
+    var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SIRK", "Agent");
+    var management = ReadJsonFile(Path.Combine(root, "management-state.json"));
+    var heartbeat = ReadJsonFile(Path.Combine(root, "heartbeat-latest.json"));
+    var security = ReadJsonFile(Path.Combine(root, "security-state.json"));
+    var quarantine = ReadJsonFile(Path.Combine(root, "quarantine-status.json"));
+
+    var response = new
+    {
+        ok = management is not null || heartbeat is not null || security is not null,
+        machineName = Environment.MachineName,
+        generatedAtUtc = DateTimeOffset.UtcNow,
+        agentDataPath = root,
+        management,
+        heartbeat,
+        security,
+        quarantine
+    };
+
+    Console.WriteLine(JsonSerializer.Serialize(response, jsonOptions));
+    if (!response.ok)
+        Environment.ExitCode = 4;
+    return;
+}
+
+if (command is "process" or "flush")
 {
     try
     {
@@ -136,6 +163,26 @@ if (command is "create-test-policy" or "create-test-recovery")
 
 Console.Error.WriteLine("Usage: sirkctl status|process|flush|verify-integrity|create-test-policy|create-test-recovery");
 Environment.ExitCode = 2;
+
+static JsonElement? ReadJsonFile(string path)
+{
+    if (!File.Exists(path))
+        return null;
+
+    try
+    {
+        using var document = JsonDocument.Parse(File.ReadAllBytes(path));
+        return document.RootElement.Clone();
+    }
+    catch (JsonException)
+    {
+        return null;
+    }
+    catch (IOException)
+    {
+        return null;
+    }
+}
 
 static async Task<string> RunControlFileFallbackAsync(string command)
 {

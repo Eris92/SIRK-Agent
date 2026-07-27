@@ -42,6 +42,8 @@ internal sealed class AgentWorker : BackgroundService
         var healthRegistry = new ModuleHealthRegistry();
         var healthMonitor = new HealthMonitor(paths.SecurityStatePath, healthRegistry, jsonOptions);
         var scheduler = new AgentScheduler(paths.AgentDirectory, Path.GetFileName(paths.PolicyStatePath), interval, debounce, _runOnce);
+        var telemetryQueue = new TelemetryQueue(paths.TelemetryQueueDirectory, protector, 50L * 1024 * 1024, jsonOptions);
+        var evidenceChain = new EvidenceChain(paths.EvidenceLogPath, paths.EvidenceStatePath, protector, jsonOptions);
 
         void ReportHealth(string module, ModuleHealthStatus status, string code, string summary,
             DateTimeOffset updatedAtUtc, DateTimeOffset? lastSuccessAtUtc, string? error,
@@ -89,6 +91,29 @@ internal sealed class AgentWorker : BackgroundService
             {
                 ["path"] = paths.PolicyStatePath,
                 ["debounceMs"] = debounce.TotalMilliseconds.ToString("0")
+            });
+
+        var initialEvidence = evidenceChain.Validate();
+        ReportHealth("Evidence Chain",
+            initialEvidence.IsValid ? ModuleHealthStatus.Healthy : ModuleHealthStatus.Critical,
+            initialEvidence.Code,
+            initialEvidence.IsValid ? "Evidence chain integrity verified." : "Evidence chain integrity failure detected.",
+            startedAtUtc, initialEvidence.IsValid ? startedAtUtc : null, initialEvidence.Error,
+            new Dictionary<string, string?>
+            {
+                ["eventsChecked"] = initialEvidence.EventsChecked.ToString(),
+                ["logPath"] = paths.EvidenceLogPath,
+                ["statePath"] = paths.EvidenceStatePath
+            });
+
+        ReportHealth("Telemetry Queue", ModuleHealthStatus.Healthy, "TELEMETRY_QUEUE_READY",
+            "Protected bounded offline telemetry queue is ready.", startedAtUtc, startedAtUtc, null,
+            new Dictionary<string, string?>
+            {
+                ["path"] = paths.TelemetryQueueDirectory,
+                ["maxBytes"] = (50L * 1024 * 1024).ToString(),
+                ["queuedFiles"] = telemetryQueue.SnapshotFiles().Count.ToString(),
+                ["queuedBytes"] = telemetryQueue.TotalBytes().ToString()
             });
 
         _logger.LogInformation("SIRK Agent started. Machine={Machine} DeviceId={DeviceId} Once={RunOnce}",
@@ -181,6 +206,69 @@ internal sealed class AgentWorker : BackgroundService
                         ["path"] = paths.SecurityStatePath
                     });
 
+                var cycleData = new
+                {
+                    timestampUtc = timestamp,
+                    trigger,
+                    triggerDetail = scheduledTrigger.Detail,
+                    policyCode = policyHealth.Code,
+                    policyHealthy = policyHealth.IsHealthy,
+                    policyId = policyState.ActivePolicyId,
+                    policyVersion = policyState.Version,
+                    securityState = securityState.State,
+                    quarantineActive = quarantine.Active,
+                    quarantineReason = quarantine.Reason,
+                    detectionCount = quarantine.DetectionCount
+                };
+
+                try
+                {
+                    telemetryQueue.Enqueue("Agent", "CycleCompleted",
+                        policyHealth.IsHealthy ? TelemetryPriority.Normal : TelemetryPriority.Critical,
+                        cycleData);
+                    ReportHealth("Telemetry Queue", ModuleHealthStatus.Healthy, "TELEMETRY_ENQUEUED",
+                        "Agent cycle stored in the protected offline telemetry queue.", timestamp, timestamp, null,
+                        new Dictionary<string, string?>
+                        {
+                            ["path"] = paths.TelemetryQueueDirectory,
+                            ["queuedFiles"] = telemetryQueue.SnapshotFiles().Count.ToString(),
+                            ["queuedBytes"] = telemetryQueue.TotalBytes().ToString()
+                        });
+                }
+                catch (Exception ex)
+                {
+                    ReportHealth("Telemetry Queue", ModuleHealthStatus.Critical, "TELEMETRY_QUEUE_FAILURE",
+                        "Unable to persist telemetry event.", timestamp, null, ex.ToString(),
+                        new Dictionary<string, string?> { ["path"] = paths.TelemetryQueueDirectory });
+                }
+
+                try
+                {
+                    evidenceChain.Append(TenantId, deviceId, "Security", "AgentCycle", cycleData);
+                    var validation = evidenceChain.Validate();
+                    ReportHealth("Evidence Chain",
+                        validation.IsValid ? ModuleHealthStatus.Healthy : ModuleHealthStatus.Critical,
+                        validation.Code,
+                        validation.IsValid ? "Evidence chain integrity verified." : "Evidence chain integrity failure detected.",
+                        timestamp, validation.IsValid ? timestamp : null, validation.Error,
+                        new Dictionary<string, string?>
+                        {
+                            ["eventsChecked"] = validation.EventsChecked.ToString(),
+                            ["logPath"] = paths.EvidenceLogPath,
+                            ["statePath"] = paths.EvidenceStatePath
+                        });
+                }
+                catch (Exception ex)
+                {
+                    ReportHealth("Evidence Chain", ModuleHealthStatus.Critical, "EVIDENCE_APPEND_FAILED",
+                        "Unable to append evidence event.", timestamp, null, ex.ToString(),
+                        new Dictionary<string, string?>
+                        {
+                            ["logPath"] = paths.EvidenceLogPath,
+                            ["statePath"] = paths.EvidenceStatePath
+                        });
+                }
+
                 healthMonitor.Capture(securityState);
 
                 var heartbeat = PolicyHeartbeatFactory.Create(policyState, TenantId, deviceId, timestamp,
@@ -205,7 +293,6 @@ internal sealed class AgentWorker : BackgroundService
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
-            // Expected during service shutdown.
         }
         catch (Exception ex)
         {

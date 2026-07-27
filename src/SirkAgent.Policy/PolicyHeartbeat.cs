@@ -30,6 +30,15 @@ public sealed record PolicyHeartbeat
 
     [JsonPropertyName("stateStatus")]
     public required string StateStatus { get; init; }
+
+    [JsonPropertyName("tamperDetected")]
+    public required bool TamperDetected { get; init; }
+
+    [JsonPropertyName("tamperReason")]
+    public string? TamperReason { get; init; }
+
+    [JsonPropertyName("trigger")]
+    public required string Trigger { get; init; }
 }
 
 public static class PolicyHeartbeatFactory
@@ -39,9 +48,12 @@ public static class PolicyHeartbeatFactory
         string tenantId,
         string deviceId,
         DateTimeOffset timestampUtc,
-        string stateStatus = "OK")
+        string stateStatus = "OK",
+        string trigger = "Interval")
     {
         ArgumentNullException.ThrowIfNull(state);
+
+        var tamperDetected = !string.Equals(stateStatus, "OK", StringComparison.Ordinal);
 
         return new PolicyHeartbeat
         {
@@ -53,7 +65,10 @@ public static class PolicyHeartbeatFactory
             ActivePolicyId = state.ActivePolicyId,
             ActivePolicyHash = state.ActivePolicyHash,
             ActiveCaseId = state.ActiveCaseId,
-            StateStatus = stateStatus
+            StateStatus = stateStatus,
+            TamperDetected = tamperDetected,
+            TamperReason = tamperDetected ? stateStatus : null,
+            Trigger = trigger
         };
     }
 }

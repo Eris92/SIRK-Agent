@@ -19,10 +19,12 @@ var noOpen = args.Contains("--no-open", StringComparer.OrdinalIgnoreCase) || jso
 
 var modules = new List<ModuleResult>
 {
+    InspectJson("Agent Core / Security State", Path.Combine(agentDirectory, "security-state.json"), true),
     InspectJson("Policy / Heartbeat", Path.Combine(agentDirectory, "heartbeat-latest.json"), true),
     InspectJson("Quarantine", Path.Combine(agentDirectory, "quarantine-status.json"), false),
     InspectJson("Latest tamper event", Path.Combine(agentDirectory, "tamper-event-latest.json"), false),
     InspectText("Agent events", Path.Combine(agentDirectory, "agent-events.jsonl"), false, 100),
+    InspectBinary("Device identity", Path.Combine(agentDirectory, "device-identity.bin"), true),
     InspectBinary("Policy state", Path.Combine(agentDirectory, "policy-state.bin"), true),
     InspectBinary("Protected quarantine state", Path.Combine(agentDirectory, "quarantine-state.bin"), false),
     InspectRuntime(),
@@ -33,7 +35,7 @@ var overall = modules.Any(m => m.Status == ModuleStatus.Critical) ? ModuleStatus
     : modules.Any(m => m.Status == ModuleStatus.Warning) ? ModuleStatus.Warning : ModuleStatus.Healthy;
 
 var export = new DiagnosticExport(
-    SchemaVersion: 1,
+    SchemaVersion: 2,
     GeneratedUtc: timestamp.ToUniversalTime(),
     GeneratedLocal: timestamp,
     DeviceName: Environment.MachineName,
@@ -77,12 +79,38 @@ static ModuleResult InspectJson(string name, string path, bool required)
         var root = document.RootElement;
         var status = ModuleStatus.Healthy;
         var summary = "Plik JSON poprawny.";
+
         if ((root.TryGetProperty("tamperDetected", out var tamper) && tamper.ValueKind == JsonValueKind.True) ||
             (root.TryGetProperty("quarantineActive", out var quarantine) && quarantine.ValueKind == JsonValueKind.True) ||
             (root.TryGetProperty("active", out var active) && active.ValueKind == JsonValueKind.True))
-        { status = ModuleStatus.Critical; summary = "Wykryto manipulacje lub aktywna kwarantanne."; }
+        {
+            status = ModuleStatus.Critical;
+            summary = "Wykryto manipulacje lub aktywna kwarantanne.";
+        }
+        else if (root.TryGetProperty("overallHealth", out var overallHealth))
+        {
+            var value = overallHealth.GetString();
+            if (string.Equals(value, "Critical", StringComparison.OrdinalIgnoreCase))
+            {
+                status = ModuleStatus.Critical;
+                summary = "Co najmniej jeden modul Agent Core ma stan krytyczny.";
+            }
+            else if (string.Equals(value, "Warning", StringComparison.OrdinalIgnoreCase))
+            {
+                status = ModuleStatus.Warning;
+                summary = "Co najmniej jeden modul Agent Core wymaga uwagi.";
+            }
+            else
+            {
+                summary = "Wszystkie zarejestrowane moduly Agent Core sa zdrowe.";
+            }
+        }
         else if (root.TryGetProperty("stateStatus", out var state) && !string.Equals(state.GetString(), "OK", StringComparison.OrdinalIgnoreCase))
-        { status = ModuleStatus.Warning; summary = "Stan modulu nie jest OK."; }
+        {
+            status = ModuleStatus.Warning;
+            summary = "Stan modulu nie jest OK.";
+        }
+
         return new(name, status, summary, path, JsonSerializer.Serialize(root, new JsonSerializerOptions { WriteIndented = true }), null);
     }
     catch (Exception ex) { return new(name, ModuleStatus.Critical, "Nie mozna odczytac JSON.", path, null, ex.ToString()); }

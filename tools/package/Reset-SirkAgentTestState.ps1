@@ -1,4 +1,3 @@
-[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
     [switch]$KeepServiceStopped
 )
@@ -21,10 +20,6 @@ $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $archiveRoot = Join-Path $agentRoot "ResetArchive\$timestamp"
 $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
 $serviceWasRunning = $service -and $service.Status -ne 'Stopped'
-
-if (-not $PSCmdlet.ShouldProcess($agentRoot, 'Archiwizacja i reset testowego stanu polityki oraz kwarantanny')) {
-    return
-}
 
 if ($serviceWasRunning) {
     Stop-Service -Name $serviceName -Force

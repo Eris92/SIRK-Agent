@@ -6,10 +6,12 @@ const string tenantId = "investa";
 var startedAtUtc = DateTimeOffset.UtcNow;
 var paths = AgentPaths.CreateDefault();
 var interval = TimeSpan.FromSeconds(30);
+var debounce = TimeSpan.FromMilliseconds(350);
 var runOnce = args.Any(a => string.Equals(a, "--once", StringComparison.OrdinalIgnoreCase));
 
 paths.EnsureDirectories();
 
+var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
 var protector = new DpapiMachineStateProtector();
 var identityStore = new DeviceIdentityStore(paths.DeviceIdentityPath, protector);
 var identity = identityStore.LoadOrCreate(tenantId);
@@ -21,9 +23,15 @@ var quarantineLoad = quarantineStore.Load();
 var quarantine = quarantineLoad.State;
 var stateMachine = new SecurityStateMachine(startedAtUtc);
 var healthRegistry = new ModuleHealthRegistry();
-var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
+var healthMonitor = new HealthMonitor(paths.SecurityStatePath, healthRegistry, jsonOptions);
+var scheduler = new AgentScheduler(
+    paths.AgentDirectory,
+    Path.GetFileName(paths.PolicyStatePath),
+    interval,
+    debounce,
+    runOnce);
 
-healthRegistry.Report(new ModuleHealthSnapshot(
+ReportHealth(
     "Device Identity",
     ModuleHealthStatus.Healthy,
     "DEVICE_IDENTITY_OK",
@@ -37,9 +45,9 @@ healthRegistry.Report(new ModuleHealthSnapshot(
         ["tenantId"] = tenantId,
         ["path"] = paths.DeviceIdentityPath,
         ["machineName"] = Environment.MachineName
-    }));
+    });
 
-healthRegistry.Report(new ModuleHealthSnapshot(
+ReportHealth(
     "Quarantine Store",
     quarantineLoad.TamperDetected ? ModuleHealthStatus.Critical : ModuleHealthStatus.Healthy,
     quarantineLoad.TamperDetected ? "QUARANTINE_STATE_TAMPER" : "QUARANTINE_STORE_OK",
@@ -50,9 +58,37 @@ healthRegistry.Report(new ModuleHealthSnapshot(
     new Dictionary<string, string?>
     {
         ["path"] = paths.QuarantineProtectedPath,
-        ["active"] = quarantine.Active.ToString(),
-        ["loadNote"] = quarantineLoad.Error is null ? "none" : "see error"
-    }));
+        ["active"] = quarantine.Active.ToString()
+    });
+
+ReportHealth(
+    "Scheduler",
+    ModuleHealthStatus.Healthy,
+    runOnce ? "SCHEDULER_ONCE_MODE" : "SCHEDULER_ACTIVE",
+    runOnce ? "Scheduler will execute one startup cycle." : "Scheduler is active with interval and file watcher triggers.",
+    startedAtUtc,
+    startedAtUtc,
+    null,
+    new Dictionary<string, string?>
+    {
+        ["intervalSeconds"] = interval.TotalSeconds.ToString("0"),
+        ["debounceMilliseconds"] = debounce.TotalMilliseconds.ToString("0"),
+        ["watchPath"] = paths.PolicyStatePath
+    });
+
+ReportHealth(
+    "Tamper Watcher",
+    runOnce ? ModuleHealthStatus.Warning : ModuleHealthStatus.Healthy,
+    runOnce ? "WATCHER_DISABLED_ONCE_MODE" : "WATCHER_ACTIVE",
+    runOnce ? "File watcher is disabled in one-shot mode." : "Policy state watcher is managed by the scheduler.",
+    startedAtUtc,
+    runOnce ? null : startedAtUtc,
+    null,
+    new Dictionary<string, string?>
+    {
+        ["path"] = paths.PolicyStatePath,
+        ["debounceMs"] = debounce.TotalMilliseconds.ToString("0")
+    });
 
 Console.WriteLine("SIRK Agent Runtime");
 Console.WriteLine($"Machine:     {Environment.MachineName}");
@@ -62,7 +98,7 @@ Console.WriteLine($"State:       {paths.PolicyStatePath}");
 Console.WriteLine($"Heartbeat:   {paths.HeartbeatPath}");
 Console.WriteLine($"Security:    {paths.SecurityStatePath}");
 Console.WriteLine($"Quarantine:  {paths.QuarantineProtectedPath}");
-Console.WriteLine(runOnce ? "Mode:        once" : $"Mode:        loop ({interval.TotalSeconds:0}s + watcher)");
+Console.WriteLine(runOnce ? "Mode:        once" : $"Mode:        scheduled ({interval.TotalSeconds:0}s + watcher)");
 
 using var cancellation = new CancellationTokenSource();
 Console.CancelKeyPress += (_, eventArgs) =>
@@ -71,61 +107,14 @@ Console.CancelKeyPress += (_, eventArgs) =>
     cancellation.Cancel();
 };
 
-using var changeSignal = new SemaphoreSlim(0, 1);
-using var watcher = new FileSystemWatcher(paths.AgentDirectory, Path.GetFileName(paths.PolicyStatePath))
+await foreach (var scheduledTrigger in scheduler.RunAsync(cancellation.Token))
 {
-    NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.CreationTime,
-    IncludeSubdirectories = false,
-    EnableRaisingEvents = !runOnce
-};
-
-void SignalStateChange(string changeType)
-{
-    Console.WriteLine($"{DateTimeOffset.UtcNow:O} watcher={changeType}");
-    if (changeSignal.CurrentCount == 0)
-        changeSignal.Release();
-}
-
-watcher.Changed += (_, _) => SignalStateChange("Changed");
-watcher.Created += (_, _) => SignalStateChange("Created");
-watcher.Deleted += (_, _) => SignalStateChange("Deleted");
-watcher.Renamed += (_, _) => SignalStateChange("Renamed");
-watcher.Error += (_, eventArgs) => SignalStateChange("WatcherError:" + eventArgs.GetException().GetType().Name);
-
-healthRegistry.Report(new ModuleHealthSnapshot(
-    "Tamper Watcher",
-    runOnce ? ModuleHealthStatus.Warning : ModuleHealthStatus.Healthy,
-    runOnce ? "WATCHER_DISABLED_ONCE_MODE" : "WATCHER_ACTIVE",
-    runOnce ? "File watcher is disabled in one-shot mode." : "Policy state watcher is active.",
-    startedAtUtc,
-    runOnce ? null : startedAtUtc,
-    null,
-    new Dictionary<string, string?>
-    {
-        ["path"] = paths.PolicyStatePath,
-        ["debounceMs"] = "350"
-    }));
-
-var trigger = "Startup";
-while (!cancellation.IsCancellationRequested)
-{
-    if (string.Equals(trigger, "FileSystemWatcher", StringComparison.Ordinal))
-    {
-        try
-        {
-            await Task.Delay(TimeSpan.FromMilliseconds(350), cancellation.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            break;
-        }
-    }
-
-    var timestamp = DateTimeOffset.UtcNow;
+    var trigger = scheduledTrigger.Name;
+    var timestamp = scheduledTrigger.TimestampUtc;
     var policyHealth = policyChecker.Check();
     var policyState = policyHealth.State ?? PolicyState.Empty;
 
-    healthRegistry.Report(new ModuleHealthSnapshot(
+    ReportHealth(
         "Policy State",
         policyHealth.IsHealthy ? ModuleHealthStatus.Healthy : ModuleHealthStatus.Critical,
         policyHealth.Code,
@@ -139,8 +128,9 @@ while (!cancellation.IsCancellationRequested)
             ["policyId"] = policyState.ActivePolicyId,
             ["version"] = policyState.Version.ToString(),
             ["hash"] = policyState.ActivePolicyHash,
-            ["trigger"] = trigger
-        }));
+            ["trigger"] = trigger,
+            ["triggerDetail"] = scheduledTrigger.Detail
+        });
 
     if (!policyHealth.IsHealthy)
     {
@@ -187,7 +177,7 @@ while (!cancellation.IsCancellationRequested)
 
     AtomicFile.WriteJson(paths.QuarantineStatusPath, quarantine, jsonOptions);
 
-    healthRegistry.Report(new ModuleHealthSnapshot(
+    ReportHealth(
         "Quarantine",
         quarantine.Active ? ModuleHealthStatus.Critical : ModuleHealthStatus.Healthy,
         quarantine.Active ? quarantine.Reason ?? "QUARANTINE_ACTIVE" : "QUARANTINE_INACTIVE",
@@ -202,17 +192,17 @@ while (!cancellation.IsCancellationRequested)
             ["reason"] = quarantine.Reason,
             ["detectionCount"] = quarantine.DetectionCount.ToString(),
             ["protectedPath"] = paths.QuarantineProtectedPath
-        }));
+        });
 
     var securityState = stateMachine.Evaluate(timestamp, policyHealth.IsHealthy, policyHealth.Code, quarantine.Active);
-    AtomicFile.WriteJson(paths.SecurityStatePath, new SecurityRuntimeSnapshot(
-        securityState,
-        healthRegistry.OverallStatus().ToString(),
-        healthRegistry.Snapshot()), jsonOptions);
 
-    healthRegistry.Report(new ModuleHealthSnapshot(
+    ReportHealth(
         "Security State Machine",
-        securityState.State is "Operational" ? ModuleHealthStatus.Healthy : securityState.State is "Degraded" or "PolicyExpired" ? ModuleHealthStatus.Warning : ModuleHealthStatus.Critical,
+        securityState.State is "Operational"
+            ? ModuleHealthStatus.Healthy
+            : securityState.State is "Degraded" or "PolicyExpired"
+                ? ModuleHealthStatus.Warning
+                : ModuleHealthStatus.Critical,
         securityState.Reason,
         $"Current security state: {securityState.State}.",
         timestamp,
@@ -224,7 +214,9 @@ while (!cancellation.IsCancellationRequested)
             ["changedAtUtc"] = securityState.StateChangedAtUtc.ToString("O"),
             ["uptimeSeconds"] = securityState.UptimeSeconds.ToString(),
             ["path"] = paths.SecurityStatePath
-        }));
+        });
+
+    healthMonitor.Capture(securityState);
 
     var heartbeat = PolicyHeartbeatFactory.Create(
         policyState,
@@ -241,6 +233,7 @@ while (!cancellation.IsCancellationRequested)
     AtomicFile.AppendJsonLine(paths.EventLogPath, new AgentEvent(
         timestamp,
         trigger,
+        scheduledTrigger.Detail,
         policyHealth.Code,
         policyHealth.Message,
         !policyHealth.IsHealthy,
@@ -252,37 +245,44 @@ while (!cancellation.IsCancellationRequested)
         securityState.State,
         healthRegistry.OverallStatus().ToString()));
 
-    Console.WriteLine($"{timestamp:O} trigger={trigger} security={securityState.State} health={healthRegistry.OverallStatus()} policy={policyHealth.Code} quarantine={quarantine.Active} detections={quarantine.DetectionCount}");
-
-    if (runOnce)
-        break;
-
-    try
-    {
-        var delayTask = Task.Delay(interval, cancellation.Token);
-        var signalTask = changeSignal.WaitAsync(cancellation.Token);
-        var completed = await Task.WhenAny(delayTask, signalTask);
-        trigger = completed == signalTask ? "FileSystemWatcher" : "Interval";
-    }
-    catch (OperationCanceledException)
-    {
-        break;
-    }
+    Console.WriteLine($"{timestamp:O} trigger={trigger} detail={scheduledTrigger.Detail ?? "none"} security={securityState.State} health={healthRegistry.OverallStatus()} policy={policyHealth.Code} quarantine={quarantine.Active} detections={quarantine.DetectionCount}");
 }
 
 var stoppingAtUtc = DateTimeOffset.UtcNow;
 var stoppingState = stateMachine.Stop(stoppingAtUtc);
-AtomicFile.WriteJson(paths.SecurityStatePath, new SecurityRuntimeSnapshot(
-    stoppingState,
-    healthRegistry.OverallStatus().ToString(),
-    healthRegistry.Snapshot()), jsonOptions);
+ReportHealth(
+    "Scheduler",
+    ModuleHealthStatus.Warning,
+    "SCHEDULER_STOPPED",
+    "Scheduler stopped because the agent is shutting down.",
+    stoppingAtUtc,
+    null,
+    null,
+    new Dictionary<string, string?>());
+healthMonitor.Capture(stoppingState);
 
 return 0;
 
-internal sealed record SecurityRuntimeSnapshot(
-    SecurityStateSnapshot Security,
-    string OverallHealth,
-    IReadOnlyList<ModuleHealthSnapshot> Modules);
+void ReportHealth(
+    string module,
+    ModuleHealthStatus status,
+    string code,
+    string summary,
+    DateTimeOffset updatedAtUtc,
+    DateTimeOffset? lastSuccessAtUtc,
+    string? error,
+    IReadOnlyDictionary<string, string?> details)
+{
+    healthRegistry.Report(new ModuleHealthSnapshot(
+        module,
+        status,
+        code,
+        summary,
+        updatedAtUtc,
+        lastSuccessAtUtc,
+        error,
+        details));
+}
 
 internal sealed record TamperEvent(
     DateTimeOffset TimestampUtc,
@@ -298,6 +298,7 @@ internal sealed record TamperEvent(
 internal sealed record AgentEvent(
     DateTimeOffset TimestampUtc,
     string Trigger,
+    string? TriggerDetail,
     string Code,
     string Message,
     bool TamperDetected,

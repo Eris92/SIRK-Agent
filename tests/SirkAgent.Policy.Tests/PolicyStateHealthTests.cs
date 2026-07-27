@@ -20,7 +20,14 @@ public sealed class PolicyStateHealthTests
             Assert.True(result.IsHealthy);
             Assert.Equal(PolicyStateHealthStatus.Ok, result.Status);
             Assert.Equal("STATE_INITIALIZED", result.Code);
-            Assert.Equal(PolicyState.Empty, result.State);
+            Assert.NotNull(result.State);
+            Assert.Equal(0, result.State.Epoch);
+            Assert.Equal(0, result.State.Version);
+            Assert.Null(result.State.ActivePolicyHash);
+            Assert.Null(result.State.ActivePolicyId);
+            Assert.Null(result.State.ActiveCaseId);
+            Assert.Null(result.State.AcceptedAtUtc);
+            Assert.Empty(result.State.SeenNonces);
             Assert.True(File.Exists(path));
         }
         finally

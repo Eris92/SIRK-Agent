@@ -17,10 +17,24 @@ if (command == "verify-integrity")
         return;
     }
 
-    var manifest = JsonSerializer.Deserialize<IntegrityManifest>(await File.ReadAllBytesAsync(manifestPath))
-                   ?? throw new InvalidDataException("Integrity manifest deserialized to null.");
+    var manifestOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+    var manifest = JsonSerializer.Deserialize<IntegrityManifest>(await File.ReadAllBytesAsync(manifestPath), manifestOptions);
+    if (manifest?.Files is null || manifest.Files.Count == 0)
+    {
+        Console.Error.WriteLine("INTEGRITY_MANIFEST_INVALID");
+        Environment.ExitCode = 3;
+        return;
+    }
+
     foreach (var entry in manifest.Files)
     {
+        if (string.IsNullOrWhiteSpace(entry.Path) || string.IsNullOrWhiteSpace(entry.Sha256))
+        {
+            Console.Error.WriteLine("INTEGRITY_MANIFEST_ENTRY_INVALID");
+            Environment.ExitCode = 3;
+            return;
+        }
+
         var path = Path.Combine(AppContext.BaseDirectory, entry.Path);
         if (!File.Exists(path))
         {

@@ -2,12 +2,20 @@ using System.Diagnostics;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 var agentDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SIRK", "Agent");
 var reportDirectory = Path.Combine(agentDirectory, "Reports");
 Directory.CreateDirectory(reportDirectory);
-var outputPath = args.FirstOrDefault(a => a.EndsWith(".html", StringComparison.OrdinalIgnoreCase))
-                 ?? Path.Combine(reportDirectory, $"SIRK-Agent-Status-{DateTimeOffset.Now:yyyyMMdd-HHmmss}.html");
+
+var timestamp = DateTimeOffset.Now;
+var explicitHtmlPath = args.FirstOrDefault(a => a.EndsWith(".html", StringComparison.OrdinalIgnoreCase));
+var explicitJsonPath = args.FirstOrDefault(a => a.EndsWith(".json", StringComparison.OrdinalIgnoreCase));
+var baseName = $"SIRK-Agent-Status-{timestamp:yyyyMMdd-HHmmss}";
+var htmlPath = explicitHtmlPath ?? Path.Combine(reportDirectory, baseName + ".html");
+var jsonPath = explicitJsonPath ?? Path.ChangeExtension(htmlPath, ".json");
+var jsonOnly = args.Contains("--json-only", StringComparer.OrdinalIgnoreCase);
+var noOpen = args.Contains("--no-open", StringComparer.OrdinalIgnoreCase) || jsonOnly;
 
 var modules = new List<ModuleResult>
 {
@@ -23,13 +31,41 @@ var modules = new List<ModuleResult>
 
 var overall = modules.Any(m => m.Status == ModuleStatus.Critical) ? ModuleStatus.Critical
     : modules.Any(m => m.Status == ModuleStatus.Warning) ? ModuleStatus.Warning : ModuleStatus.Healthy;
-File.WriteAllText(outputPath, BuildHtml(overall, modules, agentDirectory), new UTF8Encoding(false));
-Console.WriteLine($"Report: {outputPath}");
-if (!args.Contains("--no-open", StringComparer.OrdinalIgnoreCase))
+
+var export = new DiagnosticExport(
+    SchemaVersion: 1,
+    GeneratedUtc: timestamp.ToUniversalTime(),
+    GeneratedLocal: timestamp,
+    DeviceName: Environment.MachineName,
+    AgentDirectory: agentDirectory,
+    OverallStatus: overall,
+    Summary: new DiagnosticSummary(
+        Healthy: modules.Count(m => m.Status == ModuleStatus.Healthy),
+        Warning: modules.Count(m => m.Status == ModuleStatus.Warning),
+        Critical: modules.Count(m => m.Status == ModuleStatus.Critical),
+        Total: modules.Count),
+    Modules: modules);
+
+var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
 {
-    try { Process.Start(new ProcessStartInfo(outputPath) { UseShellExecute = true }); }
-    catch (Exception ex) { Console.WriteLine($"Nie mozna otworzyc raportu: {ex.Message}"); }
+    WriteIndented = true,
+    Converters = { new JsonStringEnumConverter() }
+};
+File.WriteAllText(jsonPath, JsonSerializer.Serialize(export, jsonOptions), new UTF8Encoding(false));
+Console.WriteLine($"JSON report: {jsonPath}");
+
+if (!jsonOnly)
+{
+    File.WriteAllText(htmlPath, BuildHtml(overall, modules, agentDirectory, jsonPath), new UTF8Encoding(false));
+    Console.WriteLine($"HTML report: {htmlPath}");
+
+    if (!noOpen)
+    {
+        try { Process.Start(new ProcessStartInfo(htmlPath) { UseShellExecute = true }); }
+        catch (Exception ex) { Console.WriteLine($"Nie mozna otworzyc raportu: {ex.Message}"); }
+    }
 }
+
 return overall == ModuleStatus.Critical ? 2 : 0;
 
 static ModuleResult InspectJson(string name, string path, bool required)
@@ -110,7 +146,7 @@ static ModuleResult Missing(string name, string path, bool required) => new(name
     required ? ModuleStatus.Critical : ModuleStatus.Warning,
     required ? "Brak wymaganego pliku." : "Plik jeszcze nie zostal utworzony.", path, null, null);
 
-static string BuildHtml(ModuleStatus overall, IReadOnlyList<ModuleResult> modules, string agentDirectory)
+static string BuildHtml(ModuleStatus overall, IReadOnlyList<ModuleResult> modules, string agentDirectory, string jsonPath)
 {
     static string E(string? value) => WebUtility.HtmlEncode(value ?? string.Empty);
     static string Css(ModuleStatus value) => value.ToString().ToLowerInvariant();
@@ -130,8 +166,10 @@ static string BuildHtml(ModuleStatus overall, IReadOnlyList<ModuleResult> module
     return "<!doctype html><html lang='pl'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>SIRK Agent - raport</title><style>" + css +
            "</style></head><body><main><header><div><h1>SIRK Agent - raport stanu</h1><div class='meta'>Urzadzenie: " + E(Environment.MachineName) + " | Wygenerowano: " + E(DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz")) +
            "</div></div><div class='overall " + Css(overall) + "'>STAN: " + Label(overall) + "</div></header><section>" + body +
-           "</section><footer>Katalog agenta: " + E(agentDirectory) + ". Kliknij modul, aby rozwinac szczegoly i bledy.</footer></main></body></html>";
+           "</section><footer>Katalog agenta: " + E(agentDirectory) + ". JSON do wyslania: <code>" + E(jsonPath) + "</code>. Kliknij modul, aby rozwinac szczegoly i bledy.</footer></main></body></html>";
 }
 
 enum ModuleStatus { Healthy, Warning, Critical }
 sealed record ModuleResult(string Name, ModuleStatus Status, string Summary, string? Path, string? Details, string? Error);
+sealed record DiagnosticSummary(int Healthy, int Warning, int Critical, int Total);
+sealed record DiagnosticExport(int SchemaVersion, DateTimeOffset GeneratedUtc, DateTimeOffset GeneratedLocal, string DeviceName, string AgentDirectory, ModuleStatus OverallStatus, DiagnosticSummary Summary, IReadOnlyList<ModuleResult> Modules);

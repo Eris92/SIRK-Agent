@@ -124,11 +124,15 @@ jobs:
           $backup = "$target.ci-backup"
           Copy-Item $target $backup -Force
           Add-Content $target 'tamper'
-          Start-Sleep -Seconds 18
-          $management = Get-Content "$env:ProgramData\SIRK\Agent\management-state.json" -Raw | ConvertFrom-Json
-          if ($management.integrityVerified) { throw 'Modified executable was not detected.' }
+          $detected = $false
+          for ($i = 0; $i -lt 12; $i++) {
+            Start-Sleep -Seconds 5
+            $management = Get-Content "$env:ProgramData\SIRK\Agent\management-state.json" -Raw | ConvertFrom-Json
+            if (-not $management.integrityVerified -and $management.code -eq 'INTEGRITY_FAILED') { $detected = $true; break }
+          }
           Copy-Item $backup $target -Force
           Remove-Item $backup -Force
+          if (-not $detected) { throw "Modified executable was not detected. Last state: $($management | ConvertTo-Json -Compress)" }
 
       - name: Validate diagnostics and TestBundle
         shell: pwsh

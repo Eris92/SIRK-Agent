@@ -10,7 +10,10 @@ internal sealed record AgentPaths(
     string QuarantineStatusPath,
     string LegacyQuarantinePath,
     string DeviceIdentityPath,
-    string SecurityStatePath)
+    string SecurityStatePath,
+    string TelemetryQueueDirectory,
+    string EvidenceLogPath,
+    string EvidenceStatePath)
 {
     public static AgentPaths CreateDefault()
     {
@@ -27,8 +30,15 @@ internal sealed record AgentPaths(
             Path.Combine(agentDirectory, "quarantine-status.json"),
             Path.Combine(agentDirectory, "quarantine-state.json"),
             Path.Combine(agentDirectory, "device-identity.bin"),
-            Path.Combine(agentDirectory, "security-state.json"));
+            Path.Combine(agentDirectory, "security-state.json"),
+            Path.Combine(agentDirectory, "TelemetryQueue"),
+            Path.Combine(agentDirectory, "evidence-events.jsonl"),
+            Path.Combine(agentDirectory, "evidence-state.bin"));
     }
 
-    public void EnsureDirectories() => Directory.CreateDirectory(AgentDirectory);
+    public void EnsureDirectories()
+    {
+        Directory.CreateDirectory(AgentDirectory);
+        Directory.CreateDirectory(TelemetryQueueDirectory);
+    }
 }

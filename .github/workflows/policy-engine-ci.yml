@@ -1,4 +1,4 @@
-name: Policy Engine CI
+name: SIRK Agent CI
 
 on:
   push:
@@ -7,12 +7,11 @@ on:
       - policy-engine-foundation
   pull_request:
     paths:
-      - 'src/SirkAgent.Policy/**'
-      - 'src/SirkAgent.Service/**'
-      - 'src/SirkAgent.Report/**'
-      - 'tests/SirkAgent.Policy.Tests/**'
-      - 'tools/SirkAgent.Policy.TestHarness/**'
+      - 'src/**'
+      - 'tests/**'
+      - 'tools/**'
       - '.github/workflows/policy-engine-ci.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -25,73 +24,123 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
+
       - name: Publish Windows test harness
         run: dotnet publish tools/SirkAgent.Policy.TestHarness/SirkAgent.Policy.TestHarness.csproj --configuration Release --runtime win-x64 --self-contained false -p:PublishSingleFile=false -p:PublishTrimmed=false --output artifacts/SIRK-Agent-Policy-Test
-      - name: Run test harness
+
+      - name: Run policy test harness
         shell: pwsh
         run: ./artifacts/SIRK-Agent-Policy-Test/SirkAgent.Policy.TestHarness.exe
+
       - name: Publish agent runtime
-        run: dotnet publish src/SirkAgent.Service/SirkAgent.Service.csproj --configuration Release --runtime win-x64 --self-contained false -p:PublishSingleFile=false -p:PublishTrimmed=false --output artifacts/SIRK-Agent-Runtime
+        run: dotnet publish src/SirkAgent.Service/SirkAgent.Service.csproj --configuration Release --runtime win-x64 --self-contained false -p:PublishSingleFile=false -p:PublishTrimmed=false -p:InformationalVersion=0.2.0-test+${{ github.sha }} --output artifacts/SIRK-Agent-Runtime
+
       - name: Publish diagnostics reporter
         run: dotnet publish src/SirkAgent.Report/SirkAgent.Report.csproj --configuration Release --runtime win-x64 --self-contained false -p:PublishSingleFile=false -p:PublishTrimmed=false --output artifacts/SIRK-Agent-Runtime
-      - name: Run one heartbeat
+
+      - name: Add package tools and manifest
+        shell: pwsh
+        run: |
+          Copy-Item tools/package/*.ps1 artifacts/SIRK-Agent-Runtime/ -Force
+          @{
+            product = 'SIRK Agent'
+            version = '0.2.0-test'
+            commit = '${{ github.sha }}'
+            buildUtc = (Get-Date).ToUniversalTime().ToString('o')
+            runtime = 'win-x64'
+            deployment = 'framework-dependent'
+            requiredRuntime = '.NET 8 x64'
+          } | ConvertTo-Json | Set-Content artifacts/SIRK-Agent-Runtime/build-manifest.json -Encoding UTF8
+
+      - name: Run one agent cycle
         shell: pwsh
         run: ./artifacts/SIRK-Agent-Runtime/SirkAgent.Service.exe --once
-      - name: Generate HTML and JSON reports
+
+      - name: Generate and validate HTML and JSON reports
         shell: pwsh
-        continue-on-error: true
         run: |
           ./artifacts/SIRK-Agent-Runtime/SirkAgent.Report.exe --no-open
           $reports = Join-Path $env:ProgramData 'SIRK\Agent\Reports'
           if (-not (Get-ChildItem $reports -Filter '*.json' -ErrorAction SilentlyContinue)) { throw 'JSON report was not generated.' }
           if (-not (Get-ChildItem $reports -Filter '*.html' -ErrorAction SilentlyContinue)) { throw 'HTML report was not generated.' }
-      - name: Add launchers
+          if (-not (Test-Path (Join-Path $env:ProgramData 'SIRK\Agent\security-state.json'))) { throw 'Security state was not generated.' }
+          if (-not (Test-Path (Join-Path $env:ProgramData 'SIRK\Agent\device-identity.bin'))) { throw 'Device identity was not generated.' }
+
+      - name: Smoke test Windows service install
+        shell: pwsh
+        run: |
+          ./artifacts/SIRK-Agent-Runtime/Install-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent CI"
+          $service = Get-Service SirkAgent
+          if ($service.Status -ne 'Running') { throw "Service status is $($service.Status)" }
+          Start-Sleep -Seconds 3
+          ./artifacts/SIRK-Agent-Runtime/Uninstall-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent CI" -Confirm:$false
+
+      - name: Validate TestBundle collection
+        shell: pwsh
+        run: |
+          $out = Join-Path $PWD 'artifacts/TestBundles'
+          ./artifacts/SIRK-Agent-Runtime/Collect-SirkAgent-TestBundle.ps1 -OutputDirectory $out
+          if (-not (Get-ChildItem $out -Filter '*.zip' -ErrorAction SilentlyContinue)) { throw 'TestBundle ZIP was not generated.' }
+
+      - name: Add launchers and README
         shell: pwsh
         run: |
           '@echo off
           cd /d "%~dp0"
-          dotnet --list-runtimes | findstr /i "Microsoft.NETCore.App 8." >nul
-          if errorlevel 1 (
-            echo Brak Microsoft .NET 8 Runtime x64.
-            echo Zainstaluj runtime przez: winget install Microsoft.DotNet.Runtime.8
-            pause
-            exit /b 1
-          )
-          SirkAgent.Policy.TestHarness.exe
-          pause' | Set-Content -Path artifacts/SIRK-Agent-Policy-Test/TEST-POLICY-ENGINE.cmd -Encoding ascii
-
-          '@echo off
-          cd /d "%~dp0"
           SirkAgent.Service.exe --once
-          pause' | Set-Content -Path artifacts/SIRK-Agent-Runtime/TEST-AGENT-ONCE.cmd -Encoding ascii
+          pause' | Set-Content artifacts/SIRK-Agent-Runtime/TEST-AGENT-ONCE.cmd -Encoding ascii
 
           '@echo off
           cd /d "%~dp0"
-          SirkAgent.Service.exe
-          pause' | Set-Content -Path artifacts/SIRK-Agent-Runtime/RUN-AGENT-LOOP.cmd -Encoding ascii
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Install-SirkAgent.ps1"
+          pause' | Set-Content artifacts/SIRK-Agent-Runtime/INSTALL-SERVICE-AS-ADMIN.cmd -Encoding ascii
+
+          '@echo off
+          cd /d "%~dp0"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Uninstall-SirkAgent.ps1"
+          pause' | Set-Content artifacts/SIRK-Agent-Runtime/UNINSTALL-SERVICE-AS-ADMIN.cmd -Encoding ascii
 
           '@echo off
           cd /d "%~dp0"
           SirkAgent.Report.exe
-          echo.
-          echo Raport HTML i JSON zapisano w C:\ProgramData\SIRK\Agent\Reports
-          pause' | Set-Content -Path artifacts/SIRK-Agent-Runtime/GENERATE-HTML-AND-JSON-REPORT.cmd -Encoding ascii
+          pause' | Set-Content artifacts/SIRK-Agent-Runtime/GENERATE-HTML-AND-JSON-REPORT.cmd -Encoding ascii
 
           '@echo off
           cd /d "%~dp0"
-          SirkAgent.Report.exe --json-only
-          echo.
-          echo Raport JSON zapisano w C:\ProgramData\SIRK\Agent\Reports
-          pause' | Set-Content -Path artifacts/SIRK-Agent-Runtime/EXPORT-DIAGNOSTICS-JSON.cmd -Encoding ascii
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Collect-SirkAgent-TestBundle.ps1"
+          pause' | Set-Content artifacts/SIRK-Agent-Runtime/COLLECT-TEST-BUNDLE.cmd -Encoding ascii
+
+          @'
+          SIRK AGENT 0.2.0 TEST
+
+          Wymagania: Windows x64 oraz Microsoft .NET 8 Runtime x64.
+
+          1. Najpierw uruchom TEST-AGENT-ONCE.cmd.
+          2. Wygeneruj raport przez GENERATE-HTML-AND-JSON-REPORT.cmd.
+          3. Do testu stalego uruchom jako administrator INSTALL-SERVICE-AS-ADMIN.cmd.
+          4. Dane agenta: C:\ProgramData\SIRK\Agent
+          5. Paczka do przeslania: COLLECT-TEST-BUNDLE.cmd
+          6. Usuniecie: UNINSTALL-SERVICE-AS-ADMIN.cmd
+
+          Uwaga: kwarantanna jest fail-closed i nie jest automatycznie czyszczona po odzyskaniu poprawnego stanu polityki.
+          '@ | Set-Content artifacts/SIRK-Agent-Runtime/TEST-INSTRUCTIONS.txt -Encoding UTF8
+
+      - name: Create distributable ZIP
+        shell: pwsh
+        run: Compress-Archive -Path artifacts/SIRK-Agent-Runtime/* -DestinationPath artifacts/SIRK-Agent-0.2.0-test-win-x64.zip -CompressionLevel Optimal -Force
+
       - uses: actions/upload-artifact@v4
         with:
-          name: SIRK-Agent-Policy-Test-win-x64-framework-dependent
-          path: artifacts/SIRK-Agent-Policy-Test/**
+          name: SIRK-Agent-0.2.0-test-win-x64
+          path: |
+            artifacts/SIRK-Agent-0.2.0-test-win-x64.zip
+            artifacts/SIRK-Agent-Runtime/**
           if-no-files-found: error
+
       - uses: actions/upload-artifact@v4
         with:
-          name: SIRK-Agent-Runtime-win-x64-framework-dependent
-          path: artifacts/SIRK-Agent-Runtime/**
+          name: SIRK-Agent-TestBundles-CI
+          path: artifacts/TestBundles/*.zip
           if-no-files-found: error
 
   unit-tests:

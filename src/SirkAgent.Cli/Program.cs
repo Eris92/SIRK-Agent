@@ -380,7 +380,15 @@ if (command is "create-test-policy" or "create-test-recovery")
         Mode = command == "create-test-recovery" ? AgentMode.Emergency : AgentMode.Normal,
         Settings = command == "create-test-recovery"
             ? new Dictionary<string, object?> { ["recoveryAction"] = "clearQuarantine", ["testOnly"] = true }
-            : new Dictionary<string, object?> { ["telemetryEnabled"] = true, ["integrityMonitoring"] = true, ["testOnly"] = true },
+            : new Dictionary<string, object?>
+            {
+                ["telemetryEnabled"] = true,
+                ["integrityMonitoring"] = true,
+                ["remoteTerminalEnabled"] = true,
+                ["remoteFilesEnabled"] = true,
+                ["remoteDesktopEnabled"] = true,
+                ["testOnly"] = true
+            },
         Signature = new PolicySignature { Algorithm = "ES256", KeyId = keyId, Value = "pending" }
     };
     var signature = key.SignData(CanonicalJson.SerializePayloadWithoutSignature(envelope), HashAlgorithmName.SHA256,

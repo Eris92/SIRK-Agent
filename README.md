@@ -8,7 +8,7 @@ Aktualnym dokumentem przekazania do nowego czatu jest:
 
 - [Kontynuacja projektu w nowym czacie](docs/CONTINUE-IN-NEW-CHAT.md)
 
-Dokument zawiera aktualny stan `main`, potwierdzone testy na Windows, stan prac `0.3.5-test`, pliki runtime, zasady bezpieczenstwa oraz gotowe polecenie do wznowienia pracy.
+Dokument zawiera aktualny stan `main`, potwierdzone testy na Windows, stan wydania `1.0.0`, pliki runtime, zasady bezpieczenstwa oraz gotowe polecenie do wznowienia pracy.
 
 Glowny branch:
 
@@ -19,13 +19,13 @@ main
 Aktualny etap:
 
 ```text
-0.3.5-test — Endurance Worker, raporty 24/48 h i recovery SCM
+1.0.0 — bezpieczne zarzadzanie, aktualizacje i zdalne operacje przez niezalezny SIRK Portal
 ```
 
 Ostatni potwierdzony stabilny pakiet testowy na komputerze `DELL_K`:
 
 ```text
-0.3.5-test — commit f208f0ec58dd9545c7f279b9701ddef0bd0f2a5c
+1.0.0 — Windows x64, framework-dependent .NET 8
 ```
 
 ## Zasady architektoniczne
@@ -178,19 +178,24 @@ C:\ProgramData\SIRK\Agent\endurance-report.html
 - CPU w spoczynku praktycznie 0%.
 - aktualizacja `0.3.4-test -> 0.3.5-test` bez zmiany Device ID i aktywnej polityki,
 - recovery SCM po wymuszonym zakonczeniu procesu,
-- rzeczywisty check-in `0.3.5-test` do lokalnego SIRK Portal,
+- rzeczywisty check-in `1.0.0` do lokalnego SIRK Portal,
 - brak prawa zapisu do katalogu danych dla zwyklych uzytkownikow.
+- Terminal, Pliki i Pulpit przez uwierzytelniony kanal SIRK Agent bez Mesh Agenta,
+- broker aktywnej sesji Windows z obrazem pulpitu i obsluga myszy,
+- pobieranie i wysylanie plikow do 1 MiB,
+- niezalezny SIRK Portal HTTPS z per-device ECDSA i brokerem polecen.
 
-## Aktualny etap 0.3.5-test
+## Aktualny etap 1.0.0
 
-Kod Endurance Worker jest na `main`. Pakiet z commita `f208f0e` przeszedl:
+Kod wydania jest na `main`. Pakiet przechodzi:
 
 ```text
 SIRK Agent Endurance Report CI
 ```
 
 oraz pozostale workflow regresyjne. Lokalnie na DELL_K potwierdzono instalacje,
-zachowanie chronionego stanu, recovery SCM, ACL danych i check-in do SIRK Portal.
+zachowanie Device ID, stanu polityki i chronionego poswiadczenia Portalu,
+recovery SCM, ACL danych, check-in oraz operacje Terminal, Pliki i Pulpit.
 
 ## Struktura repozytorium
 
@@ -200,6 +205,7 @@ src/
   SirkAgent.Service/
   SirkAgent.Report/
   SirkAgent.Cli/
+  SirkAgent.Session/
 tools/
   package/
 tests/
@@ -221,5 +227,5 @@ schemas/
 ## Polecenie do wznowienia w nowym oknie
 
 ```text
-Kontynuuj projekt SIRK Agent z repozytorium GitHub Eris92/SIRK-Agent na branchu main. Najpierw przeczytaj w calosci docs/CONTINUE-IN-NEW-CHAT.md oraz README.md i sprawdz najnowszy HEAD main oraz aktualne wyniki GitHub Actions. Projekt jest na etapie 0.3.5-test: EnduranceWorker, endurance-samples.jsonl, endurance-summary.json, endurance-report.html, trend RAM i recovery uslugi przez SCM. Ostatni potwierdzony stabilny pakiet na DELL_K to 0.3.4-test. Nie uznawaj 0.3.5-test za gotowy, dopoki SIRK Agent Endurance Report CI oraz pozostale testy regresyjne nie beda zielone. Kontynuuj autonomicznie: zdiagnozuj nieudany krok, popraw kod lub workflow, zrob commit bezposrednio do main, uruchom pelne CI, a po sukcesie pobierz i przekaz paczke Windows x64. Nie pakuj calego .NET do ZIP, zachowaj framework-dependent .NET 8, nie resetuj Device ID ani chronionego stanu przy aktualizacji i podawaj kompletne polecenia PowerShell do testow.
+Kontynuuj projekt SIRK Agent 1.0 z repozytorium GitHub Eris92/SIRK-Agent na branchu main oraz SIRK Portal z repozytorium Eris92/SIRK-Portal na branchu develop. Najpierw przeczytaj w calosci docs/CONTINUE-IN-NEW-CHAT.md oraz README.md i sprawdz najnowsze HEAD oraz GitHub Actions. Zachowaj framework-dependent .NET 8, Device ID, stan polityki i portal-credential.bin przy aktualizacji. Weryfikuj lokalnie niezalezny Portal HTTPS oraz operacje Terminal, Pliki i Pulpit bez Mesh Agenta.
 ```

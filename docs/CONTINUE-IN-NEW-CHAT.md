@@ -9,8 +9,8 @@ Ten dokument jest aktualnym punktem przekazania projektu. W nowym czacie nalezy 
 - Platforma docelowa: Windows x64
 - Runtime: .NET 8, build framework-dependent
 - Zasada pakowania: nie dolaczac calego .NET do EXE ani ZIP
-- Aktualny etap: `0.3.5-test` — Endurance Worker, raporty dlugotrwale i odzyskiwanie uslugi przez SCM
-- Ostatni potwierdzony stabilny pakiet testowy na komputerze `DELL_K`: `0.3.5-test`, commit `f208f0ec58dd9545c7f279b9701ddef0bd0f2a5c`
+- Aktualny etap: `1.0.0` — niezalezny Portal, bezpieczne aktualizacje oraz Pulpit, Terminal i Pliki przez SIRK Agent
+- Potwierdzony pakiet na komputerze `DELL_K`: `1.0.0`, Windows x64 framework-dependent .NET 8
 - Aktualny commit przekazania: sprawdz najnowszy HEAD `main` przed rozpoczeciem pracy
 
 ## Cel projektu
@@ -173,7 +173,7 @@ Device ID komputera testowego:
 cb0bfc0d-4376-4f42-b781-6dc2be0405e9
 ```
 
-## Aktualny stan prac 0.3.5-test
+## Aktualny stan prac 1.0.0
 
 Kod Endurance Worker, raportow i workflow znajduje sie na `main`.
 
@@ -193,7 +193,7 @@ Przed przygotowaniem paczki nalezy:
 5. zabic proces uslugi i potwierdzic recovery SCM,
 6. potwierdzic zapis zmiany PID jako restartu,
 7. uruchomic pozostale workflow regresyjne,
-8. dopiero po zielonym wyniku pobrac artefakt `SIRK-Agent-0.3.5-test-win-x64`.
+8. dopiero po zielonym wyniku pobrac artefakt `SIRK-Agent-1.0.0-win-x64`.
 
 Powyższe kryteria sa spelnione dla commita `f208f0e`. Kazdy kolejny commit
 zmieniajacy runtime lub pakowanie wymaga ponownego pelnego CI i testu lokalnego.
@@ -270,7 +270,7 @@ Start-Process "C:\ProgramData\SIRK\Agent\endurance-report.html"
 Skopiuj do nowego czatu dokladnie ponizsza wiadomosc:
 
 ```text
-Kontynuuj projekt SIRK Agent z repozytorium GitHub Eris92/SIRK-Agent na branchu main. Najpierw przeczytaj w calosci docs/CONTINUE-IN-NEW-CHAT.md oraz README.md i sprawdz najnowszy HEAD main oraz aktualne wyniki GitHub Actions. Projekt jest na etapie 0.3.5-test: EnduranceWorker, endurance-samples.jsonl, endurance-summary.json, endurance-report.html, trend RAM i recovery uslugi przez SCM. Ostatni potwierdzony stabilny pakiet na DELL_K to 0.3.4-test. Nie uznawaj 0.3.5-test za gotowy, dopoki SIRK Agent Endurance Report CI oraz pozostale testy regresyjne nie beda zielone. Kontynuuj autonomicznie: zdiagnozuj nieudany krok, popraw kod lub workflow, zrob commit bezposrednio do main, uruchom pelne CI, a po sukcesie pobierz i przekaz paczke Windows x64. Nie pakuj calego .NET do ZIP, zachowaj framework-dependent .NET 8, nie resetuj Device ID ani chronionego stanu przy aktualizacji i podawaj kompletne polecenia PowerShell do testow.
+Kontynuuj projekt SIRK Agent 1.0 z repozytorium GitHub Eris92/SIRK-Agent na branchu main oraz SIRK Portal z repozytorium Eris92/SIRK-Portal na branchu develop. Najpierw przeczytaj w calosci docs/CONTINUE-IN-NEW-CHAT.md oraz README.md i sprawdz najnowsze HEAD oraz GitHub Actions. Zachowaj framework-dependent .NET 8, Device ID, stan polityki i portal-credential.bin przy aktualizacji. Weryfikuj lokalnie niezalezny Portal HTTPS oraz operacje Terminal, Pliki i Pulpit bez Mesh Agenta.
 ```
 
 ## Dokumenty powiazane

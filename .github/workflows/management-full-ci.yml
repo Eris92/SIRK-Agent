@@ -25,7 +25,7 @@ jobs:
       - name: Publish runtime reporter and CLI
         shell: pwsh
         run: |
-          dotnet publish src/SirkAgent.Service/SirkAgent.Service.csproj -c Release -r win-x64 --self-contained false -p:InformationalVersion=0.3.1-test+${{ github.sha }} -o artifacts/SIRK-Agent-Runtime
+          dotnet publish src/SirkAgent.Service/SirkAgent.Service.csproj -c Release -r win-x64 --self-contained false -p:InformationalVersion=1.0.0+${{ github.sha }} -o artifacts/SIRK-Agent-Runtime
           dotnet publish src/SirkAgent.Report/SirkAgent.Report.csproj -c Release -r win-x64 --self-contained false -o artifacts/SIRK-Agent-Runtime
           dotnet publish src/SirkAgent.Cli/SirkAgent.Cli.csproj -c Release -r win-x64 --self-contained false -o artifacts/SIRK-Agent-Runtime
           dotnet publish src/SirkAgent.Session/SirkAgent.Session.csproj -c Release -r win-x64 --self-contained false -o artifacts/SIRK-Agent-Runtime
@@ -42,7 +42,7 @@ jobs:
             @{ path = $name; sha256 = (Get-FileHash $path -Algorithm SHA256).Hash }
           }
           @{ files = $files } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $runtime 'integrity-manifest.json') -Encoding UTF8
-          @{ product='SIRK Agent'; version='0.3.1-test'; commit='${{ github.sha }}'; runtime='win-x64'; requiredRuntime='.NET 8 x64' } | ConvertTo-Json | Set-Content (Join-Path $runtime 'build-manifest.json') -Encoding UTF8
+          @{ product='SIRK Agent'; version='1.0.0'; commit='${{ github.sha }}'; runtime='win-x64'; requiredRuntime='.NET 8 x64'; selfContained=$false } | ConvertTo-Json | Set-Content (Join-Path $runtime 'build-manifest.json') -Encoding UTF8
           '@echo off
           cd /d "%~dp0"
           sirkctl.exe status
@@ -189,7 +189,7 @@ jobs:
         run: |
           $runtime = Resolve-Path artifacts/SIRK-Agent-Runtime
           $cli = Join-Path $env:ProgramFiles 'SIRK Agent CI\sirkctl.exe'
-          & $cli create-test-update-manifest --package $runtime --version 0.4.1-test-ci
+          & $cli create-test-update-manifest --package $runtime --version 1.0.1-test-ci
           if ($LASTEXITCODE -ne 0) { throw 'Test update manifest generation failed.' }
           & $cli verify-update --package $runtime
           if ($LASTEXITCODE -ne 0) { throw 'Signed update package verification failed.' }
@@ -199,13 +199,13 @@ jobs:
         shell: pwsh
         run: |
           ./artifacts/SIRK-Agent-Runtime/Uninstall-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent CI" -Confirm:$false
-          Compress-Archive -Path artifacts/SIRK-Agent-Runtime/* -DestinationPath artifacts/SIRK-Agent-0.3.1-test-win-x64.zip -CompressionLevel Optimal -Force
+          Compress-Archive -Path artifacts/SIRK-Agent-Runtime/* -DestinationPath artifacts/SIRK-Agent-1.0.0-win-x64.zip -CompressionLevel Optimal -Force
 
       - uses: actions/upload-artifact@v4
         with:
-          name: SIRK-Agent-0.3.1-test-win-x64
+          name: SIRK-Agent-1.0.0-win-x64
           path: |
-            artifacts/SIRK-Agent-0.3.1-test-win-x64.zip
+            artifacts/SIRK-Agent-1.0.0-win-x64.zip
             artifacts/SIRK-Agent-Runtime/**
             artifacts/TestBundles/*.zip
             artifacts/status-serialization.json

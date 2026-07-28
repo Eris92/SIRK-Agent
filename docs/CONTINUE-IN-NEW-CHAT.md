@@ -85,6 +85,8 @@ CLI `sirkctl.exe` obsluguje:
   do `Incoming`, a ich podpis ES256 i anti-replay sprawdza istniejący Policy Engine,
 - Named Pipe `SIRK-Agent-Control` ma chroniony DACL (LocalSystem i Administratorzy),
   a serwer dodatkowo weryfikuje impersonowany SID klienta przed wykonaniem komendy,
+- rejestracja generuje ECDSA P-256; prywatny klucz trafia do rekordu DPAPI, a
+  check-in podpisuje timestamp, jednorazowy nonce i dokładne bajty JSON,
 
 ```text
 status

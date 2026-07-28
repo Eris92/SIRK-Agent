@@ -67,6 +67,7 @@ Dzialajace elementy:
 - rejestracja per-device z tokenem bootstrap odczytywanym z pliku i poświadczeniem chronionym DPAPI LocalMachine,
 - pobieranie kolejek podpisanych polityk dla konkretnego tenant/device oraz potwierdzenie po aktywacji,
 - lokalny control pipe z ACL tylko dla LocalSystem i grupy Administratorzy oraz weryfikacją SID klienta,
+- dowód urządzenia ECDSA P-256 dla każdego check-inu (timestamp, nonce i podpis payloadu),
 - zabezpieczony ACL katalogu danych: zapis tylko dla SYSTEM i Administratorow.
 
 ## Najwazniejsze polecenia
@@ -100,7 +101,9 @@ Remove-Item -LiteralPath $TokenFile -Force
 
 Agent zapisuje wydany token urządzenia wyłącznie w
 `C:\ProgramData\SIRK\Agent\portal-credential.bin`, chronionym przez DPAPI
-LocalMachine i ACL katalogu danych. Portal przechowuje tylko hash SHA-256 tokenu.
+LocalMachine i ACL katalogu danych. Ten sam chroniony rekord zawiera prywatny
+klucz ECDSA urządzenia. Portal przechowuje tylko hash SHA-256 tokenu oraz klucz
+publiczny i odrzuca brak podpisu, stary timestamp oraz ponowne użycie nonce.
 HTTP jest akceptowany wyłącznie dla testów na adresie loopback.
 
 Test podpisanej polityki:

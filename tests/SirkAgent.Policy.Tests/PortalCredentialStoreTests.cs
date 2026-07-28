@@ -13,13 +13,15 @@ public sealed class PortalCredentialStoreTests : IDisposable
     {
         var path = Path.Combine(_root, "portal-credential.bin");
         var store = new PortalCredentialStore(path, new TestProtector());
-        var expected = new PortalCredential(1, "investa", Guid.NewGuid().ToString(),
-            "https://portal.example/api/agent/v1/checkin", "secret-device-token", DateTimeOffset.UtcNow);
+        var expected = new PortalCredential(2, "investa", Guid.NewGuid().ToString(),
+            "https://portal.example/api/agent/v1/checkin", "secret-device-token", DateTimeOffset.UtcNow,
+            "private-key-material");
 
         store.Save(expected);
 
         Assert.Equal(expected, store.Load());
         Assert.DoesNotContain("secret-device-token", File.ReadAllText(path), StringComparison.Ordinal);
+        Assert.DoesNotContain("private-key-material", File.ReadAllText(path), StringComparison.Ordinal);
     }
 
     public void Dispose()

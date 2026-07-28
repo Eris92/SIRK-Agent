@@ -35,12 +35,16 @@ if (command == "enroll")
     using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
     client.DefaultRequestHeaders.Authorization =
         new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", bootstrapToken);
+    using var deviceKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+    var privateKeyPkcs8 = Convert.ToBase64String(deviceKey.ExportPkcs8PrivateKey());
+    var publicKeySpki = Convert.ToBase64String(deviceKey.ExportSubjectPublicKeyInfo());
     using var response = await client.PostAsJsonAsync(endpoint, new
     {
         protocolVersion = 1,
         tenantId,
         deviceId,
-        machineName = Environment.MachineName
+        machineName = Environment.MachineName,
+        publicKeySpki
     });
     var body = await response.Content.ReadAsStringAsync();
     response.EnsureSuccessStatusCode();
@@ -60,8 +64,8 @@ if (command == "enroll")
         throw new InvalidDataException("Enrollment returned an unsafe check-in endpoint.");
     new PortalCredentialStore(Path.Combine(agentRoot, "portal-credential.bin"),
         new DpapiMachineStateProtector()).Save(new PortalCredential(
-        1, tenantId, deviceId, checkInEndpoint.AbsoluteUri,
-        enrollment.DeviceToken, enrollment.EnrolledAtUtc ?? DateTimeOffset.UtcNow));
+        2, tenantId, deviceId, checkInEndpoint.AbsoluteUri,
+        enrollment.DeviceToken, enrollment.EnrolledAtUtc ?? DateTimeOffset.UtcNow, privateKeyPkcs8));
     Console.WriteLine(JsonSerializer.Serialize(new
     {
         ok = true,

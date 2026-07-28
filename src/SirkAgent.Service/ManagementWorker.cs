@@ -292,7 +292,18 @@ internal sealed class ManagementWorker : BackgroundService
 
         try
         {
-            using var response = await client.PostAsJsonAsync(endpoint, payload, _json, token);
+            var payloadBytes = JsonSerializer.SerializeToUtf8Bytes(payload, _json);
+            using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
+            {
+                Content = new ByteArrayContent(payloadBytes)
+            };
+            request.Content.Headers.ContentType =
+                new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+            request.Headers.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", tokenValue);
+            if (!string.IsNullOrWhiteSpace(credential?.PrivateKeyPkcs8))
+                SignPortalRequest(request, payloadBytes, credential.PrivateKeyPkcs8);
+            using var response = await client.SendAsync(request, token);
             response.EnsureSuccessStatusCode();
             var portalResponse = await response.Content.ReadFromJsonAsync<PortalCheckInResponse>(_json, token)
                                  ?? throw new InvalidDataException("Portal check-in response is empty.");
@@ -307,6 +318,24 @@ internal sealed class ManagementWorker : BackgroundService
         {
             _logger.LogWarning(ex, "Portal check-in failed.");
         }
+    }
+
+    private static void SignPortalRequest(HttpRequestMessage request, byte[] payload, string privateKeyPkcs8)
+    {
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(
+            System.Globalization.CultureInfo.InvariantCulture);
+        var nonce = Guid.NewGuid().ToString("N");
+        var prefix = Encoding.UTF8.GetBytes(timestamp + "\n" + nonce + "\n");
+        var signed = new byte[prefix.Length + payload.Length];
+        Buffer.BlockCopy(prefix, 0, signed, 0, prefix.Length);
+        Buffer.BlockCopy(payload, 0, signed, prefix.Length, payload.Length);
+        using var key = ECDsa.Create();
+        key.ImportPkcs8PrivateKey(Convert.FromBase64String(privateKeyPkcs8), out _);
+        var signature = key.SignData(signed, HashAlgorithmName.SHA256,
+            DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
+        request.Headers.Add("X-SIRK-Timestamp", timestamp);
+        request.Headers.Add("X-SIRK-Nonce", nonce);
+        request.Headers.Add("X-SIRK-Signature", Convert.ToBase64String(signature));
     }
 
     private async Task RunPipeServerAsync(ManagementPaths paths, TelemetryQueue queue, CancellationToken token)

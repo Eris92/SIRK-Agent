@@ -1,4 +1,5 @@
 using System.Drawing.Imaging;
+using System.Diagnostics;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Security.AccessControl;
@@ -41,6 +42,7 @@ internal static class Program
                 {
                     "snapshot" => Snapshot(),
                     "mouse" => Mouse(request),
+                    "activity" => Activity(),
                     _ => new SessionResponse(false, "SESSION_REQUEST_INVALID", null, null, null)
                 };
                 await writer.WriteLineAsync(JsonSerializer.Serialize(response, Json));
@@ -146,10 +148,67 @@ internal static class Program
         return new SessionResponse(true, "DESKTOP_INPUT_OK", null, bounds.Width, bounds.Height);
     }
 
+    private static SessionResponse Activity()
+    {
+        var foreground = GetForegroundWindow();
+        _ = GetWindowThreadProcessId(foreground, out var processId);
+        var title = new StringBuilder(1024);
+        _ = GetWindowText(foreground, title, title.Capacity);
+        string? processName = null;
+        try { processName = Process.GetProcessById((int)processId).ProcessName; } catch { }
+
+        var lastInput = new LastInputInfo { Size = (uint)Marshal.SizeOf<LastInputInfo>() };
+        var idleMilliseconds = GetLastInputInfo(ref lastInput)
+            ? unchecked((uint)Environment.TickCount - lastInput.Time) : 0;
+        var clipboard = ClipboardMetadata();
+        var data = JsonSerializer.SerializeToElement(new
+        {
+            sessionId = Process.GetCurrentProcess().SessionId,
+            userSid = WindowsIdentity.GetCurrent().User?.Value,
+            foregroundProcess = processName,
+            foregroundWindowTitle = Limit(title.ToString(), 512),
+            idleSeconds = idleMilliseconds / 1000,
+            clipboard
+        }, Json);
+        return new SessionResponse(true, "ACTIVITY_SNAPSHOT_OK", null, null, null, data);
+    }
+
+    private static object ClipboardMetadata()
+    {
+        try
+        {
+            var formats = Clipboard.GetDataObject()?.GetFormats(autoConvert: false)
+                .Take(32).ToArray() ?? [];
+            var fileCount = Clipboard.ContainsFileDropList() ? Clipboard.GetFileDropList().Count : 0;
+            var textLength = Clipboard.ContainsText() ? Clipboard.GetText().Length : 0;
+            return new { available = true, formats, fileCount, textLength };
+        }
+        catch (Exception error)
+        {
+            return new { available = false, error = error.GetType().Name };
+        }
+    }
+
+    private static string? Limit(string? value, int maximum) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Length <= maximum ? value : value[..maximum];
+
     private static void MouseEvent(uint flags) => mouse_event(flags, 0, 0, 0, UIntPtr.Zero);
 
     [DllImport("user32.dll")]
     private static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowText(IntPtr window, StringBuilder text, int maximum);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetLastInputInfo(ref LastInputInfo info);
 
     [DllImport("user32.dll")]
     private static extern IntPtr GetDC(IntPtr window);
@@ -164,4 +223,12 @@ internal static class Program
 }
 
 internal sealed record SessionRequest(string Type, string? Action, int? X, int? Y);
-internal sealed record SessionResponse(bool Ok, string Code, string? ImageBase64, int? Width, int? Height);
+internal sealed record SessionResponse(bool Ok, string Code, string? ImageBase64, int? Width, int? Height,
+    JsonElement? Data = null);
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct LastInputInfo
+{
+    public uint Size;
+    public uint Time;
+}

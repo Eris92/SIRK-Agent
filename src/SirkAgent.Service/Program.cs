@@ -14,5 +14,6 @@ builder.Services.AddHostedService<RuntimeHealthWorker>();
 builder.Services.AddHostedService<EnduranceWorker>();
 builder.Services.AddHostedService<ControlFileWorker>();
 builder.Services.AddHostedService<ManagementPlaneWorker>();
+builder.Services.AddHostedService<ActivityCollectorWorker>();
 
 await builder.Build().RunAsync();

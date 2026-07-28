@@ -72,6 +72,8 @@ Dzialajace elementy:
 - Management Plane Health: klasyfikacja Workgroup/AD/Entra/Hybrid, RSoP,
   secure channel, Conditional Access snapshot oraz baseline Defender,
   Firewall, BitLocker, Secure Boot i TPM.
+- politykowane Activity Collectors: procesy, aktywne okno, idle, metadane
+  schowka, USB, drukowanie i ograniczone metadane plików;
 
 ## Najwazniejsze polecenia
 
@@ -227,6 +229,7 @@ schemas/
 - [Tamper Protection](docs/TAMPER-PROTECTION.md)
 - [Evidence Engine](docs/EVIDENCE-ENGINE.md)
 - [Management Plane Health](docs/MANAGEMENT-PLANE-HEALTH.md)
+- [Activity Collectors](docs/ACTIVITY-COLLECTORS.md)
 
 ## Polecenie do wznowienia w nowym oknie
 

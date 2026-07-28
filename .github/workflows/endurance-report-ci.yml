@@ -1,0 +1,104 @@
+name: SIRK Agent Endurance Report CI
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tools/**'
+      - '.github/workflows/endurance-report-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  endurance-report-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish 0.3.5 runtime
+        shell: pwsh
+        run: |
+          dotnet publish src/SirkAgent.Service/SirkAgent.Service.csproj -c Release -r win-x64 --self-contained false -p:InformationalVersion=0.3.5-test+${{ github.sha }} -o artifacts/SIRK-Agent-Runtime
+          dotnet publish src/SirkAgent.Report/SirkAgent.Report.csproj -c Release -r win-x64 --self-contained false -o artifacts/SIRK-Agent-Runtime
+          dotnet publish src/SirkAgent.Cli/SirkAgent.Cli.csproj -c Release -r win-x64 --self-contained false -o artifacts/SIRK-Agent-Runtime
+          Copy-Item tools/package/*.ps1 artifacts/SIRK-Agent-Runtime/ -Force
+          $runtime = Resolve-Path artifacts/SIRK-Agent-Runtime
+          $protected = @('SirkAgent.Service.exe','SirkAgent.Service.dll','SirkAgent.Policy.dll','SirkAgent.Report.exe','sirkctl.exe')
+          $files = foreach ($name in $protected) {
+            $path = Join-Path $runtime $name
+            @{ path = $name; sha256 = (Get-FileHash $path -Algorithm SHA256).Hash }
+          }
+          @{ files = $files } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $runtime 'integrity-manifest.json') -Encoding UTF8
+          @{ product='SIRK Agent'; version='0.3.5-test'; commit='${{ github.sha }}'; runtime='win-x64'; requiredRuntime='.NET 8 x64' } | ConvertTo-Json | Set-Content (Join-Path $runtime 'build-manifest.json') -Encoding UTF8
+
+      - name: Install with accelerated endurance interval
+        shell: pwsh
+        run: |
+          [Environment]::SetEnvironmentVariable('SIRK_ENDURANCE_INTERVAL_SECONDS','5','Machine')
+          $root = Join-Path $env:ProgramData 'SIRK\Agent'
+          Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
+          ./artifacts/SIRK-Agent-Runtime/Install-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent Endurance CI"
+          (Get-Service SirkAgent).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))
+
+      - name: Validate reports and SCM recovery
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:ProgramData 'SIRK\Agent'
+          $ready = $false
+          for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep 1
+            $summaryPath = Join-Path $root 'endurance-summary.json'
+            if (Test-Path $summaryPath) {
+              $summary = Get-Content $summaryPath -Raw | ConvertFrom-Json
+              if ($summary.sampleCount -ge 4) { $ready = $true; break }
+            }
+          }
+          if (-not $ready) { throw 'Endurance summary did not collect four samples.' }
+          if (-not (Test-Path (Join-Path $root 'endurance-report.html'))) { throw 'Endurance HTML report missing.' }
+          if ($summary.status -ne 'Healthy' -or $summary.memoryLeakSuspected) { throw 'Endurance summary is not healthy.' }
+
+          $before = Get-CimInstance Win32_Service -Filter "Name='SirkAgent'"
+          $oldPid = [int]$before.ProcessId
+          Stop-Process -Id $oldPid -Force
+          $recovered = $false
+          for ($i = 0; $i -lt 70; $i++) {
+            Start-Sleep 1
+            $service = Get-CimInstance Win32_Service -Filter "Name='SirkAgent'"
+            if ($service.State -eq 'Running' -and $service.ProcessId -gt 0 -and $service.ProcessId -ne $oldPid) { $recovered = $true; break }
+          }
+          if (-not $recovered) { throw 'SCM did not recover the killed service process.' }
+
+          $samplesRecovered = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep 1
+            $after = Get-Content (Join-Path $root 'endurance-summary.json') -Raw | ConvertFrom-Json
+            if ($after.processRestarts -ge 1) { $samplesRecovered = $true; break }
+          }
+          if (-not $samplesRecovered) { throw 'Endurance report did not record process restart.' }
+          if (-not $after.deviceId) { throw 'Endurance summary lost Device ID.' }
+          Copy-Item (Join-Path $root 'endurance-summary.json') artifacts/
+          Copy-Item (Join-Path $root 'endurance-report.html') artifacts/
+          Copy-Item (Join-Path $root 'endurance-samples.jsonl') artifacts/
+
+      - name: Package
+        shell: pwsh
+        run: |
+          ./artifacts/SIRK-Agent-Runtime/Uninstall-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent Endurance CI" -Confirm:$false
+          [Environment]::SetEnvironmentVariable('SIRK_ENDURANCE_INTERVAL_SECONDS',$null,'Machine')
+          Compress-Archive -Path artifacts/SIRK-Agent-Runtime/* -DestinationPath artifacts/SIRK-Agent-0.3.5-test-win-x64.zip -CompressionLevel Optimal -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SIRK-Agent-0.3.5-test-win-x64
+          path: |
+            artifacts/SIRK-Agent-0.3.5-test-win-x64.zip
+            artifacts/SIRK-Agent-Runtime/**
+            artifacts/endurance-summary.json
+            artifacts/endurance-report.html
+            artifacts/endurance-samples.jsonl
+          if-no-files-found: error

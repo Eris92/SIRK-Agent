@@ -1,102 +1,150 @@
 # SIRK Agent
 
-Agent Windows rozwijany jako niezalezny komponent platformy SIRK. Projekt laczy bezpieczne egzekwowanie centralnych polityk, ochrone przed manipulacja, diagnostyke, telemetrie, funkcje dochodzeniowe oraz docelowo zdalne zarzadzanie i mechanizmy klasy EDR/XDR.
+Agent Windows rozwijany jako niezalezny komponent platformy SIRK. Projekt laczy bezpieczne egzekwowanie centralnych polityk, ochrone przed manipulacja, diagnostyke, telemetrie offline, lancuch dowodowy oraz docelowo zdalne zarzadzanie i funkcje klasy EDR/XDR.
 
 ## Kontynuacja projektu
 
-Najwazniejszym dokumentem przekazania do nowego czatu jest:
+Aktualnym dokumentem przekazania do nowego czatu jest:
 
 - [Kontynuacja projektu w nowym czacie](docs/CONTINUE-IN-NEW-CHAT.md)
 
-Zawiera aktualny stan implementacji, zasady bezpieczenstwa, strukture repozytorium, testy wykonane na Windows, najblizsze zadania oraz gotowa wiadomosc startowa do nowego czatu.
+Dokument zawiera aktualny stan `main`, potwierdzone testy na Windows, stan prac `0.3.5-test`, pliki runtime, zasady bezpieczenstwa oraz gotowe polecenie do wznowienia pracy.
 
-Aktualny branch roboczy:
+Glowny branch:
 
 ```text
-policy-engine-foundation
+main
 ```
 
-Aktualny Pull Request:
+Aktualny etap:
 
 ```text
-#2 - Policy Engine foundation and security roadmap
+0.3.5-test — Endurance Worker, raporty 24/48 h i recovery SCM
+```
+
+Ostatni potwierdzony stabilny pakiet na komputerze `DELL_K`:
+
+```text
+0.3.4-test
 ```
 
 ## Zasady architektoniczne
 
 1. Agent nie ufa konfiguracji lokalnego hosta.
-2. Polityki, aktualizacje i moduly musza byc podpisane przez zaufany system zarzadzania.
-3. Brak telemetrii, utrata heartbeat albo niezgodnosc integralnosci sa zdarzeniami bezpieczenstwa.
-4. Tryby rozszerzonego monitoringu musza miec Case ID, zakres, termin waznosci i audit.
-5. Dane dowodowe musza miec spojny czas UTC, identyfikator urzadzenia, sesji, uzytkownika i lancuch integralnosci.
-6. Nie dolaczamy calego .NET do EXE ani paczki. Build Windows x64 pozostaje framework-dependent dla .NET 8.
-7. Wyjscie z kwarantanny moze nastapic tylko przez podpisana Recovery Policy z serwera.
+2. Polityki, Recovery, aktualizacje i moduly musza byc podpisane.
+3. Polityki sa przypisane do Tenant ID i Device ID.
+4. Replay i rollback musza byc blokowane.
+5. Stan lokalny jest chroniony DPAPI LocalMachine i zapisywany atomowo.
+6. Manipulacja i utrata integralnosci sa zdarzeniami bezpieczenstwa.
+7. Wyjscie z kwarantanny jest mozliwe tylko przez podpisana Recovery Policy.
+8. Nie dolaczamy calego .NET do EXE ani ZIP. Build Windows x64 pozostaje framework-dependent dla .NET 8.
+9. Testowy klucz podpisu nie jest rozwiazaniem produkcyjnym.
 
 ## Aktualny stan implementacji
 
 Dzialajace elementy:
 
+- Windows Service `SirkAgent` z Automatic Start i recovery SCM,
+- trwaly Device Identity chroniony DPAPI,
+- Security State Machine,
+- Scheduler i FileSystemWatcher,
+- Health Monitor i rejestr modulow,
 - Policy Engine z podpisem ES256,
 - Tenant ID, Device ID, epoch, version i nonce,
 - ochrona przed replay i rollback,
-- stan polityki chroniony DPAPI LocalMachine,
-- atomowy zapis lokalnego stanu,
-- heartbeat i lokalny log zdarzen,
-- FileSystemWatcher dla natychmiastowej detekcji manipulacji,
+- podpisana Recovery Policy,
 - trwaly Quarantine Mode,
-- chroniony DPAPI stan kwarantanny,
-- fail-closed po uszkodzeniu stanu kwarantanny,
-- raport diagnostyczny HTML z rozwijanymi szczegolami i bledami,
-- eksport pelnej diagnostyki do JSON,
-- testy jednostkowe i GitHub Actions dla Windows.
+- Evidence Chain z lancuchem hashy,
+- offline Telemetry Queue z retencja i throttlingiem,
+- integralnosc plikow runtime SHA-256,
+- lokalne API Named Pipe i fallback plikowy,
+- CLI `sirkctl`,
+- raport diagnostyczny HTML/JSON,
+- TestBundle,
+- runtime health: CPU, RAM, uptime, heartbeat i rotacja logow,
+- Endurance Worker z probkami, podsumowaniem JSON i raportem HTML.
 
-Potwierdzony test na komputerze Windows `DELL_K` wykryl reczna modyfikacje `policy-state.bin` jako `STATE_UNPROTECT_FAILED`, aktywowal kwarantanne i zachowal ja pomiedzy kolejnymi cyklami.
+## Najwazniejsze polecenia
 
-## Pliki runtime na komputerze testowym
+Instalacja lub aktualizacja:
+
+```powershell
+Set-ExecutionPolicy Bypass -Scope Process -Force
+.\Install-SirkAgent.ps1
+```
+
+Status:
+
+```powershell
+.\sirkctl.exe status
+.\sirkctl.exe queue-status
+.\sirkctl.exe verify-integrity
+```
+
+Test podpisanej polityki:
+
+```powershell
+.\sirkctl.exe create-test-policy
+.\sirkctl.exe process
+```
+
+Podglad raportu endurance:
+
+```powershell
+Get-Content "C:\ProgramData\SIRK\Agent\endurance-summary.json" -Raw |
+    ConvertFrom-Json |
+    Format-List
+
+Start-Process "C:\ProgramData\SIRK\Agent\endurance-report.html"
+```
+
+## Pliki runtime
 
 ```text
+C:\ProgramData\SIRK\Agent\device-identity.bin
 C:\ProgramData\SIRK\Agent\policy-state.bin
+C:\ProgramData\SIRK\Agent\active-policy.json
+C:\ProgramData\SIRK\Agent\management-state.json
 C:\ProgramData\SIRK\Agent\heartbeat-latest.json
-C:\ProgramData\SIRK\Agent\agent-events.jsonl
-C:\ProgramData\SIRK\Agent\tamper-event-latest.json
+C:\ProgramData\SIRK\Agent\security-state.json
+C:\ProgramData\SIRK\Agent\runtime-health.json
 C:\ProgramData\SIRK\Agent\quarantine-state.bin
 C:\ProgramData\SIRK\Agent\quarantine-status.json
-C:\ProgramData\SIRK\Agent\Reports\
+C:\ProgramData\SIRK\Agent\evidence-events.jsonl
+C:\ProgramData\SIRK\Agent\evidence-state.bin
+C:\ProgramData\SIRK\Agent\agent-events.jsonl
+C:\ProgramData\SIRK\Agent\TelemetryQueue\
+C:\ProgramData\SIRK\Agent\Archive\Accepted\
+C:\ProgramData\SIRK\Agent\Archive\Rejected\
+C:\ProgramData\SIRK\Agent\endurance-samples.jsonl
+C:\ProgramData\SIRK\Agent\endurance-summary.json
+C:\ProgramData\SIRK\Agent\endurance-report.html
 ```
 
-Generator diagnostyki tworzy:
+## Potwierdzone testy na DELL_K
+
+- pelny `sirkctl status`,
+- aktywacja podpisanej polityki,
+- archiwizacja zaakceptowanej polityki,
+- zachowanie Device ID i aktywnej polityki po restarcie,
+- zachowanie licznikow Management State,
+- pojedyncza odpowiedz JSON z Named Pipe,
+- retencja i czyszczenie Telemetry Queue,
+- runtime health,
+- piec kolejnych restartow uslugi,
+- po kazdym restarcie `Operational`, `Healthy` i swiezy heartbeat,
+- RAM po restartach okolo 41–42 MB,
+- CPU w spoczynku praktycznie 0%.
+
+## Aktualny etap 0.3.5-test
+
+Kod Endurance Worker jest na `main`. Przed wydaniem paczki nalezy potwierdzic zielony wynik:
 
 ```text
-SIRK-Agent-Status-YYYYMMDD-HHMMSS.html
-SIRK-Agent-Status-YYYYMMDD-HHMMSS.json
+SIRK Agent Endurance Report CI
 ```
 
-JSON jest przeznaczony do przeslania w kolejnym czacie w celu analizy wynikow testow.
-
-## Docelowa struktura Agent Core
-
-```text
-SIRK Agent Service
-|-- Bootstrap
-|-- Device Identity
-|-- Security State Machine
-|-- Policy Engine
-|-- Tamper Protection
-|-- Quarantine
-|-- Scheduler
-|-- Health Monitor
-|-- Watchdog
-|-- Heartbeat Service
-|-- Telemetry Queue
-|-- Evidence Engine
-|-- Recovery Engine
-|-- Update Engine
-|-- IPC Service
-|-- Capture Service
-|-- Browser Connector
-|-- Command Executor
-`-- Diagnostics Reporter
-```
+oraz pozostalych workflow regresyjnych. Nie nalezy przekazywac paczki `0.3.5-test`, jezeli test raportu, recovery SCM lub pakowanie nie zakonczyly sie sukcesem.
 
 ## Struktura repozytorium
 
@@ -105,56 +153,14 @@ src/
   SirkAgent.Policy/
   SirkAgent.Service/
   SirkAgent.Report/
+  SirkAgent.Cli/
 tools/
-  SirkAgent.Policy.TestHarness/
+  package/
 tests/
-  SirkAgent.Policy.Tests/
 docs/
 schemas/
-.github/workflows/policy-engine-ci.yml
+.github/workflows/
 ```
-
-## Roadmap
-
-### Agent Core
-
-- rozdzielenie `Program.cs` na moduly,
-- trwaly Device Identity,
-- Security State Machine,
-- Scheduler,
-- rejestr modulow,
-- Health Monitor,
-- Watchdog,
-- instalacja jako Windows Service.
-
-### Security Foundation
-
-- podpisane paczki polityk,
-- przypisanie polityki do Tenant ID i Device ID,
-- ochrona przed replay i rollback,
-- certyfikat urzadzenia i klucz nieeksportowalny,
-- Tamper Detection i Quarantine,
-- podpisana Recovery Policy,
-- podpisane aktualizacje i moduly.
-
-### Evidence and Activity
-
-- Evidence Engine z lancuchem hashy,
-- offline Telemetry Queue,
-- aktywne procesy, okna i czas aktywnosci,
-- metadane schowka,
-- operacje na plikach, USB, drukowanie i archiwizacja,
-- telemetria myszy i dynamiki klawiatury bez domyslnego zapisu tresci,
-- screenshot na zdarzenie oraz ograniczony stream dochodzeniowy.
-
-### Investigation and Insider Risk
-
-- czasowy Investigation Mode,
-- scenariusz Departing Employee / Insider Risk,
-- korelacja pobrania, kopiowania, kompresji, uploadu, wysylki i usuniecia,
-- integracja Edge/Chrome dla URL, upload i download,
-- raport dowodowy z osia czasu,
-- scoring ryzyka i wykrywanie anomalii operatora.
 
 ## Dokumentacja
 
@@ -166,8 +172,8 @@ schemas/
 - [Tamper Protection](docs/TAMPER-PROTECTION.md)
 - [Evidence Engine](docs/EVIDENCE-ENGINE.md)
 
-## Wiadomosc startowa do nowego czatu
+## Polecenie do wznowienia w nowym oknie
 
 ```text
-Kontynuuj projekt SIRK Agent z repozytorium Eris92/SIRK-Agent, branch policy-engine-foundation, PR #2. Przeczytaj docs/CONTINUE-IN-NEW-CHAT.md oraz pozostala dokumentacje. Kontynuuj autonomicznie od sekcji Najblizsze zadania do realizacji. Nie pakuj calego .NET do EXE. Po kazdym stabilnym etapie uruchom CI i przygotuj paczke Windows x64 do testow. Raport diagnostyczny musi generowac HTML i JSON ze stanem wszystkich modulow oraz rozwijanymi szczegolami bledow.
+Kontynuuj projekt SIRK Agent z repozytorium GitHub Eris92/SIRK-Agent na branchu main. Najpierw przeczytaj w calosci docs/CONTINUE-IN-NEW-CHAT.md oraz README.md i sprawdz najnowszy HEAD main oraz aktualne wyniki GitHub Actions. Projekt jest na etapie 0.3.5-test: EnduranceWorker, endurance-samples.jsonl, endurance-summary.json, endurance-report.html, trend RAM i recovery uslugi przez SCM. Ostatni potwierdzony stabilny pakiet na DELL_K to 0.3.4-test. Nie uznawaj 0.3.5-test za gotowy, dopoki SIRK Agent Endurance Report CI oraz pozostale testy regresyjne nie beda zielone. Kontynuuj autonomicznie: zdiagnozuj nieudany krok, popraw kod lub workflow, zrob commit bezposrednio do main, uruchom pelne CI, a po sukcesie pobierz i przekaz paczke Windows x64. Nie pakuj calego .NET do ZIP, zachowaj framework-dependent .NET 8, nie resetuj Device ID ani chronionego stanu przy aktualizacji i podawaj kompletne polecenia PowerShell do testow.
 ```

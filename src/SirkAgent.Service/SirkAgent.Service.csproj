@@ -18,4 +18,7 @@
     <ProjectReference Include="../SirkAgent.Policy/SirkAgent.Policy.csproj" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.10" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="SirkAgent.Policy.Tests" />
+  </ItemGroup>
 </Project>

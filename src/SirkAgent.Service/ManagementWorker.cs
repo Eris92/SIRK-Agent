@@ -287,6 +287,7 @@ internal sealed class ManagementWorker : BackgroundService
             management = ReadJson(paths.ManagementStatePath),
             runtimeHealth = ReadJson(Path.Combine(paths.Root, "runtime-health.json")),
             acknowledgedPolicyIds = ReadAcknowledgedPolicyIds(paths.ActivePolicyPath),
+            commandResults = ReadCommandResults(paths.CommandResultsDirectory),
             events = items.Select(x => x.Envelope).ToArray()
         };
 
@@ -311,6 +312,8 @@ internal sealed class ManagementWorker : BackgroundService
                 throw new InvalidDataException("Portal rejected the check-in.");
             new PortalPolicyDeliveryStore(paths.InboxDirectory, _json)
                 .Store(TenantId, deviceId, portalResponse.Policies);
+            DeleteCommandResults(paths.CommandResultsDirectory);
+            await ExecuteRemoteCommandsAsync(paths, portalResponse.Commands, token);
             foreach (var item in items)
                 queue.Complete(item);
         }
@@ -318,6 +321,35 @@ internal sealed class ManagementWorker : BackgroundService
         {
             _logger.LogWarning(ex, "Portal check-in failed.");
         }
+    }
+
+    private async Task ExecuteRemoteCommandsAsync(ManagementPaths paths,
+        IReadOnlyList<PortalRemoteCommand>? commands, CancellationToken token)
+    {
+        if (commands is not { Count: > 0 }) return;
+        Directory.CreateDirectory(paths.CommandResultsDirectory);
+        var policy = ReadJson(paths.ActivePolicyPath);
+        var executor = new RemoteCommandExecutor(_json);
+        foreach (var command in commands.Take(5))
+        {
+            var result = await executor.ExecuteAsync(command, policy, token);
+            AtomicFile.WriteJson(Path.Combine(paths.CommandResultsDirectory,
+                command.CommandId + ".result.json"), result, _json);
+        }
+    }
+
+    private static JsonElement[] ReadCommandResults(string directory)
+    {
+        if (!Directory.Exists(directory)) return [];
+        return Directory.EnumerateFiles(directory, "*.result.json").OrderBy(x => x)
+            .Take(10).Select(ReadJson).Where(x => x.HasValue).Select(x => x!.Value).ToArray();
+    }
+
+    private static void DeleteCommandResults(string directory)
+    {
+        if (!Directory.Exists(directory)) return;
+        foreach (var file in Directory.EnumerateFiles(directory, "*.result.json").Take(10))
+            File.Delete(file);
     }
 
     private static void SignPortalRequest(HttpRequestMessage request, byte[] payload, string privateKeyPkcs8)
@@ -487,13 +519,14 @@ internal sealed record ManagementConfig(bool Enabled, string? TelemetryEndpoint,
     string? PortalEndpoint = null, string? DeviceToken = null);
 internal sealed record IntegrityManifest(IReadOnlyList<IntegrityManifestEntry> Files);
 internal sealed record IntegrityManifestEntry(string Path, string Sha256);
-internal sealed record PortalCheckInResponse(bool Ok, IReadOnlyList<JsonElement>? Policies);
+internal sealed record PortalCheckInResponse(bool Ok, IReadOnlyList<JsonElement>? Policies,
+    IReadOnlyList<PortalRemoteCommand>? Commands);
 
 internal sealed record ManagementPaths(string Root, string InboxDirectory, string AcceptedDirectory,
     string RejectedDirectory, string RecoveryArchiveDirectory, string TrustedKeysPath,
     string ManagementConfigPath, string ManagementStatePath, string ActivePolicyPath,
     string IntegrityManifestPath, string PolicyStatePath, string DeviceIdentityPath, string PortalCredentialPath,
-    string TelemetryQueueDirectory, string HeartbeatPath, string QuarantineProtectedPath,
+    string TelemetryQueueDirectory, string CommandResultsDirectory, string HeartbeatPath, string QuarantineProtectedPath,
     string QuarantineStatusPath, string TamperEventPath)
 {
     public static ManagementPaths CreateDefault()
@@ -505,7 +538,7 @@ internal sealed record ManagementPaths(string Root, string InboxDirectory, strin
             Path.Combine(root, "management-state.json"), Path.Combine(root, "active-policy.json"),
             Path.Combine(AppContext.BaseDirectory, "integrity-manifest.json"), Path.Combine(root, "policy-state.bin"),
             Path.Combine(root, "device-identity.bin"), Path.Combine(root, "portal-credential.bin"),
-            Path.Combine(root, "TelemetryQueue"),
+            Path.Combine(root, "TelemetryQueue"), Path.Combine(root, "CommandResults"),
             Path.Combine(root, "heartbeat-latest.json"), Path.Combine(root, "quarantine-state.bin"),
             Path.Combine(root, "quarantine-status.json"), Path.Combine(root, "tamper-event-latest.json"));
     }
@@ -518,6 +551,7 @@ internal sealed record ManagementPaths(string Root, string InboxDirectory, strin
         Directory.CreateDirectory(RejectedDirectory);
         Directory.CreateDirectory(RecoveryArchiveDirectory);
         Directory.CreateDirectory(TelemetryQueueDirectory);
+        Directory.CreateDirectory(CommandResultsDirectory);
     }
 }
 

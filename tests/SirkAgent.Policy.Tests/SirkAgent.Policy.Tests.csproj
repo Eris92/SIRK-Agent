@@ -16,5 +16,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/SirkAgent.Policy/SirkAgent.Policy.csproj" />
+    <ProjectReference Include="../../src/SirkAgent.Service/SirkAgent.Service.csproj" />
   </ItemGroup>
 </Project>

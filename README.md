@@ -69,6 +69,9 @@ Dzialajace elementy:
 - lokalny control pipe z ACL tylko dla LocalSystem i grupy Administratorzy oraz weryfikacją SID klienta,
 - dowód urządzenia ECDSA P-256 dla każdego check-inu (timestamp, nonce i podpis payloadu),
 - zabezpieczony ACL katalogu danych: zapis tylko dla SYSTEM i Administratorow.
+- Management Plane Health: klasyfikacja Workgroup/AD/Entra/Hybrid, RSoP,
+  secure channel, Conditional Access snapshot oraz baseline Defender,
+  Firewall, BitLocker, Secure Boot i TPM.
 
 ## Najwazniejsze polecenia
 
@@ -223,6 +226,7 @@ schemas/
 - [Investigation i Insider Risk](docs/INVESTIGATION-INSIDER-RISK.md)
 - [Tamper Protection](docs/TAMPER-PROTECTION.md)
 - [Evidence Engine](docs/EVIDENCE-ENGINE.md)
+- [Management Plane Health](docs/MANAGEMENT-PLANE-HEALTH.md)
 
 ## Polecenie do wznowienia w nowym oknie
 

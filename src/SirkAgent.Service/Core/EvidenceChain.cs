@@ -26,7 +26,7 @@ internal sealed class EvidenceChain
     private readonly string _statePath;
     private readonly IStateProtector _protector;
     private readonly JsonSerializerOptions _jsonOptions;
-    private readonly object _sync = new();
+    private static readonly object Sync = new();
 
     public EvidenceChain(string logPath, string statePath, IStateProtector protector,
         JsonSerializerOptions jsonOptions)
@@ -49,7 +49,7 @@ internal sealed class EvidenceChain
         ArgumentException.ThrowIfNullOrWhiteSpace(action);
         ArgumentNullException.ThrowIfNull(data);
 
-        lock (_sync)
+        lock (Sync)
         {
             var state = LoadState();
             var sequence = checked(state.LastSequence + 1);

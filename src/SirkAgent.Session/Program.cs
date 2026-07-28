@@ -42,29 +42,47 @@ internal static class Program
                     { AutoFlush = true };
                 var line = await reader.ReadLineAsync();
                 var request = JsonSerializer.Deserialize<SessionRequest>(line ?? "{}", Json);
-                var response = request?.Type switch
+                SessionResponse response;
+                try
                 {
-                    "snapshot" => Snapshot(),
-                    "mouse" => Mouse(request),
-                    "activity" => Activity(),
-                    _ => new SessionResponse(false, "SESSION_REQUEST_INVALID", null, null, null)
-                };
+                    response = request?.Type switch
+                    {
+                        "snapshot" => Snapshot(),
+                        "mouse" => Mouse(request),
+                        "activity" => Activity(),
+                        _ => new SessionResponse(false, "SESSION_REQUEST_INVALID", null, null, null)
+                    };
+                }
+                catch (Exception error)
+                {
+                    response = new SessionResponse(false,
+                        request?.Type == "snapshot"
+                            ? "DESKTOP_CAPTURE_UNAVAILABLE"
+                            : "SESSION_OPERATION_FAILED",
+                        null, null, null);
+                    LogError(error);
+                }
                 await writer.WriteLineAsync(JsonSerializer.Serialize(response, Json));
             }
             catch (Exception error)
             {
-                try
-                {
-                    var logDirectory = Path.Combine(Environment.GetFolderPath(
-                        Environment.SpecialFolder.LocalApplicationData), "SIRK", "Session");
-                    Directory.CreateDirectory(logDirectory);
-                    File.AppendAllText(Path.Combine(logDirectory, "session-error.log"),
-                        DateTimeOffset.UtcNow.ToString("O") + " " + error + Environment.NewLine);
-                }
-                catch { }
+                LogError(error);
                 await Task.Delay(1000);
             }
         }
+    }
+
+    private static void LogError(Exception error)
+    {
+        try
+        {
+            var logDirectory = Path.Combine(Environment.GetFolderPath(
+                Environment.SpecialFolder.LocalApplicationData), "SIRK", "Session");
+            Directory.CreateDirectory(logDirectory);
+            File.AppendAllText(Path.Combine(logDirectory, "session-error.log"),
+                DateTimeOffset.UtcNow.ToString("O") + " " + error + Environment.NewLine);
+        }
+        catch { }
     }
 
     private static NamedPipeServerStream CreatePipe()

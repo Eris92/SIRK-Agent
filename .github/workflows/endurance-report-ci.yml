@@ -46,6 +46,20 @@ jobs:
           $root = Join-Path $env:ProgramData 'SIRK\Agent'
           Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
           ./artifacts/SIRK-Agent-Runtime/Install-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent Endurance CI"
+          $usersSid = [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-545')
+          $usersRules = (Get-Acl (Join-Path $env:ProgramData 'SIRK\Agent')).Access | Where-Object {
+            try {
+              $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq $usersSid.Value
+            } catch {
+              $false
+            }
+          }
+          if (-not $usersRules) { throw 'Missing read-only Users ACL on the Agent data directory.' }
+          $writeMask = [System.Security.AccessControl.FileSystemRights]::Write
+          if ($usersRules | Where-Object {
+            $_.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and
+            (($_.FileSystemRights -band $writeMask) -ne 0)
+          }) { throw 'Ordinary Users retain write access to the Agent data directory.' }
           (Get-Service SirkAgent).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))
 
       - name: Validate reports and SCM recovery

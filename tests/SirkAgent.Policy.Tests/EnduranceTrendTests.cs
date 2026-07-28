@@ -35,6 +35,20 @@ public sealed class EnduranceTrendTests
     }
 
     [Fact]
+    public void Short_warmup_does_not_trigger_hourly_extrapolation_alarm()
+    {
+        var start = DateTimeOffset.UtcNow.AddMinutes(-1);
+        var samples = Enumerable.Range(0, 13).Select(index =>
+            Sample(start.AddSeconds(index * 5), 500, 70_000_000 + index * 300_000L)).ToArray();
+
+        var summary = EnduranceWorker.BuildSummary(samples, TimeSpan.FromSeconds(5));
+
+        Assert.True(summary.WorkingSetGrowthPerHour > 5L * 1024 * 1024);
+        Assert.False(summary.MemoryLeakSuspected);
+        Assert.Equal("Healthy", summary.Status);
+    }
+
+    [Fact]
     public void Detects_growth_within_one_process()
     {
         var start = DateTimeOffset.UtcNow.AddHours(-1);

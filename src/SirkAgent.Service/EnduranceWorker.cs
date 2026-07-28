@@ -128,7 +128,8 @@ internal sealed class EnduranceWorker : BackgroundService
         var durationHours = stableTrend.Length >= 2
             ? Math.Max(0.001, (last.TimestampUtc - trendFirst.TimestampUtc).TotalHours) : 0;
         var growthPerHour = durationHours > 0 ? memoryGrowth / durationHours : 0;
-        var leakSuspected = trendSamples.Length >= 12 && growthPerHour > 5L * 1024 * 1024;
+        var leakSuspected = trendSamples.Length >= 12 && durationHours >= 0.5 &&
+                            growthPerHour > 5L * 1024 * 1024;
 
         return new EnduranceSummary(
             DateTimeOffset.UtcNow,

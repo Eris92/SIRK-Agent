@@ -8,6 +8,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' `
+    -Name 'SIRKAgentSession' -ErrorAction SilentlyContinue
+Get-Process 'SirkAgent.Session' -ErrorAction SilentlyContinue |
+    Stop-Process -Force -ErrorAction SilentlyContinue
 $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($service) {
     if ($service.Status -ne 'Stopped') {

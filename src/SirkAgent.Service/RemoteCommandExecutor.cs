@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.IO.Pipes;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 
@@ -29,8 +31,9 @@ internal sealed class RemoteCommandExecutor
                 "files.write" when Enabled(activePolicy, "remoteFilesEnabled") =>
                     await WriteFileAsync(command, token),
                 "desktop.snapshot" when Enabled(activePolicy, "remoteDesktopEnabled") =>
-                    Failure(command.CommandId, "INTERACTIVE_HELPER_REQUIRED",
-                        "Pulpit wymaga brokera uruchomionego w aktywnej sesji użytkownika."),
+                    await ExecuteDesktopAsync(command, "snapshot", token),
+                "desktop.input" when Enabled(activePolicy, "remoteDesktopEnabled") =>
+                    await ExecuteDesktopAsync(command, "mouse", token),
                 _ => Failure(command.CommandId, "OPERATION_NOT_ALLOWED",
                     "Operacja jest wyłączona przez podpisaną politykę urządzenia.")
             };
@@ -43,6 +46,43 @@ internal sealed class RemoteCommandExecutor
         {
             return Failure(command.CommandId, "OPERATION_FAILED", ex.Message);
         }
+    }
+
+    private async Task<RemoteCommandResult> ExecuteDesktopAsync(PortalRemoteCommand command, string type,
+        CancellationToken token)
+    {
+        await using var pipe = new NamedPipeClientStream(".", "SIRK-Agent-Interactive-Session",
+            PipeDirection.InOut, PipeOptions.Asynchronous, TokenImpersonationLevel.Impersonation);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(5));
+        try { await pipe.ConnectAsync(timeout.Token); }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+        {
+            return Failure(command.CommandId, "INTERACTIVE_HELPER_UNAVAILABLE",
+                "Broker aktywnej sesji użytkownika nie odpowiada.");
+        }
+        using var reader = new StreamReader(pipe, Encoding.UTF8, false, 4096, leaveOpen: true);
+        await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, leaveOpen: true)
+            { AutoFlush = true };
+        object request = type == "snapshot"
+            ? new { type }
+            : new
+            {
+                type,
+                action = OptionalString(command.Parameters, "action", "move", 32),
+                x = OptionalInt(command.Parameters, "x", 0),
+                y = OptionalInt(command.Parameters, "y", 0)
+            };
+        await writer.WriteLineAsync(JsonSerializer.Serialize(request, _json));
+        var responseLine = await reader.ReadLineAsync(timeout.Token);
+        if (string.IsNullOrWhiteSpace(responseLine))
+            return Failure(command.CommandId, "INTERACTIVE_HELPER_INVALID", "Broker nie zwrócił odpowiedzi.");
+        using var response = JsonDocument.Parse(responseLine);
+        var root = response.RootElement;
+        var ok = root.TryGetProperty("ok", out var okValue) && okValue.ValueKind == JsonValueKind.True;
+        var code = root.TryGetProperty("code", out var codeValue) ? codeValue.GetString() ?? "" : "";
+        return new RemoteCommandResult(command.CommandId, ok, code, "",
+            ok ? root.Clone() : null);
     }
 
     private async Task<RemoteCommandResult> ExecuteTerminalAsync(PortalRemoteCommand command,
@@ -158,6 +198,14 @@ internal sealed class RemoteCommandExecutor
     private static int OptionalInt(JsonElement value, string name, int fallback) =>
         value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out var property) &&
         property.TryGetInt32(out var result) ? result : fallback;
+
+    private static string OptionalString(JsonElement value, string name, string fallback, int maximumLength)
+    {
+        if (value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(name, out var property) ||
+            property.ValueKind != JsonValueKind.String) return fallback;
+        var result = property.GetString() ?? fallback;
+        return result.Length <= maximumLength ? result : fallback;
+    }
 
     private static string Limit(string value)
     {

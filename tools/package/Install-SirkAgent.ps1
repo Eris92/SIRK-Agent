@@ -36,6 +36,14 @@ Get-ChildItem -LiteralPath $source -File | Where-Object {
     $_.Name -notlike '*.zip' -and $_.Name -notlike 'TestBundle-*'
 } | Copy-Item -Destination $InstallPath -Force
 
+$sessionExe = Join-Path $InstallPath 'SirkAgent.Session.exe'
+if (Test-Path -LiteralPath $sessionExe) {
+    $runKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
+    New-Item -Path $runKey -Force | Out-Null
+    New-ItemProperty -Path $runKey -Name 'SIRKAgentSession' -Value ('"{0}"' -f $sessionExe) `
+        -PropertyType String -Force | Out-Null
+}
+
 $dataPath = Join-Path $env:ProgramData 'SIRK\Agent'
 New-Item -ItemType Directory -Path $dataPath -Force | Out-Null
 & icacls.exe $dataPath /inheritance:r `

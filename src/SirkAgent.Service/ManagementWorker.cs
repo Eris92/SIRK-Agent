@@ -34,7 +34,7 @@ internal sealed class ManagementWorker : BackgroundService
             null, null, 0, 0, false, null), stoppingToken);
 
         var pipeTask = RunPipeServerAsync(paths, queue, stoppingToken);
-        var timer = new PeriodicTimer(TimeSpan.FromSeconds(15));
+        var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
         try
         {
             await ProcessInboxAsync(paths, identity.DeviceId, stoppingToken);
@@ -228,7 +228,7 @@ internal sealed class ManagementWorker : BackgroundService
     }
 
     private async Task CheckInPortalAsync(ManagementPaths paths, TelemetryQueue queue, string deviceId,
-        CancellationToken token)
+        CancellationToken token, bool resultFollowup = false)
     {
         ManagementConfig? config = null;
         if (File.Exists(paths.ManagementConfigPath))
@@ -313,7 +313,7 @@ internal sealed class ManagementWorker : BackgroundService
             new PortalPolicyDeliveryStore(paths.InboxDirectory, _json)
                 .Store(TenantId, deviceId, portalResponse.Policies);
             DeleteCommandResults(paths.CommandResultsDirectory);
-            await ExecuteRemoteCommandsAsync(paths, portalResponse.Commands, token);
+            var executedCommands = await ExecuteRemoteCommandsAsync(paths, portalResponse.Commands, token);
             foreach (var item in items)
                 queue.Complete(item);
             AtomicFile.WriteJson(paths.PortalStatusPath, new
@@ -323,6 +323,8 @@ internal sealed class ManagementWorker : BackgroundService
                 endpoint = endpoint.GetLeftPart(UriPartial.Authority),
                 deliveredCommands = portalResponse.Commands?.Count ?? 0
             }, _json);
+            if (executedCommands > 0 && !resultFollowup)
+                await CheckInPortalAsync(paths, queue, deviceId, token, resultFollowup: true);
         }
         catch (Exception ex)
         {
@@ -338,10 +340,10 @@ internal sealed class ManagementWorker : BackgroundService
         }
     }
 
-    private async Task ExecuteRemoteCommandsAsync(ManagementPaths paths,
+    private async Task<int> ExecuteRemoteCommandsAsync(ManagementPaths paths,
         IReadOnlyList<PortalRemoteCommand>? commands, CancellationToken token)
     {
-        if (commands is not { Count: > 0 }) return;
+        if (commands is not { Count: > 0 }) return 0;
         Directory.CreateDirectory(paths.CommandResultsDirectory);
         var policy = ReadJson(paths.ActivePolicyPath);
         var executor = new RemoteCommandExecutor(_json);
@@ -351,6 +353,7 @@ internal sealed class ManagementWorker : BackgroundService
             AtomicFile.WriteJson(Path.Combine(paths.CommandResultsDirectory,
                 command.CommandId + ".result.json"), result, _json);
         }
+        return Math.Min(5, commands.Count);
     }
 
     private static JsonElement[] ReadCommandResults(string directory)

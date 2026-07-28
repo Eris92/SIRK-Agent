@@ -29,9 +29,10 @@ jobs:
           dotnet publish src/SirkAgent.Service/SirkAgent.Service.csproj -c Release -r win-x64 --self-contained false -p:InformationalVersion=0.3.5-test+${{ github.sha }} -o artifacts/SIRK-Agent-Runtime
           dotnet publish src/SirkAgent.Report/SirkAgent.Report.csproj -c Release -r win-x64 --self-contained false -o artifacts/SIRK-Agent-Runtime
           dotnet publish src/SirkAgent.Cli/SirkAgent.Cli.csproj -c Release -r win-x64 --self-contained false -o artifacts/SIRK-Agent-Runtime
+          dotnet publish src/SirkAgent.Session/SirkAgent.Session.csproj -c Release -r win-x64 --self-contained false -o artifacts/SIRK-Agent-Runtime
           Copy-Item tools/package/*.ps1 artifacts/SIRK-Agent-Runtime/ -Force
           $runtime = Resolve-Path artifacts/SIRK-Agent-Runtime
-          $protected = @('SirkAgent.Service.exe','SirkAgent.Service.dll','SirkAgent.Policy.dll','SirkAgent.Report.exe','sirkctl.exe')
+          $protected = @('SirkAgent.Service.exe','SirkAgent.Service.dll','SirkAgent.Policy.dll','SirkAgent.Report.exe','sirkctl.exe','SirkAgent.Session.exe','SirkAgent.Session.dll')
           $files = foreach ($name in $protected) {
             $path = Join-Path $runtime $name
             @{ path = $name; sha256 = (Get-FileHash $path -Algorithm SHA256).Hash }

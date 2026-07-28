@@ -110,18 +110,23 @@ internal sealed class EnduranceWorker : BackgroundService
             File.Exists(eventPath) ? new FileInfo(eventPath).Length : 0);
     }
 
-    private static EnduranceSummary BuildSummary(IReadOnlyList<EnduranceSample> samples, TimeSpan interval)
+    internal static EnduranceSummary BuildSummary(IReadOnlyList<EnduranceSample> samples, TimeSpan interval)
     {
         var first = samples.First();
         var last = samples.Last();
         var restarts = samples.Zip(samples.Skip(1), (a, b) => a.ProcessId != b.ProcessId ? 1 : 0).Sum();
+        var healthWindow = samples.TakeLast(48).ToArray();
         var allowedGap = TimeSpan.FromTicks(interval.Ticks * 3);
-        var gaps = samples.Zip(samples.Skip(1), (a, b) => b.TimestampUtc - a.TimestampUtc > allowedGap ? 1 : 0).Sum();
-        var unhealthy = samples.Count(x => !x.HeartbeatFresh || !string.Equals(x.OverallHealth, "Healthy", StringComparison.OrdinalIgnoreCase));
-        var memoryGrowth = last.WorkingSetBytes - first.WorkingSetBytes;
-        var durationHours = Math.Max(0.001, (last.TimestampUtc - first.TimestampUtc).TotalHours);
+        var gaps = healthWindow.Zip(healthWindow.Skip(1), (a, b) =>
+            a.ProcessId == b.ProcessId && b.TimestampUtc - a.TimestampUtc > allowedGap ? 1 : 0).Sum();
+        var unhealthy = healthWindow.Count(x => !x.HeartbeatFresh ||
+            !string.Equals(x.OverallHealth, "Healthy", StringComparison.OrdinalIgnoreCase));
+        var trendSamples = samples.Reverse().TakeWhile(x => x.ProcessId == last.ProcessId).Reverse().ToArray();
+        var trendFirst = trendSamples.First();
+        var memoryGrowth = last.WorkingSetBytes - trendFirst.WorkingSetBytes;
+        var durationHours = Math.Max(0.001, (last.TimestampUtc - trendFirst.TimestampUtc).TotalHours);
         var growthPerHour = memoryGrowth / durationHours;
-        var leakSuspected = samples.Count >= 12 && growthPerHour > 5L * 1024 * 1024;
+        var leakSuspected = trendSamples.Length >= 12 && growthPerHour > 5L * 1024 * 1024;
 
         return new EnduranceSummary(
             DateTimeOffset.UtcNow,

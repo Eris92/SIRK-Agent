@@ -316,10 +316,25 @@ internal sealed class ManagementWorker : BackgroundService
             await ExecuteRemoteCommandsAsync(paths, portalResponse.Commands, token);
             foreach (var item in items)
                 queue.Complete(item);
+            AtomicFile.WriteJson(paths.PortalStatusPath, new
+            {
+                ok = true,
+                checkedInAtUtc = DateTimeOffset.UtcNow,
+                endpoint = endpoint.GetLeftPart(UriPartial.Authority),
+                deliveredCommands = portalResponse.Commands?.Count ?? 0
+            }, _json);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Portal check-in failed.");
+            AtomicFile.WriteJson(paths.PortalStatusPath, new
+            {
+                ok = false,
+                failedAtUtc = DateTimeOffset.UtcNow,
+                endpoint = endpoint.GetLeftPart(UriPartial.Authority),
+                error = ex.GetType().Name,
+                message = ex.Message
+            }, _json);
         }
     }
 
@@ -526,6 +541,7 @@ internal sealed record ManagementPaths(string Root, string InboxDirectory, strin
     string RejectedDirectory, string RecoveryArchiveDirectory, string TrustedKeysPath,
     string ManagementConfigPath, string ManagementStatePath, string ActivePolicyPath,
     string IntegrityManifestPath, string PolicyStatePath, string DeviceIdentityPath, string PortalCredentialPath,
+    string PortalStatusPath,
     string TelemetryQueueDirectory, string CommandResultsDirectory, string HeartbeatPath, string QuarantineProtectedPath,
     string QuarantineStatusPath, string TamperEventPath)
 {
@@ -538,6 +554,7 @@ internal sealed record ManagementPaths(string Root, string InboxDirectory, strin
             Path.Combine(root, "management-state.json"), Path.Combine(root, "active-policy.json"),
             Path.Combine(AppContext.BaseDirectory, "integrity-manifest.json"), Path.Combine(root, "policy-state.bin"),
             Path.Combine(root, "device-identity.bin"), Path.Combine(root, "portal-credential.bin"),
+            Path.Combine(root, "portal-checkin-status.json"),
             Path.Combine(root, "TelemetryQueue"), Path.Combine(root, "CommandResults"),
             Path.Combine(root, "heartbeat-latest.json"), Path.Combine(root, "quarantine-state.bin"),
             Path.Combine(root, "quarantine-status.json"), Path.Combine(root, "tamper-event-latest.json"));

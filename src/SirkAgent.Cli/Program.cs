@@ -181,6 +181,32 @@ if (command == "enroll")
     return;
 }
 
+if (command == "set-portal-endpoint")
+{
+    var endpointValue = GetOption(args, "--endpoint");
+    if (!Uri.TryCreate(endpointValue, UriKind.Absolute, out var endpoint) ||
+        endpoint.Scheme != Uri.UriSchemeHttps &&
+        (endpoint.Scheme != Uri.UriSchemeHttp || !endpoint.IsLoopback))
+        throw new ArgumentException("Portal endpoint must use HTTPS (HTTP is allowed only for loopback testing).");
+    var credentialPath = Path.Combine(agentRoot, "portal-credential.bin");
+    var store = new PortalCredentialStore(credentialPath, new DpapiMachineStateProtector());
+    var credential = store.Load() ?? throw new InvalidOperationException("This device is not enrolled.");
+    var checkInEndpoint = endpoint.AbsolutePath.EndsWith("/api/agent/v1/checkin", StringComparison.OrdinalIgnoreCase)
+        ? endpoint
+        : new Uri(endpoint, "/api/agent/v1/checkin");
+    store.Save(credential with { Endpoint = checkInEndpoint.AbsoluteUri });
+    Console.WriteLine(JsonSerializer.Serialize(new
+    {
+        ok = true,
+        tenantId = credential.TenantId,
+        deviceId = credential.DeviceId,
+        endpoint = checkInEndpoint.AbsoluteUri,
+        credentialRotated = false,
+        deviceIdentityPreserved = true
+    }, jsonOptions));
+    return;
+}
+
 if (command == "verify-integrity")
 {
     var manifestPath = Path.Combine(AppContext.BaseDirectory, "integrity-manifest.json");
@@ -403,7 +429,7 @@ if (command is "create-test-policy" or "create-test-recovery")
     return;
 }
 
-Console.Error.WriteLine("Usage: sirkctl create-test-update-manifest --package <directory> --version <version>|verify-update|stage-update --package <directory> [--trusted-keys <path>]|enroll --endpoint <url> --bootstrap-token-file <path>|status|process|flush|sync|queue-status|queue-clear-test --confirm-test-clear|verify-integrity|create-test-policy|create-test-recovery");
+Console.Error.WriteLine("Usage: sirkctl create-test-update-manifest --package <directory> --version <version>|verify-update|stage-update --package <directory> [--trusted-keys <path>]|enroll --endpoint <url> --bootstrap-token-file <path>|set-portal-endpoint --endpoint <checkin-url>|status|process|flush|sync|queue-status|queue-clear-test --confirm-test-clear|verify-integrity|create-test-policy|create-test-recovery");
 Environment.ExitCode = 2;
 
 static JsonElement? ReadJsonFile(string path)

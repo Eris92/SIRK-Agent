@@ -29,15 +29,18 @@ internal sealed class EnduranceWorker : BackgroundService
             try
             {
                 var sample = CaptureSample(root);
-                var samples = LoadSamples(samplesPath);
-                samples.Add(sample);
-                if (samples.Count > MaxSamples)
-                    samples = samples.TakeLast(MaxSamples).ToList();
+                if (sample is not null)
+                {
+                    var samples = LoadSamples(samplesPath);
+                    samples.Add(sample);
+                    if (samples.Count > MaxSamples)
+                        samples = samples.TakeLast(MaxSamples).ToList();
 
-                WriteSamples(samplesPath, samples);
-                var summary = BuildSummary(samples, interval);
-                WriteJsonAtomic(summaryPath, summary);
-                WriteHtmlAtomic(htmlPath, summary, samples);
+                    WriteSamples(samplesPath, samples);
+                    var summary = BuildSummary(samples, interval);
+                    WriteJsonAtomic(summaryPath, summary);
+                    WriteHtmlAtomic(htmlPath, summary, samples);
+                }
             }
             catch (Exception ex)
             {
@@ -63,13 +66,21 @@ internal sealed class EnduranceWorker : BackgroundService
             : TimeSpan.FromMinutes(5);
     }
 
-    private static EnduranceSample CaptureSample(string root)
+    private static EnduranceSample? CaptureSample(string root)
     {
         using var process = Process.GetCurrentProcess();
         process.Refresh();
         using var runtime = ReadDocument(Path.Combine(root, "runtime-health.json"));
         using var heartbeat = ReadDocument(Path.Combine(root, "heartbeat-latest.json"));
         using var security = ReadDocument(Path.Combine(root, "security-state.json"));
+
+        var deviceId = ReadString(heartbeat, "deviceId");
+        var overallHealth = ReadString(security, "overallHealth");
+        var securityState = ReadNestedString(security, "security", "state");
+        if (runtime is null || heartbeat is null || security is null || string.IsNullOrWhiteSpace(deviceId) ||
+            string.IsNullOrWhiteSpace(overallHealth) || string.IsNullOrWhiteSpace(securityState))
+            return null;
+
         var queue = DirectorySize(Path.Combine(root, "TelemetryQueue"), "*.bin");
         var evidencePath = Path.Combine(root, "evidence-events.jsonl");
         var eventPath = Path.Combine(root, "agent-events.jsonl");
@@ -82,9 +93,9 @@ internal sealed class EnduranceWorker : BackgroundService
             GC.GetTotalMemory(false),
             ReadDouble(runtime, "cpuPercent"),
             ReadBool(runtime, "heartbeatFresh"),
-            ReadString(security, "overallHealth"),
-            ReadNestedString(security, "security", "state"),
-            ReadString(heartbeat, "deviceId"),
+            overallHealth,
+            securityState,
+            deviceId,
             queue.Files,
             queue.Bytes,
             File.Exists(evidencePath) ? new FileInfo(evidencePath).Length : 0,

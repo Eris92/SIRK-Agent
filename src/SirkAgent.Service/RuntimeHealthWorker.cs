@@ -26,6 +26,7 @@ internal sealed class RuntimeHealthWorker : BackgroundService
         var runtimePath = Path.Combine(root, "runtime-health.json");
         var eventLogPath = Path.Combine(root, "agent-events.jsonl");
         var process = Process.GetCurrentProcess();
+        var processStartUtc = new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero);
         var previousCpu = process.TotalProcessorTime;
         var previousSample = DateTimeOffset.UtcNow;
 
@@ -69,8 +70,8 @@ internal sealed class RuntimeHealthWorker : BackgroundService
                 status,
                 code,
                 processId = Environment.ProcessId,
-                processStartUtc = process.StartTime.ToUniversalTime(),
-                uptimeSeconds = Math.Max(0, (now - process.StartTime.ToUniversalTime()).TotalSeconds),
+                processStartUtc,
+                uptimeSeconds = Math.Max(0, (now - processStartUtc).TotalSeconds),
                 cpuPercent = Math.Round(cpuPercent, 2),
                 workingSetBytes = process.WorkingSet64,
                 privateMemoryBytes = process.PrivateMemorySize64,

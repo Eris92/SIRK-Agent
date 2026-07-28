@@ -16,6 +16,26 @@ Wymagane dane:
 - jawnie wlaczony zakres kolektorow,
 - polityka retencji.
 
+Agent wymusza te dane w podpisanej kopercie `authorization`. Dla trybów
+`Investigation` i `InsiderRisk` wymagane są co najmniej dwie nazwane osoby
+zatwierdzające, kod powodu i retencja od 1 do 3650 dni. `InsiderRisk` wymaga
+dodatkowo `triggerSource` równego `HR` albo `Security`. Brak dowolnego z tych
+elementów powoduje odrzucenie całej polityki przed aktywacją kolektorów.
+
+```json
+{
+  "caseId": "CASE-2026-007",
+  "authorization": {
+    "reasonCode": "DEPARTING-EMPLOYEE",
+    "approvedBy": ["security@example.test", "legal@example.test"],
+    "targetUserSid": "S-1-5-21-...",
+    "targetSessionId": 2,
+    "retentionDays": 90,
+    "triggerSource": "HR"
+  }
+}
+```
+
 Mozliwy zakres:
 
 - aktywne procesy i okna,
@@ -78,3 +98,19 @@ Raport sprawy powinien zawierac:
 - dowody wizualne, jezeli byly wlaczone,
 - manifest integralnosci,
 - audit dostepu i eksportu.
+
+## Analityka lokalna
+
+Ustawienie `settings.riskAnalytics` jest aktywne wyłącznie w ważnej polityce
+`InsiderRisk`. Agent analizuje okno zdarzeń Evidence Chain i koreluje:
+
+- masowe pobrania według liczby lub wolumenu,
+- utworzenie/wybór archiwum,
+- upload przez Browser Bridge,
+- usunięcie po uploadzie, gdy kolektor plikowy dostarczył zdarzenie,
+- USB i drukowanie,
+- odchylenie od chronionego przez DPAPI profilu bazowego.
+
+Wyniki są zapisywane jako `risk-report.json`, `risk-report.html` oraz
+`risk-report-manifest.json` z SHA-256 obu plików i ostatnim hashem dowodowym.
+Ocena trafia również do szyfrowanej kolejki telemetrii i Evidence Chain.

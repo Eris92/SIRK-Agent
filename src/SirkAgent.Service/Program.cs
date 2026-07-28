@@ -15,6 +15,8 @@ builder.Services.AddHostedService<EnduranceWorker>();
 builder.Services.AddHostedService<ControlFileWorker>();
 builder.Services.AddHostedService<ManagementPlaneWorker>();
 builder.Services.AddHostedService<ActivityCollectorWorker>();
+builder.Services.AddHostedService<FileActivityWorker>();
 builder.Services.AddHostedService<BrowserBridgeWorker>();
+builder.Services.AddHostedService<RiskAnalyticsWorker>();
 
 await builder.Build().RunAsync();

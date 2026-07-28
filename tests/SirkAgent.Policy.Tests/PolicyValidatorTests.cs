@@ -62,6 +62,51 @@ public sealed class PolicyValidatorTests
         Assert.Equal("CASE_REQUIRED", result.Code);
     }
 
+    [Fact]
+    public void Requires_formal_authorization_for_investigation()
+    {
+        using var signingKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var policy = CreatePolicy() with { Mode = AgentMode.Investigation, CaseId = "CASE-1" };
+        policy = policy with { Signature = Sign(policy, signingKey) };
+
+        var validator = new PolicyValidator(new StaticKeyProvider(signingKey.ExportSubjectPublicKeyInfo()));
+        var result = validator.Validate(policy, CreateContext());
+
+        Assert.False(result.IsValid);
+        Assert.Equal("AUTHORIZATION_REQUIRED", result.Code);
+    }
+
+    [Theory]
+    [InlineData(AgentMode.Investigation, null, true)]
+    [InlineData(AgentMode.InsiderRisk, "HR", true)]
+    [InlineData(AgentMode.InsiderRisk, "Security", true)]
+    [InlineData(AgentMode.InsiderRisk, "Manager", false)]
+    public void Enforces_formal_case_approval(AgentMode mode, string? trigger, bool accepted)
+    {
+        using var signingKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var policy = CreatePolicy() with
+        {
+            Mode = mode,
+            CaseId = "CASE-2",
+            Authorization = new PolicyAuthorization
+            {
+                ReasonCode = "SEC-REVIEW",
+                ApprovedBy = ["security@example.test", "legal@example.test"],
+                TargetUserSid = "S-1-5-21-1",
+                RetentionDays = 90,
+                TriggerSource = trigger
+            }
+        };
+        policy = policy with { Signature = Sign(policy, signingKey) };
+
+        var validator = new PolicyValidator(new StaticKeyProvider(signingKey.ExportSubjectPublicKeyInfo()));
+        var result = validator.Validate(policy, CreateContext());
+
+        Assert.Equal(accepted, result.IsValid);
+        if (!accepted)
+            Assert.Equal("TRIGGER_REQUIRED", result.Code);
+    }
+
     private static PolicyEnvelope CreatePolicy() => new()
     {
         TenantId = "investa",

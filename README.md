@@ -228,10 +228,10 @@ schemas/
 - [Roadmap Security](docs/ROADMAP-SECURITY.md)
 - [Policy Engine](docs/POLICY-ENGINE.md)
 - [Investigation i Insider Risk](docs/INVESTIGATION-INSIDER-RISK.md)
+- [Activity Collectors](docs/ACTIVITY-COLLECTORS.md) obejmujące zdarzenia plikowe i profil ryzyka,
 - [Tamper Protection](docs/TAMPER-PROTECTION.md)
 - [Evidence Engine](docs/EVIDENCE-ENGINE.md)
 - [Management Plane Health](docs/MANAGEMENT-PLANE-HEALTH.md)
-- [Activity Collectors](docs/ACTIVITY-COLLECTORS.md)
 - [Browser Bridge](docs/BROWSER-BRIDGE.md)
 
 ## Polecenie do wznowienia w nowym oknie

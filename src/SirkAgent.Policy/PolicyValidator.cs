@@ -48,6 +48,27 @@ public sealed class PolicyValidator
         if (policy.Mode is AgentMode.Investigation or AgentMode.InsiderRisk && string.IsNullOrWhiteSpace(policy.CaseId))
             return PolicyValidationResult.Reject("CASE_REQUIRED", "Investigation and InsiderRisk policies require a Case ID.");
 
+        if (policy.Mode is AgentMode.Investigation or AgentMode.InsiderRisk)
+        {
+            var authorization = policy.Authorization;
+            if (authorization is null)
+                return PolicyValidationResult.Reject("AUTHORIZATION_REQUIRED",
+                    "Investigation and InsiderRisk policies require formal authorization.");
+            if (string.IsNullOrWhiteSpace(authorization.ReasonCode))
+                return PolicyValidationResult.Reject("REASON_REQUIRED", "A case reason code is required.");
+            if (authorization.ApprovedBy is null ||
+                authorization.ApprovedBy.Count(value => !string.IsNullOrWhiteSpace(value)) < 2)
+                return PolicyValidationResult.Reject("APPROVALS_REQUIRED",
+                    "At least two named approvers are required.");
+            if (authorization.RetentionDays is < 1 or > 3650)
+                return PolicyValidationResult.Reject("RETENTION_INVALID",
+                    "Retention must be between 1 and 3650 days.");
+            if (policy.Mode == AgentMode.InsiderRisk &&
+                authorization.TriggerSource is not ("HR" or "Security"))
+                return PolicyValidationResult.Reject("TRIGGER_REQUIRED",
+                    "InsiderRisk requires an HR or Security trigger.");
+        }
+
         if (!string.Equals(policy.Signature.Algorithm, "ES256", StringComparison.Ordinal))
             return PolicyValidationResult.Reject("UNSUPPORTED_ALGORITHM", "Only ES256 signatures are accepted.");
 

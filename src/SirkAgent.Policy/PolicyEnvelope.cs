@@ -25,6 +25,9 @@ public sealed record PolicyEnvelope
     [JsonPropertyName("caseId")]
     public string? CaseId { get; init; }
 
+    [JsonPropertyName("authorization")]
+    public PolicyAuthorization? Authorization { get; init; }
+
     [JsonPropertyName("version")]
     public required long Version { get; init; }
 
@@ -49,6 +52,27 @@ public sealed record PolicyEnvelope
 
     [JsonPropertyName("signature")]
     public required PolicySignature Signature { get; init; }
+}
+
+public sealed record PolicyAuthorization
+{
+    [JsonPropertyName("reasonCode")]
+    public required string ReasonCode { get; init; }
+
+    [JsonPropertyName("approvedBy")]
+    public required string[] ApprovedBy { get; init; }
+
+    [JsonPropertyName("targetUserSid")]
+    public string? TargetUserSid { get; init; }
+
+    [JsonPropertyName("targetSessionId")]
+    public int? TargetSessionId { get; init; }
+
+    [JsonPropertyName("retentionDays")]
+    public required int RetentionDays { get; init; }
+
+    [JsonPropertyName("triggerSource")]
+    public string? TriggerSource { get; init; }
 }
 
 public sealed record PolicySignature

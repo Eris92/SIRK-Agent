@@ -1,6 +1,9 @@
 name: SIRK Agent Endurance Report CI
 
 on:
+  push:
+    branches:
+      - main
   pull_request:
     paths:
       - 'src/**'
@@ -48,6 +51,13 @@ jobs:
       - name: Validate reports and SCM recovery
         shell: pwsh
         run: |
+          function Assert-Ci([bool]$Condition, [string]$Message) {
+            if (-not $Condition) {
+              Write-Output "::error title=Endurance validation failed::$Message"
+              throw $Message
+            }
+          }
+
           $root = Join-Path $env:ProgramData 'SIRK\Agent'
           $ready = $false
           for ($i = 0; $i -lt 60; $i++) {
@@ -58,12 +68,15 @@ jobs:
               if ($summary.sampleCount -ge 4) { $ready = $true; break }
             }
           }
-          if (-not $ready) { throw 'Endurance summary did not collect four samples.' }
-          if (-not (Test-Path (Join-Path $root 'endurance-report.html'))) { throw 'Endurance HTML report missing.' }
-          if ($summary.status -ne 'Healthy' -or $summary.memoryLeakSuspected) { throw 'Endurance summary is not healthy.' }
+          Assert-Ci $ready 'Endurance summary did not collect four samples.'
+          $summary | ConvertTo-Json -Depth 8 | Write-Output
+          Assert-Ci (Test-Path (Join-Path $root 'endurance-report.html')) 'Endurance HTML report missing.'
+          Assert-Ci ($summary.status -eq 'Healthy' -and -not $summary.memoryLeakSuspected) "Endurance summary is not healthy: status=$($summary.status), memoryLeakSuspected=$($summary.memoryLeakSuspected), unhealthySamples=$($summary.unhealthySamples), sampleGaps=$($summary.sampleGaps)."
 
           $before = Get-CimInstance Win32_Service -Filter "Name='SirkAgent'"
           $oldPid = [int]$before.ProcessId
+          Assert-Ci ($before.State -eq 'Running' -and $oldPid -gt 0) "Service was not running before SCM recovery test: state=$($before.State), pid=$oldPid."
+          & sc.exe qfailure SirkAgent
           Stop-Process -Id $oldPid -Force
           $recovered = $false
           for ($i = 0; $i -lt 70; $i++) {
@@ -71,7 +84,7 @@ jobs:
             $service = Get-CimInstance Win32_Service -Filter "Name='SirkAgent'"
             if ($service.State -eq 'Running' -and $service.ProcessId -gt 0 -and $service.ProcessId -ne $oldPid) { $recovered = $true; break }
           }
-          if (-not $recovered) { throw 'SCM did not recover the killed service process.' }
+          Assert-Ci $recovered "SCM did not recover the killed service process: oldPid=$oldPid, state=$($service.State), pid=$($service.ProcessId)."
 
           $samplesRecovered = $false
           for ($i = 0; $i -lt 30; $i++) {
@@ -79,17 +92,39 @@ jobs:
             $after = Get-Content (Join-Path $root 'endurance-summary.json') -Raw | ConvertFrom-Json
             if ($after.processRestarts -ge 1) { $samplesRecovered = $true; break }
           }
-          if (-not $samplesRecovered) { throw 'Endurance report did not record process restart.' }
-          if (-not $after.deviceId) { throw 'Endurance summary lost Device ID.' }
+          Assert-Ci $samplesRecovered "Endurance report did not record process restart: oldPid=$oldPid, newPid=$($service.ProcessId), samples=$($after.sampleCount), recordedRestarts=$($after.processRestarts)."
+          Assert-Ci (-not [string]::IsNullOrWhiteSpace([string]$after.deviceId)) 'Endurance summary lost Device ID.'
           Copy-Item (Join-Path $root 'endurance-summary.json') artifacts/
           Copy-Item (Join-Path $root 'endurance-report.html') artifacts/
           Copy-Item (Join-Path $root 'endurance-samples.jsonl') artifacts/
 
+      - name: Capture endurance diagnostics
+        if: always()
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:ProgramData 'SIRK\Agent'
+          New-Item artifacts/EnduranceDiagnostics -ItemType Directory -Force | Out-Null
+          foreach ($name in @('endurance-summary.json','endurance-report.html','endurance-samples.jsonl','runtime-health.json','heartbeat-latest.json','security-state.json','agent-events.jsonl')) {
+            $path = Join-Path $root $name
+            if (Test-Path $path) { Copy-Item $path artifacts/EnduranceDiagnostics/ -Force }
+          }
+          Get-CimInstance Win32_Service -Filter "Name='SirkAgent'" |
+            Select-Object Name,State,Status,ProcessId,StartMode,ExitCode |
+            ConvertTo-Json -Depth 5 |
+            Set-Content artifacts/EnduranceDiagnostics/service-state.json
+          & sc.exe qfailure SirkAgent 2>&1 |
+            Set-Content artifacts/EnduranceDiagnostics/service-recovery.txt
+
+      - name: Cleanup test service
+        if: always()
+        shell: pwsh
+        run: |
+          ./artifacts/SIRK-Agent-Runtime/Uninstall-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent Endurance CI" -Confirm:$false -ErrorAction SilentlyContinue
+          [Environment]::SetEnvironmentVariable('SIRK_ENDURANCE_INTERVAL_SECONDS',$null,'Machine')
+
       - name: Package
         shell: pwsh
         run: |
-          ./artifacts/SIRK-Agent-Runtime/Uninstall-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent Endurance CI" -Confirm:$false
-          [Environment]::SetEnvironmentVariable('SIRK_ENDURANCE_INTERVAL_SECONDS',$null,'Machine')
           Compress-Archive -Path artifacts/SIRK-Agent-Runtime/* -DestinationPath artifacts/SIRK-Agent-0.3.5-test-win-x64.zip -CompressionLevel Optimal -Force
 
       - uses: actions/upload-artifact@v4
@@ -102,3 +137,11 @@ jobs:
             artifacts/endurance-report.html
             artifacts/endurance-samples.jsonl
           if-no-files-found: error
+
+      - name: Upload endurance diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SIRK-Agent-0.3.5-test-endurance-diagnostics
+          path: artifacts/EnduranceDiagnostics/**
+          if-no-files-found: warn

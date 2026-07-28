@@ -45,6 +45,36 @@ public sealed class PolicyStateStoreTests
     }
 
     [Fact]
+    public async Task Concurrent_initialization_atomically_leaves_a_valid_state()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "sirk-policy-tests", Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(directory, "state.bin");
+
+        try
+        {
+            var store = new FilePolicyStateStore(path, new TestProtector());
+            using var start = new ManualResetEventSlim(false);
+            var tasks = Enumerable.Range(0, 32).Select(version => Task.Run(() =>
+            {
+                start.Wait();
+                store.Save(PolicyState.Empty with { Version = version });
+            })).ToArray();
+
+            start.Set();
+            await Task.WhenAll(tasks);
+
+            var state = store.Load();
+            Assert.InRange(state.Version, 0, 31);
+            Assert.DoesNotContain(Directory.EnumerateFiles(directory), file => file.Contains(".tmp.", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Acceptance_persists_nonce_and_rejects_replay()
     {
         using var signingKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);

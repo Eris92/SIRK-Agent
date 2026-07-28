@@ -1,9 +1,13 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 
 namespace SirkAgent.Policy;
 
 public sealed class FilePolicyStateStore : IPolicyStateStore
 {
+    private static readonly ConcurrentDictionary<string, object> PathLocks =
+        new(StringComparer.OrdinalIgnoreCase);
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = false
@@ -39,6 +43,14 @@ public sealed class FilePolicyStateStore : IPolicyStateStore
     {
         ArgumentNullException.ThrowIfNull(state);
 
+        lock (PathLocks.GetOrAdd(_path, static _ => new object()))
+        {
+            SaveCore(state);
+        }
+    }
+
+    private void SaveCore(PolicyState state)
+    {
         var directory = Path.GetDirectoryName(_path);
         if (!string.IsNullOrEmpty(directory))
             Directory.CreateDirectory(directory);
@@ -61,10 +73,7 @@ public sealed class FilePolicyStateStore : IPolicyStateStore
                 stream.Flush(flushToDisk: true);
             }
 
-            if (File.Exists(_path))
-                File.Move(temporaryPath, _path, overwrite: true);
-            else
-                File.Move(temporaryPath, _path);
+            File.Move(temporaryPath, _path, overwrite: true);
         }
         finally
         {

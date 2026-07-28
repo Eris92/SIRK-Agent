@@ -183,6 +183,17 @@ jobs:
           ./artifacts/SIRK-Agent-Runtime/Collect-SirkAgent-TestBundle.ps1 -OutputDirectory $out
           if (-not (Get-ChildItem $out -Filter '*.zip')) { throw 'TestBundle was not generated.' }
 
+      - name: Validate signed update package
+        shell: pwsh
+        run: |
+          $runtime = Resolve-Path artifacts/SIRK-Agent-Runtime
+          $cli = Join-Path $env:ProgramFiles 'SIRK Agent CI\sirkctl.exe'
+          & $cli create-test-update-manifest --package $runtime --version 0.4.1-test-ci
+          if ($LASTEXITCODE -ne 0) { throw 'Test update manifest generation failed.' }
+          & $cli verify-update --package $runtime
+          if ($LASTEXITCODE -ne 0) { throw 'Signed update package verification failed.' }
+          Remove-Item (Join-Path $runtime 'update-manifest.json') -Force
+
       - name: Uninstall service and create package
         shell: pwsh
         run: |

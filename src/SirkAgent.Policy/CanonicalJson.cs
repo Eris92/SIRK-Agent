@@ -9,12 +9,22 @@ public static class CanonicalJson
     public static byte[] SerializePayloadWithoutSignature(PolicyEnvelope envelope)
     {
         ArgumentNullException.ThrowIfNull(envelope);
+        return SerializeWithoutTopLevelSignature(JsonSerializer.SerializeToElement(envelope));
+    }
 
-        using var document = JsonDocument.Parse(JsonSerializer.Serialize(envelope));
+    public static byte[] SerializeWithoutTopLevelSignature<T>(T value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        return SerializeWithoutTopLevelSignature(JsonSerializer.SerializeToElement(value));
+    }
+
+    public static byte[] SerializeWithoutTopLevelSignature(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+            throw new ArgumentException("Canonical signed payload must be a JSON object.", nameof(root));
         var buffer = new ArrayBufferWriter<byte>();
         using var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = false });
-
-        WriteObjectWithoutSignature(document.RootElement, writer);
+        WriteObjectWithoutSignature(root, writer);
         writer.Flush();
         return buffer.WrittenSpan.ToArray();
     }

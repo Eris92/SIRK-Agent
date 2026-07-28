@@ -87,6 +87,9 @@ CLI `sirkctl.exe` obsluguje:
   a serwer dodatkowo weryfikuje impersonowany SID klienta przed wykonaniem komendy,
 - rejestracja generuje ECDSA P-256; prywatny klucz trafia do rekordu DPAPI, a
   check-in podpisuje timestamp, jednorazowy nonce i dokładne bajty JSON,
+- `verify-update` i `stage-update` wymagają manifestu ES256 oraz poprawnych
+  SHA-256 wszystkich plików; `Apply-SirkAgentUpdate.ps1` wykonuje backup,
+  health/integrity gate i automatyczny rollback bez ruszania katalogu danych,
 
 ```text
 status

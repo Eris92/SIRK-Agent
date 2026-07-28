@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Security.Principal;
@@ -10,6 +11,108 @@ const string pipeName = "SIRK-Agent-Control";
 var command = args.FirstOrDefault()?.Trim().ToLowerInvariant() ?? "status";
 var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
 var agentRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SIRK", "Agent");
+
+if (command == "create-test-update-manifest")
+{
+    var package = GetOption(args, "--package");
+    var version = GetOption(args, "--version") ?? "0.0.0-test";
+    if (string.IsNullOrWhiteSpace(package) || !Directory.Exists(package))
+        throw new DirectoryNotFoundException("Update package directory was not found.");
+    package = Path.GetFullPath(package);
+    var privateKeyPath = Path.Combine(agentRoot, "test-signing-key.pem");
+    if (!File.Exists(privateKeyPath))
+        throw new FileNotFoundException("Test signing key was not found. Run create-test-policy first.", privateKeyPath);
+    using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+    key.ImportFromPem(await File.ReadAllTextAsync(privateKeyPath));
+    var files = Directory.EnumerateFiles(package, "*", SearchOption.AllDirectories)
+        .Where(path => !string.Equals(Path.GetFileName(path), "update-manifest.json", StringComparison.OrdinalIgnoreCase))
+        .Select(path => new UpdateManifestFile(
+            Path.GetRelativePath(package, path).Replace('\\', '/'),
+            Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)))))
+        .OrderBy(file => file.Path, StringComparer.Ordinal)
+        .ToArray();
+    var unsigned = new UpdateManifest(1, "SIRK Agent", version, "win-x64", files,
+        new PolicySignature { Algorithm = "ES256", KeyId = "sirk-test-es256", Value = "pending" });
+    var signature = key.SignData(CanonicalJson.SerializeWithoutTopLevelSignature(unsigned),
+        HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
+    var manifest = unsigned with { Signature = unsigned.Signature with { Value = Base64Url(signature) } };
+    var output = Path.Combine(package, "update-manifest.json");
+    await File.WriteAllTextAsync(output, JsonSerializer.Serialize(manifest, jsonOptions), new UTF8Encoding(false));
+    Console.WriteLine(output);
+    return;
+}
+
+if (command is "verify-update" or "stage-update")
+{
+    var package = GetOption(args, "--package");
+    if (string.IsNullOrWhiteSpace(package) || !Directory.Exists(package))
+        throw new DirectoryNotFoundException("Update package directory was not found.");
+    package = Path.GetFullPath(package);
+    var manifestPath = Path.Combine(package, "update-manifest.json");
+    var trustedKeysPath = GetOption(args, "--trusted-keys") ?? Path.Combine(agentRoot, "trusted-keys.json");
+    var verifier = new UpdatePackageVerifier(PemPolicyPublicKeyProvider.Load(trustedKeysPath));
+    var result = verifier.Verify(package, manifestPath);
+    if (!result.Accepted)
+    {
+        Console.Error.WriteLine(JsonSerializer.Serialize(result, jsonOptions));
+        Environment.ExitCode = 6;
+        return;
+    }
+    if (command == "verify-update")
+    {
+        Console.WriteLine(JsonSerializer.Serialize(result, jsonOptions));
+        return;
+    }
+
+    var manifest = JsonSerializer.Deserialize<UpdateManifest>(await File.ReadAllBytesAsync(manifestPath),
+        new JsonSerializerOptions(JsonSerializerDefaults.Web))
+        ?? throw new InvalidDataException("Update manifest is invalid.");
+    var installedService = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+        "SIRK Agent", "SirkAgent.Service.exe");
+    if (File.Exists(installedService))
+    {
+        var installedVersion = FileVersionInfo.GetVersionInfo(installedService).ProductVersion;
+        var versionGate = verifier.Verify(package, manifest, installedVersion);
+        if (!versionGate.Accepted)
+        {
+            Console.Error.WriteLine(JsonSerializer.Serialize(versionGate, jsonOptions));
+            Environment.ExitCode = 6;
+            return;
+        }
+    }
+    if (!System.Text.RegularExpressions.Regex.IsMatch(manifest.Version, @"^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$"))
+        throw new InvalidDataException("Update version is invalid.");
+    var updatesRoot = Path.Combine(agentRoot, "Updates", "Staged");
+    var target = Path.Combine(updatesRoot, manifest.Version);
+    if (Directory.Exists(target))
+        throw new IOException("This update version is already staged.");
+    var temporary = target + ".tmp." + Guid.NewGuid().ToString("N");
+    try
+    {
+        foreach (var file in manifest.Files)
+        {
+            var destination = Path.Combine(temporary, file.Path.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(Path.Combine(package, file.Path.Replace('/', Path.DirectorySeparatorChar)), destination);
+        }
+        File.Copy(manifestPath, Path.Combine(temporary, "update-manifest.json"));
+        Directory.CreateDirectory(updatesRoot);
+        Directory.Move(temporary, target);
+    }
+    finally
+    {
+        if (Directory.Exists(temporary)) Directory.Delete(temporary, recursive: true);
+    }
+    Console.WriteLine(JsonSerializer.Serialize(new
+    {
+        ok = true,
+        code = "UPDATE_STAGED",
+        version = manifest.Version,
+        stagedPath = target,
+        verified = true
+    }, jsonOptions));
+    return;
+}
 
 if (command == "enroll")
 {
@@ -292,7 +395,7 @@ if (command is "create-test-policy" or "create-test-recovery")
     return;
 }
 
-Console.Error.WriteLine("Usage: sirkctl enroll --endpoint <url> --bootstrap-token-file <path>|status|process|flush|sync|queue-status|queue-clear-test --confirm-test-clear|verify-integrity|create-test-policy|create-test-recovery");
+Console.Error.WriteLine("Usage: sirkctl create-test-update-manifest --package <directory> --version <version>|verify-update|stage-update --package <directory> [--trusted-keys <path>]|enroll --endpoint <url> --bootstrap-token-file <path>|status|process|flush|sync|queue-status|queue-clear-test --confirm-test-clear|verify-integrity|create-test-policy|create-test-recovery");
 Environment.ExitCode = 2;
 
 static JsonElement? ReadJsonFile(string path)

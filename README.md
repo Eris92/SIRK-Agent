@@ -106,6 +106,22 @@ klucz ECDSA urządzenia. Portal przechowuje tylko hash SHA-256 tokenu oraz klucz
 publiczny i odrzuca brak podpisu, stary timestamp oraz ponowne użycie nonce.
 HTTP jest akceptowany wyłącznie dla testów na adresie loopback.
 
+Podpisana aktualizacja offline (PowerShell jako Administrator):
+
+```powershell
+& 'C:\Program Files\SIRK Agent\sirkctl.exe' verify-update `
+  --package 'C:\ProgramData\SIRK\Agent\Updates\Download\1.0.0'
+& 'C:\Program Files\SIRK Agent\sirkctl.exe' stage-update `
+  --package 'C:\ProgramData\SIRK\Agent\Updates\Download\1.0.0'
+& 'C:\Program Files\SIRK Agent\Apply-SirkAgentUpdate.ps1' `
+  -StagedPath 'C:\ProgramData\SIRK\Agent\Updates\Staged\1.0.0'
+```
+
+Manifest `update-manifest.json` jest podpisany ES256 i obejmuje SHA-256 każdego
+pliku. Aplikator wykonuje backup binariów, nie usuwa `C:\ProgramData\SIRK\Agent`,
+uruchamia usługę, sprawdza `integrity-manifest.json` i automatycznie przywraca
+poprzedni runtime, gdy kontrola po aktualizacji nie powiedzie się.
+
 Test podpisanej polityki:
 
 ```powershell

@@ -115,13 +115,13 @@ internal sealed class EnduranceWorker : BackgroundService
         var first = samples.First();
         var last = samples.Last();
         var restarts = samples.Zip(samples.Skip(1), (a, b) => a.ProcessId != b.ProcessId ? 1 : 0).Sum();
-        var healthWindow = samples.TakeLast(48).ToArray();
+        var trendSamples = samples.Reverse().TakeWhile(x => x.ProcessId == last.ProcessId).Reverse().ToArray();
+        var healthWindow = trendSamples.TakeLast(48).ToArray();
         var allowedGap = TimeSpan.FromTicks(interval.Ticks * 3);
         var gaps = healthWindow.Zip(healthWindow.Skip(1), (a, b) =>
             a.ProcessId == b.ProcessId && b.TimestampUtc - a.TimestampUtc > allowedGap ? 1 : 0).Sum();
         var unhealthy = healthWindow.Count(x => !x.HeartbeatFresh ||
             !string.Equals(x.OverallHealth, "Healthy", StringComparison.OrdinalIgnoreCase));
-        var trendSamples = samples.Reverse().TakeWhile(x => x.ProcessId == last.ProcessId).Reverse().ToArray();
         var trendFirst = trendSamples.First();
         var memoryGrowth = last.WorkingSetBytes - trendFirst.WorkingSetBytes;
         var durationHours = Math.Max(0.001, (last.TimestampUtc - trendFirst.TimestampUtc).TotalHours);

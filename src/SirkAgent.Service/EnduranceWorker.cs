@@ -9,7 +9,7 @@ namespace SirkAgent.Service;
 
 internal sealed class EnduranceWorker : BackgroundService
 {
-    private const int MaxSamples = 576; // 48 hours at the default five-minute interval.
+    private const int MaxSamples = 576;
     private readonly ILogger<EnduranceWorker> _logger;
     private readonly JsonSerializerOptions _json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
@@ -67,9 +67,9 @@ internal sealed class EnduranceWorker : BackgroundService
     {
         using var process = Process.GetCurrentProcess();
         process.Refresh();
-        var runtime = ReadDocument(Path.Combine(root, "runtime-health.json"));
-        var heartbeat = ReadDocument(Path.Combine(root, "heartbeat-latest.json"));
-        var security = ReadDocument(Path.Combine(root, "security-state.json"));
+        using var runtime = ReadDocument(Path.Combine(root, "runtime-health.json"));
+        using var heartbeat = ReadDocument(Path.Combine(root, "heartbeat-latest.json"));
+        using var security = ReadDocument(Path.Combine(root, "security-state.json"));
         var queue = DirectorySize(Path.Combine(root, "TelemetryQueue"), "*.bin");
         var evidencePath = Path.Combine(root, "evidence-events.jsonl");
         var eventPath = Path.Combine(root, "agent-events.jsonl");
@@ -143,7 +143,6 @@ internal sealed class EnduranceWorker : BackgroundService
             }
             catch (JsonException)
             {
-                // A partially written historical line is ignored; the file is rewritten atomically below.
             }
         }
         return result;
@@ -170,15 +169,24 @@ internal sealed class EnduranceWorker : BackgroundService
     private static void WriteHtmlAtomic(string path, EnduranceSummary summary, IReadOnlyList<EnduranceSample> samples)
     {
         static string Mb(double value) => (value / 1024d / 1024d).ToString("0.00", CultureInfo.InvariantCulture);
-        var rows = string.Join("", samples.TakeLast(48).Reverse().Select(x => $"<tr><td>{x.TimestampUtc:O}</td><td>{x.ProcessId}</td><td>{x.CpuPercent:0.00}</td><td>{Mb(x.WorkingSetBytes)}</td><td>{x.HeartbeatFresh}</td><td>{System.Net.WebUtility.HtmlEncode(x.OverallHealth)}</td></tr>"));
-        var html = $"""
-<!doctype html><html lang="pl"><head><meta charset="utf-8"><title>SIRK Agent Endurance</title>
-<style>body{{font-family:Segoe UI,Arial;margin:24px;background:#111827;color:#e5e7eb}}.card{{background:#1f2937;padding:16px;border-radius:10px;margin:10px 0}}table{{width:100%;border-collapse:collapse}}td,th{{padding:7px;border-bottom:1px solid #374151;text-align:left}}.Healthy{{color:#34d399}}.Warning{{color:#fbbf24}}</style></head><body>
-<h1>SIRK Agent — Endurance</h1><div class="card"><h2 class="{summary.Status}">{summary.Status}</h2><p>Próbki: {summary.SampleCount} | Okres: {summary.DurationHours:0.00} h | Restarty procesu: {summary.ProcessRestarts} | Przerwy: {summary.SampleGaps}</p><p>CPU min/avg/max: {summary.CpuMin:0.00}% / {summary.CpuAverage:0.00}% / {summary.CpuMax:0.00}%</p><p>RAM min/avg/max: {Mb(summary.WorkingSetMin)} / {Mb(summary.WorkingSetAverage)} / {Mb(summary.WorkingSetMax)} MB</p><p>Trend RAM: {Mb(summary.WorkingSetGrowthPerHour)}/h | Podejrzenie wycieku: {summary.MemoryLeakSuspected}</p><p>Telemetry: {summary.TelemetryFiles} plików, {Mb(summary.TelemetryBytes)} MB | Evidence: {Mb(summary.EvidenceBytes)} MB</p></div>
-<div class="card"><table><thead><tr><th>UTC</th><th>PID</th><th>CPU %</th><th>RAM MB</th><th>Heartbeat</th><th>Health</th></tr></thead><tbody>{rows}</tbody></table></div></body></html>
-""";
+        var builder = new StringBuilder();
+        builder.Append("<!doctype html><html lang=\"pl\"><head><meta charset=\"utf-8\"><title>SIRK Agent Endurance</title>");
+        builder.Append("<style>body{font-family:Segoe UI,Arial;margin:24px;background:#111827;color:#e5e7eb}.card{background:#1f2937;padding:16px;border-radius:10px;margin:10px 0}table{width:100%;border-collapse:collapse}td,th{padding:7px;border-bottom:1px solid #374151;text-align:left}.Healthy{color:#34d399}.Warning{color:#fbbf24}</style></head><body>");
+        builder.Append("<h1>SIRK Agent — Endurance</h1><div class=\"card\">");
+        builder.Append($"<h2 class=\"{summary.Status}\">{summary.Status}</h2>");
+        builder.Append($"<p>Próbki: {summary.SampleCount} | Okres: {summary.DurationHours:0.00} h | Restarty procesu: {summary.ProcessRestarts} | Przerwy: {summary.SampleGaps}</p>");
+        builder.Append($"<p>CPU min/avg/max: {summary.CpuMin:0.00}% / {summary.CpuAverage:0.00}% / {summary.CpuMax:0.00}%</p>");
+        builder.Append($"<p>RAM min/avg/max: {Mb(summary.WorkingSetMin)} / {Mb(summary.WorkingSetAverage)} / {Mb(summary.WorkingSetMax)} MB</p>");
+        builder.Append($"<p>Trend RAM: {Mb(summary.WorkingSetGrowthPerHour)}/h | Podejrzenie wycieku: {summary.MemoryLeakSuspected}</p>");
+        builder.Append($"<p>Telemetry: {summary.TelemetryFiles} plików, {Mb(summary.TelemetryBytes)} MB | Evidence: {Mb(summary.EvidenceBytes)} MB</p></div>");
+        builder.Append("<div class=\"card\"><table><thead><tr><th>UTC</th><th>PID</th><th>CPU %</th><th>RAM MB</th><th>Heartbeat</th><th>Health</th></tr></thead><tbody>");
+        foreach (var sample in samples.TakeLast(48).Reverse())
+        {
+            builder.Append($"<tr><td>{sample.TimestampUtc:O}</td><td>{sample.ProcessId}</td><td>{sample.CpuPercent:0.00}</td><td>{Mb(sample.WorkingSetBytes)}</td><td>{sample.HeartbeatFresh}</td><td>{System.Net.WebUtility.HtmlEncode(sample.OverallHealth)}</td></tr>");
+        }
+        builder.Append("</tbody></table></div></body></html>");
         var temp = path + ".tmp";
-        File.WriteAllText(temp, html, new UTF8Encoding(false));
+        File.WriteAllText(temp, builder.ToString(), new UTF8Encoding(false));
         File.Move(temp, path, true);
     }
 

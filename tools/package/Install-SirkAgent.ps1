@@ -72,6 +72,18 @@ if (Test-Path -LiteralPath $sessionExe) {
     New-Item -Path $runKey -Force | Out-Null
     New-ItemProperty -Path $runKey -Name 'SIRKAgentSession' -Value ('"{0}"' -f $sessionExe) `
         -PropertyType String -Force | Out-Null
+
+    # An in-place update stops the old broker while replacing its executable.
+    # Start the replacement immediately when setup itself runs in an interactive
+    # user session; deployments running as SYSTEM remain covered by the Run key
+    # at the user's next logon.
+    if ([System.Diagnostics.Process]::GetCurrentProcess().SessionId -gt 0) {
+        try {
+            Start-Process -FilePath $sessionExe -WindowStyle Hidden
+        } catch {
+            Write-Warning "Broker sesji zostanie uruchomiony przy następnym logowaniu: $($_.Exception.Message)"
+        }
+    }
 }
 
 $dataPath = Join-Path $env:ProgramData 'SIRK\Agent'

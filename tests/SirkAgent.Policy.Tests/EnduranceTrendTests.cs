@@ -19,8 +19,19 @@ public sealed class EnduranceTrendTests
 
         Assert.Equal(1, summary.ProcessRestarts);
         Assert.False(summary.MemoryLeakSuspected);
-        Assert.Equal(1_100_000, summary.WorkingSetGrowthBytes);
+        Assert.Equal(900_000, summary.WorkingSetGrowthBytes);
         Assert.Equal("Healthy", summary.Status);
+    }
+
+    [Fact]
+    public void Single_startup_sample_has_zero_trend()
+    {
+        var summary = EnduranceWorker.BuildSummary(
+            [Sample(DateTimeOffset.UtcNow, 400, 80_000_000)], TimeSpan.FromMinutes(5));
+
+        Assert.Equal(0, summary.WorkingSetGrowthBytes);
+        Assert.Equal(0, summary.WorkingSetGrowthPerHour);
+        Assert.False(summary.MemoryLeakSuspected);
     }
 
     [Fact]

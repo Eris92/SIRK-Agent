@@ -122,10 +122,12 @@ internal sealed class EnduranceWorker : BackgroundService
             a.ProcessId == b.ProcessId && b.TimestampUtc - a.TimestampUtc > allowedGap ? 1 : 0).Sum();
         var unhealthy = healthWindow.Count(x => !x.HeartbeatFresh ||
             !string.Equals(x.OverallHealth, "Healthy", StringComparison.OrdinalIgnoreCase));
-        var trendFirst = trendSamples.First();
-        var memoryGrowth = last.WorkingSetBytes - trendFirst.WorkingSetBytes;
-        var durationHours = Math.Max(0.001, (last.TimestampUtc - trendFirst.TimestampUtc).TotalHours);
-        var growthPerHour = memoryGrowth / durationHours;
+        var stableTrend = trendSamples.Length >= 12 ? trendSamples.Skip(2).ToArray() : trendSamples;
+        var trendFirst = stableTrend.First();
+        var memoryGrowth = stableTrend.Length >= 2 ? last.WorkingSetBytes - trendFirst.WorkingSetBytes : 0;
+        var durationHours = stableTrend.Length >= 2
+            ? Math.Max(0.001, (last.TimestampUtc - trendFirst.TimestampUtc).TotalHours) : 0;
+        var growthPerHour = durationHours > 0 ? memoryGrowth / durationHours : 0;
         var leakSuspected = trendSamples.Length >= 12 && growthPerHour > 5L * 1024 * 1024;
 
         return new EnduranceSummary(

@@ -45,8 +45,17 @@ internal static class Program
                 };
                 await writer.WriteLineAsync(JsonSerializer.Serialize(response, Json));
             }
-            catch
+            catch (Exception error)
             {
+                try
+                {
+                    var logDirectory = Path.Combine(Environment.GetFolderPath(
+                        Environment.SpecialFolder.LocalApplicationData), "SIRK", "Session");
+                    Directory.CreateDirectory(logDirectory);
+                    File.AppendAllText(Path.Combine(logDirectory, "session-error.log"),
+                        DateTimeOffset.UtcNow.ToString("O") + " " + error + Environment.NewLine);
+                }
+                catch { }
                 await Task.Delay(1000);
             }
         }
@@ -82,9 +91,25 @@ internal static class Program
     private static SessionResponse Snapshot()
     {
         var bounds = SystemInformation.VirtualScreen;
+        if (bounds.Width <= 0 || bounds.Height <= 0)
+            throw new InvalidOperationException("Aktywna sesja nie udostępnia ekranu.");
         using var source = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format24bppRgb);
         using (var graphics = Graphics.FromImage(source))
-            graphics.CopyFromScreen(bounds.Left, bounds.Top, 0, 0, source.Size, CopyPixelOperation.SourceCopy);
+        {
+            var destination = graphics.GetHdc();
+            var screen = GetDC(IntPtr.Zero);
+            try
+            {
+                if (screen == IntPtr.Zero || !BitBlt(destination, 0, 0, bounds.Width, bounds.Height,
+                        screen, bounds.Left, bounds.Top, 0x00CC0020))
+                    throw new InvalidOperationException("Nie udało się przechwycić aktywnego pulpitu.");
+            }
+            finally
+            {
+                if (screen != IntPtr.Zero) ReleaseDC(IntPtr.Zero, screen);
+                graphics.ReleaseHdc(destination);
+            }
+        }
         var scale = Math.Min(1d, Math.Min(1600d / bounds.Width, 900d / bounds.Height));
         using var bitmap = scale < 1d
             ? new Bitmap(source, new Size((int)(bounds.Width * scale), (int)(bounds.Height * scale)))
@@ -125,6 +150,17 @@ internal static class Program
 
     [DllImport("user32.dll")]
     private static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetDC(IntPtr window);
+
+    [DllImport("user32.dll")]
+    private static extern int ReleaseDC(IntPtr window, IntPtr deviceContext);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool BitBlt(IntPtr destination, int x, int y, int width, int height,
+        IntPtr source, int sourceX, int sourceY, uint operation);
 }
 
 internal sealed record SessionRequest(string Type, string? Action, int? X, int? Y);

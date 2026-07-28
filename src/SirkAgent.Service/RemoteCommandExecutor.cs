@@ -73,7 +73,8 @@ internal sealed class RemoteCommandExecutor
                 x = OptionalInt(command.Parameters, "x", 0),
                 y = OptionalInt(command.Parameters, "y", 0)
             };
-        await writer.WriteLineAsync(JsonSerializer.Serialize(request, _json));
+        await writer.WriteLineAsync(JsonSerializer.Serialize(request,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web)));
         var responseLine = await reader.ReadLineAsync(timeout.Token);
         if (string.IsNullOrWhiteSpace(responseLine))
             return Failure(command.CommandId, "INTERACTIVE_HELPER_INVALID", "Broker nie zwrócił odpowiedzi.");

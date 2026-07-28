@@ -32,9 +32,24 @@ if ($existing) {
 }
 
 New-Item -ItemType Directory -Path $InstallPath -Force | Out-Null
-Get-ChildItem -LiteralPath $source -File | Where-Object {
+Get-Process 'SirkAgent.Session' -ErrorAction SilentlyContinue |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+$packageFiles = Get-ChildItem -LiteralPath $source -File | Where-Object {
     $_.Name -notlike '*.zip' -and $_.Name -notlike 'TestBundle-*'
-} | Copy-Item -Destination $InstallPath -Force
+}
+foreach ($packageFile in $packageFiles) {
+    $destination = Join-Path $InstallPath $packageFile.Name
+    $copied = $false
+    for ($attempt = 1; $attempt -le 10 -and -not $copied; $attempt++) {
+        try {
+            Copy-Item -LiteralPath $packageFile.FullName -Destination $destination -Force
+            $copied = $true
+        } catch {
+            if ($attempt -eq 10) { throw }
+            Start-Sleep -Milliseconds 500
+        }
+    }
+}
 
 $sessionExe = Join-Path $InstallPath 'SirkAgent.Session.exe'
 if (Test-Path -LiteralPath $sessionExe) {

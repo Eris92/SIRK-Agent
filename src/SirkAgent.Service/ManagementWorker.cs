@@ -228,14 +228,38 @@ internal sealed class ManagementWorker : BackgroundService
     private async Task CheckInPortalAsync(ManagementPaths paths, TelemetryQueue queue, string deviceId,
         CancellationToken token)
     {
-        if (!File.Exists(paths.ManagementConfigPath))
+        ManagementConfig? config = null;
+        if (File.Exists(paths.ManagementConfigPath))
+            config = JsonSerializer.Deserialize<ManagementConfig>(
+                await File.ReadAllBytesAsync(paths.ManagementConfigPath, token), _json);
+
+        PortalCredential? credential = null;
+        try
+        {
+            credential = new PortalCredentialStore(paths.PortalCredentialPath,
+                new DpapiMachineStateProtector()).Load();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Protected Portal credential could not be loaded.");
             return;
-        var config = JsonSerializer.Deserialize<ManagementConfig>(
-            await File.ReadAllBytesAsync(paths.ManagementConfigPath, token), _json);
-        if (config is null || !config.PortalEnabled || string.IsNullOrWhiteSpace(config.PortalEndpoint) ||
-            string.IsNullOrWhiteSpace(config.DeviceToken))
+        }
+
+        if (credential is not null &&
+            (!string.Equals(credential.TenantId, TenantId, StringComparison.Ordinal) ||
+             !string.Equals(credential.DeviceId, deviceId, StringComparison.OrdinalIgnoreCase)))
+        {
+            _logger.LogWarning("Protected Portal credential does not match this device.");
             return;
-        if (!Uri.TryCreate(config.PortalEndpoint, UriKind.Absolute, out var endpoint) ||
+        }
+
+        var endpointValue = credential?.Endpoint ??
+                            (config?.PortalEnabled == true ? config.PortalEndpoint : null);
+        var tokenValue = credential?.DeviceToken ??
+                         (config?.PortalEnabled == true ? config.DeviceToken : null);
+        if (string.IsNullOrWhiteSpace(endpointValue) || string.IsNullOrWhiteSpace(tokenValue))
+            return;
+        if (!Uri.TryCreate(endpointValue, UriKind.Absolute, out var endpoint) ||
             endpoint.Scheme != Uri.UriSchemeHttps &&
             (endpoint.Scheme != Uri.UriSchemeHttp || !endpoint.IsLoopback))
         {
@@ -243,10 +267,10 @@ internal sealed class ManagementWorker : BackgroundService
             return;
         }
 
-        var items = queue.ReadReady(Math.Clamp(config.BatchSize, 1, 100), DateTimeOffset.UtcNow);
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(Math.Clamp(config.TimeoutSeconds, 5, 120)) };
+        var items = queue.ReadReady(Math.Clamp(config?.BatchSize ?? 25, 1, 100), DateTimeOffset.UtcNow);
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(Math.Clamp(config?.TimeoutSeconds ?? 30, 5, 120)) };
         client.DefaultRequestHeaders.Authorization =
-            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", config.DeviceToken);
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", tokenValue);
         var payload = new
         {
             protocolVersion = 1,
@@ -291,7 +315,8 @@ internal sealed class ManagementWorker : BackgroundService
                 "status" => new { ok = true, management = await ReadStateAsync(paths, token), heartbeat = ReadJson(paths.HeartbeatPath) },
                 "process" => await ProcessCommandAsync(paths, token),
                 "flush" => await FlushCommandAsync(paths, queue, token),
-                _ => new { ok = false, error = "Supported commands: status, process, flush." }
+                "sync" => await SyncCommandAsync(paths, queue, token),
+                _ => new { ok = false, error = "Supported commands: status, process, flush, sync." }
             };
             await writer.WriteLineAsync(JsonSerializer.Serialize(response, _json));
         }
@@ -308,6 +333,14 @@ internal sealed class ManagementWorker : BackgroundService
     {
         await FlushTelemetryAsync(paths, queue, token);
         return new { ok = true, queuedFiles = queue.SnapshotFiles().Count, queuedBytes = queue.TotalBytes() };
+    }
+
+    private async Task<object> SyncCommandAsync(ManagementPaths paths, TelemetryQueue queue, CancellationToken token)
+    {
+        var identity = new DeviceIdentityStore(paths.DeviceIdentityPath,
+            new DpapiMachineStateProtector()).LoadOrCreate(TenantId);
+        await CheckInPortalAsync(paths, queue, identity.DeviceId, token);
+        return new { ok = true, requestedAtUtc = DateTimeOffset.UtcNow };
     }
 
     private async Task<ManagementState> ReadStateAsync(ManagementPaths paths, CancellationToken token)
@@ -378,7 +411,7 @@ internal sealed record IntegrityManifestEntry(string Path, string Sha256);
 internal sealed record ManagementPaths(string Root, string InboxDirectory, string AcceptedDirectory,
     string RejectedDirectory, string RecoveryArchiveDirectory, string TrustedKeysPath,
     string ManagementConfigPath, string ManagementStatePath, string ActivePolicyPath,
-    string IntegrityManifestPath, string PolicyStatePath, string DeviceIdentityPath,
+    string IntegrityManifestPath, string PolicyStatePath, string DeviceIdentityPath, string PortalCredentialPath,
     string TelemetryQueueDirectory, string HeartbeatPath, string QuarantineProtectedPath,
     string QuarantineStatusPath, string TamperEventPath)
 {
@@ -390,7 +423,8 @@ internal sealed record ManagementPaths(string Root, string InboxDirectory, strin
             Path.Combine(root, "trusted-keys.json"), Path.Combine(root, "management.json"),
             Path.Combine(root, "management-state.json"), Path.Combine(root, "active-policy.json"),
             Path.Combine(AppContext.BaseDirectory, "integrity-manifest.json"), Path.Combine(root, "policy-state.bin"),
-            Path.Combine(root, "device-identity.bin"), Path.Combine(root, "TelemetryQueue"),
+            Path.Combine(root, "device-identity.bin"), Path.Combine(root, "portal-credential.bin"),
+            Path.Combine(root, "TelemetryQueue"),
             Path.Combine(root, "heartbeat-latest.json"), Path.Combine(root, "quarantine-state.bin"),
             Path.Combine(root, "quarantine-status.json"), Path.Combine(root, "tamper-event-latest.json"));
     }

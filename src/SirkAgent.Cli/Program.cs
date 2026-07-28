@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -8,6 +9,69 @@ const string pipeName = "SIRK-Agent-Control";
 var command = args.FirstOrDefault()?.Trim().ToLowerInvariant() ?? "status";
 var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
 var agentRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SIRK", "Agent");
+
+if (command == "enroll")
+{
+    var endpointValue = GetOption(args, "--endpoint");
+    var tokenFile = GetOption(args, "--bootstrap-token-file");
+    if (!Uri.TryCreate(endpointValue, UriKind.Absolute, out var endpoint) ||
+        endpoint.Scheme != Uri.UriSchemeHttps &&
+        (endpoint.Scheme != Uri.UriSchemeHttp || !endpoint.IsLoopback))
+        throw new ArgumentException("Enrollment endpoint must use HTTPS (HTTP is allowed only for loopback testing).");
+    if (string.IsNullOrWhiteSpace(tokenFile) || !File.Exists(tokenFile))
+        throw new FileNotFoundException("Bootstrap token file was not found.", tokenFile);
+
+    var heartbeatPath = Path.Combine(agentRoot, "heartbeat-latest.json");
+    using var heartbeat = JsonDocument.Parse(await File.ReadAllBytesAsync(heartbeatPath));
+    var tenantId = heartbeat.RootElement.GetProperty("tenantId").GetString()
+                   ?? throw new InvalidDataException("Heartbeat tenantId is empty.");
+    var deviceId = heartbeat.RootElement.GetProperty("deviceId").GetString()
+                   ?? throw new InvalidDataException("Heartbeat deviceId is empty.");
+    var bootstrapToken = (await File.ReadAllTextAsync(tokenFile)).Trim();
+    if (string.IsNullOrWhiteSpace(bootstrapToken))
+        throw new InvalidDataException("Bootstrap token file is empty.");
+
+    using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+    client.DefaultRequestHeaders.Authorization =
+        new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", bootstrapToken);
+    using var response = await client.PostAsJsonAsync(endpoint, new
+    {
+        protocolVersion = 1,
+        tenantId,
+        deviceId,
+        machineName = Environment.MachineName
+    });
+    var body = await response.Content.ReadAsStringAsync();
+    response.EnsureSuccessStatusCode();
+    var enrollment = JsonSerializer.Deserialize<EnrollmentResponse>(body,
+        new JsonSerializerOptions(JsonSerializerDefaults.Web))
+        ?? throw new InvalidDataException("Enrollment response is invalid.");
+    if (!enrollment.Ok || string.IsNullOrWhiteSpace(enrollment.DeviceToken) ||
+        !string.Equals(enrollment.TenantId, tenantId, StringComparison.Ordinal) ||
+        !string.Equals(enrollment.DeviceId, deviceId, StringComparison.OrdinalIgnoreCase))
+        throw new InvalidDataException("Enrollment response does not match this device.");
+
+    var checkInEndpoint = string.IsNullOrWhiteSpace(enrollment.CheckInEndpoint)
+        ? new Uri(endpoint, "/api/agent/v1/checkin")
+        : new Uri(endpoint, enrollment.CheckInEndpoint);
+    if (checkInEndpoint.Scheme != Uri.UriSchemeHttps &&
+        (checkInEndpoint.Scheme != Uri.UriSchemeHttp || !checkInEndpoint.IsLoopback))
+        throw new InvalidDataException("Enrollment returned an unsafe check-in endpoint.");
+    new PortalCredentialStore(Path.Combine(agentRoot, "portal-credential.bin"),
+        new DpapiMachineStateProtector()).Save(new PortalCredential(
+        1, tenantId, deviceId, checkInEndpoint.AbsoluteUri,
+        enrollment.DeviceToken, enrollment.EnrolledAtUtc ?? DateTimeOffset.UtcNow));
+    Console.WriteLine(JsonSerializer.Serialize(new
+    {
+        ok = true,
+        tenantId,
+        deviceId,
+        endpoint = checkInEndpoint.AbsoluteUri,
+        enrolledAtUtc = enrollment.EnrolledAtUtc,
+        credentialProtected = true
+    }, jsonOptions));
+    return;
+}
 
 if (command == "verify-integrity")
 {
@@ -140,7 +204,7 @@ if (command == "queue-clear-test")
     return;
 }
 
-if (command is "process" or "flush")
+if (command is "process" or "flush" or "sync")
 {
     try
     {
@@ -222,7 +286,7 @@ if (command is "create-test-policy" or "create-test-recovery")
     return;
 }
 
-Console.Error.WriteLine("Usage: sirkctl status|process|flush|queue-status|queue-clear-test --confirm-test-clear|verify-integrity|create-test-policy|create-test-recovery");
+Console.Error.WriteLine("Usage: sirkctl enroll --endpoint <url> --bootstrap-token-file <path>|status|process|flush|sync|queue-status|queue-clear-test --confirm-test-clear|verify-integrity|create-test-policy|create-test-recovery");
 Environment.ExitCode = 2;
 
 static JsonElement? ReadJsonFile(string path)
@@ -331,5 +395,13 @@ static async Task<string> RunControlFileFallbackAsync(string command)
 
 static string Base64Url(byte[] value) => Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
+static string? GetOption(string[] values, string name)
+{
+    var index = Array.FindIndex(values, value => string.Equals(value, name, StringComparison.OrdinalIgnoreCase));
+    return index >= 0 && index + 1 < values.Length ? values[index + 1] : null;
+}
+
 sealed record IntegrityManifest(IReadOnlyList<IntegrityManifestEntry> Files);
 sealed record IntegrityManifestEntry(string Path, string Sha256);
+sealed record EnrollmentResponse(bool Ok, string TenantId, string DeviceId, string DeviceToken,
+    string? CheckInEndpoint, DateTimeOffset? EnrolledAtUtc);

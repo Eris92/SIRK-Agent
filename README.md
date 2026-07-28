@@ -64,6 +64,7 @@ Dzialajace elementy:
 - runtime health: CPU, RAM, uptime, heartbeat i rotacja logow,
 - Endurance Worker z probkami, podsumowaniem JSON i raportem HTML.
 - uwierzytelniony check-in do SIRK Portal z heartbeat, runtime health i telemetria,
+- rejestracja per-device z tokenem bootstrap odczytywanym z pliku i poświadczeniem chronionym DPAPI LocalMachine,
 - zabezpieczony ACL katalogu danych: zapis tylko dla SYSTEM i Administratorow.
 
 ## Najwazniejsze polecenia
@@ -82,6 +83,23 @@ Status:
 .\sirkctl.exe queue-status
 .\sirkctl.exe verify-integrity
 ```
+
+Rejestracja urządzenia w SIRK Portal (PowerShell uruchomiony jako Administrator):
+
+```powershell
+$TokenFile = 'C:\Temp\sirk-enrollment-token.txt'
+Set-Content -LiteralPath $TokenFile -Value '<TOKEN_BOOTSTRAP_Z_PORTALU>' -Encoding UTF8
+& 'C:\Program Files\SIRK Agent\sirkctl.exe' enroll `
+  --endpoint 'https://portal.example/api/agent/v1/enroll' `
+  --bootstrap-token-file $TokenFile
+& 'C:\Program Files\SIRK Agent\sirkctl.exe' sync
+Remove-Item -LiteralPath $TokenFile -Force
+```
+
+Agent zapisuje wydany token urządzenia wyłącznie w
+`C:\ProgramData\SIRK\Agent\portal-credential.bin`, chronionym przez DPAPI
+LocalMachine i ACL katalogu danych. Portal przechowuje tylko hash SHA-256 tokenu.
+HTTP jest akceptowany wyłącznie dla testów na adresie loopback.
 
 Test podpisanej polityki:
 

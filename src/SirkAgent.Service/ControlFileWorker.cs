@@ -39,6 +39,7 @@ internal sealed class ControlFileWorker : BackgroundService
                             },
                             "process" => new { ok = true, requestId = request.RequestId, accepted = true, note = "Inbox will be processed within 15 seconds." },
                             "flush" => new { ok = true, requestId = request.RequestId, accepted = true, note = "Telemetry flush will run within 15 seconds." },
+                            "sync" => new { ok = true, requestId = request.RequestId, accepted = true, note = "Portal sync will run within 15 seconds." },
                             _ => new { ok = false, requestId = request.RequestId, error = "Unsupported command." }
                         };
                         await File.WriteAllTextAsync(responsePath, JsonSerializer.Serialize(payload, _json), stoppingToken);

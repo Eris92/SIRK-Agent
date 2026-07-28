@@ -77,6 +77,11 @@ SIRK Agent jest niezaleznym agentem Windows dla platformy SIRK. Laczy bezpieczne
 
 CLI `sirkctl.exe` obsluguje:
 
+- `enroll --endpoint <url> --bootstrap-token-file <path>` — jednorazowa rejestracja
+  urządzenia, zapis tokenu per-device przez DPAPI LocalMachine,
+- `sync` — żądanie check-in do SIRK Portal (przez fallback plikowy wykonanie
+  następuje w cyklu do 15 sekund),
+
 ```text
 status
 process

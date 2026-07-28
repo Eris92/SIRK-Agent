@@ -1,0 +1,1 @@
+Temporary CI trigger for building the SIRK Agent 1.0.0 installation artifact from main commit 6b8ef86d7012389aba7a33f3be0e10ee1481aab3.

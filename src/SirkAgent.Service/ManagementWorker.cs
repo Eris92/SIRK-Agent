@@ -38,12 +38,14 @@ internal sealed class ManagementWorker : BackgroundService
             await ProcessInboxAsync(paths, identity.DeviceId, stoppingToken);
             await ValidateIntegrityAsync(paths, stoppingToken);
             await FlushTelemetryAsync(paths, queue, stoppingToken);
+            await CheckInPortalAsync(paths, queue, identity.DeviceId, stoppingToken);
 
             while (await timer.WaitForNextTickAsync(stoppingToken))
             {
                 await ProcessInboxAsync(paths, identity.DeviceId, stoppingToken);
                 await ValidateIntegrityAsync(paths, stoppingToken);
                 await FlushTelemetryAsync(paths, queue, stoppingToken);
+                await CheckInPortalAsync(paths, queue, identity.DeviceId, stoppingToken);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -223,6 +225,57 @@ internal sealed class ManagementWorker : BackgroundService
         }
     }
 
+    private async Task CheckInPortalAsync(ManagementPaths paths, TelemetryQueue queue, string deviceId,
+        CancellationToken token)
+    {
+        if (!File.Exists(paths.ManagementConfigPath))
+            return;
+        var config = JsonSerializer.Deserialize<ManagementConfig>(
+            await File.ReadAllBytesAsync(paths.ManagementConfigPath, token), _json);
+        if (config is null || !config.PortalEnabled || string.IsNullOrWhiteSpace(config.PortalEndpoint) ||
+            string.IsNullOrWhiteSpace(config.DeviceToken))
+            return;
+        if (!Uri.TryCreate(config.PortalEndpoint, UriKind.Absolute, out var endpoint) ||
+            endpoint.Scheme != Uri.UriSchemeHttps &&
+            (endpoint.Scheme != Uri.UriSchemeHttp || !endpoint.IsLoopback))
+        {
+            _logger.LogWarning("Portal check-in endpoint is invalid.");
+            return;
+        }
+
+        var items = queue.ReadReady(Math.Clamp(config.BatchSize, 1, 100), DateTimeOffset.UtcNow);
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(Math.Clamp(config.TimeoutSeconds, 5, 120)) };
+        client.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", config.DeviceToken);
+        var payload = new
+        {
+            protocolVersion = 1,
+            tenantId = TenantId,
+            deviceId,
+            machineName = Environment.MachineName,
+            agentVersion = typeof(ManagementWorker).Assembly
+                .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+                .OfType<System.Reflection.AssemblyInformationalVersionAttribute>()
+                .FirstOrDefault()?.InformationalVersion ?? typeof(ManagementWorker).Assembly.GetName().Version?.ToString(),
+            heartbeat = ReadJson(paths.HeartbeatPath),
+            management = ReadJson(paths.ManagementStatePath),
+            runtimeHealth = ReadJson(Path.Combine(paths.Root, "runtime-health.json")),
+            events = items.Select(x => x.Envelope).ToArray()
+        };
+
+        try
+        {
+            using var response = await client.PostAsJsonAsync(endpoint, payload, _json, token);
+            response.EnsureSuccessStatusCode();
+            foreach (var item in items)
+                queue.Complete(item);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Portal check-in failed.");
+        }
+    }
+
     private async Task RunPipeServerAsync(ManagementPaths paths, TelemetryQueue queue, CancellationToken token)
     {
         while (!token.IsCancellationRequested)
@@ -317,7 +370,8 @@ internal sealed record ManagementState(DateTimeOffset TimestampUtc, string Statu
     bool IntegrityVerified, string? IntegrityCode);
 
 internal sealed record ManagementConfig(bool Enabled, string? TelemetryEndpoint, string? BearerToken,
-    int BatchSize = 25, int TimeoutSeconds = 30);
+    int BatchSize = 25, int TimeoutSeconds = 30, bool PortalEnabled = false,
+    string? PortalEndpoint = null, string? DeviceToken = null);
 internal sealed record IntegrityManifest(IReadOnlyList<IntegrityManifestEntry> Files);
 internal sealed record IntegrityManifestEntry(string Path, string Sha256);
 

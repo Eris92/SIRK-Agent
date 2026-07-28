@@ -1,0 +1,32 @@
+name: SIRK Agent Compile Diagnostic
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - '.github/workflows/compile-diagnostic.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile-diagnostic:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Capture build output
+        shell: pwsh
+        run: |
+          New-Item artifacts -ItemType Directory -Force | Out-Null
+          dotnet build src/SirkAgent.Service/SirkAgent.Service.csproj -c Release *>&1 | Tee-Object artifacts/build.log
+          "exitCode=$LASTEXITCODE" | Add-Content artifacts/build.log
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: compile-diagnostic
+          path: artifacts/build.log
+          if-no-files-found: error

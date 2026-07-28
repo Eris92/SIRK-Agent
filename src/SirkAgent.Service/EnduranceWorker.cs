@@ -77,8 +77,15 @@ internal sealed class EnduranceWorker : BackgroundService
         var deviceId = ReadString(heartbeat, "deviceId");
         var overallHealth = ReadString(security, "overallHealth");
         var securityState = ReadNestedString(security, "security", "state");
+        var heartbeatFresh = ReadBool(runtime, "heartbeatFresh");
         if (runtime is null || heartbeat is null || security is null || string.IsNullOrWhiteSpace(deviceId) ||
             string.IsNullOrWhiteSpace(overallHealth) || string.IsNullOrWhiteSpace(securityState))
+            return null;
+
+        var processAge = DateTimeOffset.UtcNow - process.StartTime.ToUniversalTime();
+        if (processAge < TimeSpan.FromSeconds(30) &&
+            (!heartbeatFresh || !string.Equals(overallHealth, "Healthy", StringComparison.OrdinalIgnoreCase) ||
+             !string.Equals(securityState, "Operational", StringComparison.OrdinalIgnoreCase)))
             return null;
 
         var queue = DirectorySize(Path.Combine(root, "TelemetryQueue"), "*.bin");
@@ -92,7 +99,7 @@ internal sealed class EnduranceWorker : BackgroundService
             process.PrivateMemorySize64,
             GC.GetTotalMemory(false),
             ReadDouble(runtime, "cpuPercent"),
-            ReadBool(runtime, "heartbeatFresh"),
+            heartbeatFresh,
             overallHealth,
             securityState,
             deviceId,

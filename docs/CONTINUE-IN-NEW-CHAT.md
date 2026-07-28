@@ -81,6 +81,8 @@ CLI `sirkctl.exe` obsluguje:
   urządzenia, zapis tokenu per-device przez DPAPI LocalMachine,
 - `sync` — żądanie check-in do SIRK Portal (przez fallback plikowy wykonanie
   następuje w cyklu do 15 sekund),
+- check-in pobiera maksymalnie 20 polityk z kolejki tenant/device; pliki trafiają
+  do `Incoming`, a ich podpis ES256 i anti-replay sprawdza istniejący Policy Engine,
 
 ```text
 status

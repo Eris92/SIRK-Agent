@@ -284,6 +284,7 @@ internal sealed class ManagementWorker : BackgroundService
             heartbeat = ReadJson(paths.HeartbeatPath),
             management = ReadJson(paths.ManagementStatePath),
             runtimeHealth = ReadJson(Path.Combine(paths.Root, "runtime-health.json")),
+            acknowledgedPolicyIds = ReadAcknowledgedPolicyIds(paths.ActivePolicyPath),
             events = items.Select(x => x.Envelope).ToArray()
         };
 
@@ -291,6 +292,12 @@ internal sealed class ManagementWorker : BackgroundService
         {
             using var response = await client.PostAsJsonAsync(endpoint, payload, _json, token);
             response.EnsureSuccessStatusCode();
+            var portalResponse = await response.Content.ReadFromJsonAsync<PortalCheckInResponse>(_json, token)
+                                 ?? throw new InvalidDataException("Portal check-in response is empty.");
+            if (!portalResponse.Ok)
+                throw new InvalidDataException("Portal rejected the check-in.");
+            new PortalPolicyDeliveryStore(paths.InboxDirectory, _json)
+                .Store(TenantId, deviceId, portalResponse.Policies);
             foreach (var item in items)
                 queue.Complete(item);
         }
@@ -364,6 +371,17 @@ internal sealed class ManagementWorker : BackgroundService
         return doc.RootElement.Clone();
     }
 
+    private static string[] ReadAcknowledgedPolicyIds(string activePolicyPath)
+    {
+        var active = ReadJson(activePolicyPath);
+        if (active is not { ValueKind: JsonValueKind.Object } ||
+            !active.Value.TryGetProperty("policyId", out var policyId) ||
+            policyId.ValueKind != JsonValueKind.String ||
+            string.IsNullOrWhiteSpace(policyId.GetString()))
+            return [];
+        return [policyId.GetString()!];
+    }
+
     private static bool TryGetSetting(PolicyEnvelope envelope, string name, out string? value)
     {
         value = null;
@@ -407,6 +425,7 @@ internal sealed record ManagementConfig(bool Enabled, string? TelemetryEndpoint,
     string? PortalEndpoint = null, string? DeviceToken = null);
 internal sealed record IntegrityManifest(IReadOnlyList<IntegrityManifestEntry> Files);
 internal sealed record IntegrityManifestEntry(string Path, string Sha256);
+internal sealed record PortalCheckInResponse(bool Ok, IReadOnlyList<JsonElement>? Policies);
 
 internal sealed record ManagementPaths(string Root, string InboxDirectory, string AcceptedDirectory,
     string RejectedDirectory, string RecoveryArchiveDirectory, string TrustedKeysPath,

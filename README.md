@@ -65,6 +65,7 @@ Dzialajace elementy:
 - Endurance Worker z probkami, podsumowaniem JSON i raportem HTML.
 - uwierzytelniony check-in do SIRK Portal z heartbeat, runtime health i telemetria,
 - rejestracja per-device z tokenem bootstrap odczytywanym z pliku i poświadczeniem chronionym DPAPI LocalMachine,
+- pobieranie kolejek podpisanych polityk dla konkretnego tenant/device oraz potwierdzenie po aktywacji,
 - zabezpieczony ACL katalogu danych: zapis tylko dla SYSTEM i Administratorow.
 
 ## Najwazniejsze polecenia

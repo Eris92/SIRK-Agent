@@ -1,6 +1,8 @@
 using System.IO.Pipes;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Hosting;
@@ -311,9 +313,14 @@ internal sealed class ManagementWorker : BackgroundService
     {
         while (!token.IsCancellationRequested)
         {
-            await using var pipe = new NamedPipeServerStream(PipeName, PipeDirection.InOut, 1,
-                PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+            await using var pipe = CreateControlPipe();
             await pipe.WaitForConnectionAsync(token);
+            if (!IsAuthorizedPipeClient(pipe))
+            {
+                _logger.LogWarning("Rejected an unauthorized local control pipe client.");
+                pipe.Disconnect();
+                continue;
+            }
             using var reader = new StreamReader(pipe, Encoding.UTF8, false, 4096, leaveOpen: true);
             await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, leaveOpen: true) { AutoFlush = true };
             var command = (await reader.ReadLineAsync(token))?.Trim().ToLowerInvariant();
@@ -340,6 +347,32 @@ internal sealed class ManagementWorker : BackgroundService
     {
         await FlushTelemetryAsync(paths, queue, token);
         return new { ok = true, queuedFiles = queue.SnapshotFiles().Count, queuedBytes = queue.TotalBytes() };
+    }
+
+    private static NamedPipeServerStream CreateControlPipe()
+    {
+        var security = new PipeSecurity();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.AddAccessRule(new PipeAccessRule(
+            new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+            PipeAccessRights.FullControl, AccessControlType.Allow));
+        security.AddAccessRule(new PipeAccessRule(
+            new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null),
+            PipeAccessRights.FullControl, AccessControlType.Allow));
+        return NamedPipeServerStreamAcl.Create(PipeName, PipeDirection.InOut, 1,
+            PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 4096, 4096, security);
+    }
+
+    private static bool IsAuthorizedPipeClient(NamedPipeServerStream pipe)
+    {
+        var authorized = false;
+        pipe.RunAsClient(() =>
+        {
+            using var identity = WindowsIdentity.GetCurrent(TokenAccessLevels.Query);
+            authorized = identity.User?.IsWellKnown(WellKnownSidType.LocalSystemSid) == true ||
+                         new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+        });
+        return authorized;
     }
 
     private async Task<object> SyncCommandAsync(ManagementPaths paths, TelemetryQueue queue, CancellationToken token)

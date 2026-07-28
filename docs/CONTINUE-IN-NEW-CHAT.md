@@ -83,6 +83,8 @@ CLI `sirkctl.exe` obsluguje:
   następuje w cyklu do 15 sekund),
 - check-in pobiera maksymalnie 20 polityk z kolejki tenant/device; pliki trafiają
   do `Incoming`, a ich podpis ES256 i anti-replay sprawdza istniejący Policy Engine,
+- Named Pipe `SIRK-Agent-Control` ma chroniony DACL (LocalSystem i Administratorzy),
+  a serwer dodatkowo weryfikuje impersonowany SID klienta przed wykonaniem komendy,
 
 ```text
 status

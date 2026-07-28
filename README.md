@@ -66,6 +66,7 @@ Dzialajace elementy:
 - uwierzytelniony check-in do SIRK Portal z heartbeat, runtime health i telemetria,
 - rejestracja per-device z tokenem bootstrap odczytywanym z pliku i poświadczeniem chronionym DPAPI LocalMachine,
 - pobieranie kolejek podpisanych polityk dla konkretnego tenant/device oraz potwierdzenie po aktywacji,
+- lokalny control pipe z ACL tylko dla LocalSystem i grupy Administratorzy oraz weryfikacją SID klienta,
 - zabezpieczony ACL katalogu danych: zapis tylko dla SYSTEM i Administratorow.
 
 ## Najwazniejsze polecenia

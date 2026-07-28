@@ -5,7 +5,14 @@ using SirkAgent.Policy;
 const string tenantId = "investa";
 var deviceId = Environment.MachineName;
 var now = DateTimeOffset.UtcNow;
-var statePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SIRK", "Agent", "policy-state.bin");
+var testDirectory = Path.Combine(Path.GetTempPath(), "SIRK-Agent-PolicyHarness", Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(testDirectory);
+AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+{
+    try { if (Directory.Exists(testDirectory)) Directory.Delete(testDirectory, recursive: true); }
+    catch { }
+};
+var statePath = Path.Combine(testDirectory, "policy-state.bin");
 
 Console.WriteLine("SIRK Agent Policy Test Harness");
 Console.WriteLine($"Device: {deviceId}");
@@ -24,6 +31,13 @@ var policy = new PolicyEnvelope
     DeviceId = deviceId,
     PolicyId = Guid.NewGuid().ToString("D"),
     CaseId = "TEST-" + now.ToString("yyyyMMdd-HHmmss"),
+    Authorization = new PolicyAuthorization
+    {
+        ReasonCode = "CI-VALIDATION",
+        ApprovedBy = ["ci-security", "ci-legal"],
+        TargetSessionId = 1,
+        RetentionDays = 1
+    },
     Version = current.Version + 1,
     Epoch = Math.Max(1, current.Epoch),
     NotBeforeUtc = now.AddMinutes(-1),

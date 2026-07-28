@@ -25,9 +25,11 @@ jobs:
           dotnet publish src/SirkAgent.Service/SirkAgent.Service.csproj -c Release -r win-x64 --self-contained false -o artifacts/runtime
           dotnet publish src/SirkAgent.Cli/SirkAgent.Cli.csproj -c Release -r win-x64 --self-contained false -o artifacts/runtime
           dotnet publish src/SirkAgent.Session/SirkAgent.Session.csproj -c Release -r win-x64 --self-contained false -o artifacts/runtime
+          dotnet publish src/SirkAgent.BrowserHost/SirkAgent.BrowserHost.csproj -c Release -r win-x64 --self-contained false -o artifacts/runtime
           Copy-Item tools/package/*.ps1 artifacts/runtime/ -Force
+          Copy-Item browser-extension artifacts/runtime/BrowserExtension -Recurse -Force
           $runtime = Resolve-Path artifacts/runtime
-          $protected = @('SirkAgent.Service.exe','SirkAgent.Service.dll','SirkAgent.Policy.dll','sirkctl.exe','SirkAgent.Session.exe','SirkAgent.Session.dll')
+          $protected = @('SirkAgent.Service.exe','SirkAgent.Service.dll','SirkAgent.Policy.dll','sirkctl.exe','SirkAgent.Session.exe','SirkAgent.Session.dll','SirkAgent.BrowserHost.exe','SirkAgent.BrowserHost.dll')
           $files = foreach ($name in $protected) {
             $path = Join-Path $runtime $name
             @{ path = $name; sha256 = (Get-FileHash $path -Algorithm SHA256).Hash }

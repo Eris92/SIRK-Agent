@@ -12,6 +12,13 @@ Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' 
     -Name 'SIRKAgentSession' -ErrorAction SilentlyContinue
 Get-Process 'SirkAgent.Session' -ErrorAction SilentlyContinue |
     Stop-Process -Force -ErrorAction SilentlyContinue
+
+foreach ($key in @(
+    'HKLM:\SOFTWARE\Google\Chrome\NativeMessagingHosts\pl.sirk.agent.browser',
+    'HKLM:\SOFTWARE\Microsoft\Edge\NativeMessagingHosts\pl.sirk.agent.browser'
+)) {
+    Remove-Item -LiteralPath $key -Recurse -Force -ErrorAction SilentlyContinue
+}
 $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($service) {
     if ($service.Status -ne 'Stopped') {

@@ -51,6 +51,21 @@ foreach ($packageFile in $packageFiles) {
     }
 }
 
+$extensionSource = Join-Path $source 'BrowserExtension'
+$extensionTarget = Join-Path $InstallPath 'BrowserExtension'
+if (Test-Path -LiteralPath $extensionSource) {
+    if (Test-Path -LiteralPath $extensionTarget) {
+        Remove-Item -LiteralPath $extensionTarget -Recurse -Force
+    }
+    Copy-Item -LiteralPath $extensionSource -Destination $extensionTarget -Recurse -Force
+}
+
+$browserInstaller = Join-Path $InstallPath 'Install-SirkBrowserBridge.ps1'
+if ((Test-Path -LiteralPath (Join-Path $InstallPath 'SirkAgent.BrowserHost.exe')) -and
+    (Test-Path -LiteralPath $browserInstaller)) {
+    & $browserInstaller -InstallPath $InstallPath
+}
+
 $sessionExe = Join-Path $InstallPath 'SirkAgent.Session.exe'
 if (Test-Path -LiteralPath $sessionExe) {
     $runKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'

@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "SIRK Browser Bridge",
+  "version": "1.0.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA58HWrmwct8Bt3o4mjfQdvpolwjK+tGNhDBI9IA145BrQOYBW8mQmHrZS2LghOtryan2+b0V4Iz9xzYxzxQPmqSi4IhsZynwoJjEyJhZHhUsYe25s7wLkGv1JV1/XxNh1Ie3BUExlfsX9ljr8nqeKTiRHd0D18PAM+NdECtRPZGsamOtzgvHzT15MBDsVTFMCQ+5IoL0vqyMibi1zFPP9Htz0mq8Tm99p5MIxbGHgU+qY4H3AV47mCsFWtplCKA7T0w5RC0CtV7ClQkrdJwnqW6zrExaG1psMHclhbL0bLHLBfJ8PrqPYKQR6j8ju/XbsuuQIH+1VcOj9TFQj3L+g7QIDAQAB",
+  "description": "Policy-controlled browser activity bridge for SIRK Agent.",
+  "permissions": ["tabs", "downloads", "nativeMessaging", "webNavigation", "webRequest"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "background": { "service_worker": "service-worker.js" },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ]
+}

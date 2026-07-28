@@ -74,6 +74,8 @@ Dzialajace elementy:
   Firewall, BitLocker, Secure Boot i TPM.
 - politykowane Activity Collectors: procesy, aktywne okno, idle, metadane
   schowka, USB, drukowanie i ograniczone metadane plików;
+- Browser Bridge dla Edge/Chrome z allowlistą domen, SID aktywnej sesji,
+  telemetrią kart, download, upload i drag-and-drop;
 
 ## Najwazniejsze polecenia
 
@@ -230,6 +232,7 @@ schemas/
 - [Evidence Engine](docs/EVIDENCE-ENGINE.md)
 - [Management Plane Health](docs/MANAGEMENT-PLANE-HEALTH.md)
 - [Activity Collectors](docs/ACTIVITY-COLLECTORS.md)
+- [Browser Bridge](docs/BROWSER-BRIDGE.md)
 
 ## Polecenie do wznowienia w nowym oknie
 

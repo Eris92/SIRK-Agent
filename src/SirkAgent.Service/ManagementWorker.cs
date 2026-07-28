@@ -302,8 +302,8 @@ internal sealed class ManagementWorker : BackgroundService
                 new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
             request.Headers.Authorization =
                 new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", tokenValue);
-            if (!string.IsNullOrWhiteSpace(credential?.PrivateKeyPkcs8))
-                SignPortalRequest(request, payloadBytes, credential.PrivateKeyPkcs8);
+            if (credential is not null)
+                SignPortalRequest(request, payloadBytes, credential);
             using var response = await client.SendAsync(request, token);
             response.EnsureSuccessStatusCode();
             var portalResponse = await response.Content.ReadFromJsonAsync<PortalCheckInResponse>(_json, token)
@@ -370,7 +370,7 @@ internal sealed class ManagementWorker : BackgroundService
             File.Delete(file);
     }
 
-    private static void SignPortalRequest(HttpRequestMessage request, byte[] payload, string privateKeyPkcs8)
+    private static void SignPortalRequest(HttpRequestMessage request, byte[] payload, PortalCredential credential)
     {
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(
             System.Globalization.CultureInfo.InvariantCulture);
@@ -379,10 +379,22 @@ internal sealed class ManagementWorker : BackgroundService
         var signed = new byte[prefix.Length + payload.Length];
         Buffer.BlockCopy(prefix, 0, signed, 0, prefix.Length);
         Buffer.BlockCopy(payload, 0, signed, prefix.Length, payload.Length);
-        using var key = ECDsa.Create();
-        key.ImportPkcs8PrivateKey(Convert.FromBase64String(privateKeyPkcs8), out _);
-        var signature = key.SignData(signed, HashAlgorithmName.SHA256,
-            DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
+        byte[] signature;
+        if (!string.IsNullOrWhiteSpace(credential.KeyName))
+        {
+            signature = DeviceSigningKey.Sign(credential.KeyName, signed);
+        }
+        else if (!string.IsNullOrWhiteSpace(credential.PrivateKeyPkcs8))
+        {
+            using var key = ECDsa.Create();
+            key.ImportPkcs8PrivateKey(Convert.FromBase64String(credential.PrivateKeyPkcs8), out _);
+            signature = key.SignData(signed, HashAlgorithmName.SHA256,
+                DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
+        }
+        else
+        {
+            throw new InvalidDataException("Portal credential does not contain a device signing key.");
+        }
         request.Headers.Add("X-SIRK-Timestamp", timestamp);
         request.Headers.Add("X-SIRK-Nonce", nonce);
         request.Headers.Add("X-SIRK-Signature", Convert.ToBase64String(signature));

@@ -9,7 +9,8 @@ public sealed record PortalCredential(
     string Endpoint,
     string DeviceToken,
     DateTimeOffset EnrolledAtUtc,
-    string? PrivateKeyPkcs8 = null);
+    string? PrivateKeyPkcs8 = null,
+    string? KeyName = null);
 
 public sealed class PortalCredentialStore
 {
@@ -32,10 +33,11 @@ public sealed class PortalCredentialStore
             var plaintext = _protector.Unprotect(File.ReadAllBytes(_path));
             var value = JsonSerializer.Deserialize<PortalCredential>(plaintext, JsonOptions)
                         ?? throw new InvalidDataException("Portal credential is invalid.");
-            if (value.SchemaVersion is not (1 or 2) || string.IsNullOrWhiteSpace(value.TenantId) ||
+            if (value.SchemaVersion is < 1 or > 3 || string.IsNullOrWhiteSpace(value.TenantId) ||
                 string.IsNullOrWhiteSpace(value.DeviceId) || string.IsNullOrWhiteSpace(value.Endpoint) ||
                 string.IsNullOrWhiteSpace(value.DeviceToken) ||
-                value.SchemaVersion == 2 && string.IsNullOrWhiteSpace(value.PrivateKeyPkcs8))
+                value.SchemaVersion == 2 && string.IsNullOrWhiteSpace(value.PrivateKeyPkcs8) ||
+                value.SchemaVersion == 3 && string.IsNullOrWhiteSpace(value.KeyName))
                 throw new InvalidDataException("Portal credential fields are invalid.");
             return value;
         }

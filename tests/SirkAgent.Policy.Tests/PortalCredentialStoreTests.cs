@@ -24,6 +24,17 @@ public sealed class PortalCredentialStoreTests : IDisposable
         Assert.DoesNotContain("private-key-material", File.ReadAllText(path), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void SchemaThreeRequiresKeyName()
+    {
+        var path = Path.Combine(_root, "portal-credential.bin");
+        var store = new PortalCredentialStore(path, new TestProtector());
+        store.Save(new PortalCredential(3, "investa", "device",
+            "https://portal.example/api/agent/v1/checkin", "token", DateTimeOffset.UtcNow));
+
+        Assert.Throws<InvalidDataException>(() => store.Load());
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);

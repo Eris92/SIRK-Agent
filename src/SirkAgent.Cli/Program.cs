@@ -138,22 +138,36 @@ if (command == "enroll")
     using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
     client.DefaultRequestHeaders.Authorization =
         new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", bootstrapToken);
-    using var deviceKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
-    var privateKeyPkcs8 = Convert.ToBase64String(deviceKey.ExportPkcs8PrivateKey());
-    var publicKeySpki = Convert.ToBase64String(deviceKey.ExportSubjectPublicKeyInfo());
-    using var response = await client.PostAsJsonAsync(endpoint, new
+    var credentialPath = Path.Combine(agentRoot, "portal-credential.bin");
+    if (File.Exists(credentialPath))
+        throw new InvalidOperationException("This device is already enrolled. Existing credentials were preserved.");
+    var keyName = DeviceSigningKey.NameFor(tenantId, deviceId);
+    if (DeviceSigningKey.Exists(keyName))
+        throw new InvalidOperationException("A device signing key already exists. Existing key was preserved.");
+    EnrollmentResponse enrollment;
+    try
     {
-        protocolVersion = 1,
-        tenantId,
-        deviceId,
-        machineName = Environment.MachineName,
-        publicKeySpki
-    });
-    var body = await response.Content.ReadAsStringAsync();
-    response.EnsureSuccessStatusCode();
-    var enrollment = JsonSerializer.Deserialize<EnrollmentResponse>(body,
-        new JsonSerializerOptions(JsonSerializerDefaults.Web))
-        ?? throw new InvalidDataException("Enrollment response is invalid.");
+        var publicKeySpki = Convert.ToBase64String(DeviceSigningKey.Create(keyName));
+        using var response = await client.PostAsJsonAsync(endpoint, new
+        {
+            protocolVersion = 1,
+            tenantId,
+            deviceId,
+            machineName = Environment.MachineName,
+            publicKeySpki
+        });
+        var body = await response.Content.ReadAsStringAsync();
+        response.EnsureSuccessStatusCode();
+        enrollment = JsonSerializer.Deserialize<EnrollmentResponse>(body,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))
+            ?? throw new InvalidDataException("Enrollment response is invalid.");
+    }
+    catch
+    {
+        if (DeviceSigningKey.Exists(keyName))
+            DeviceSigningKey.Delete(keyName);
+        throw;
+    }
     if (!enrollment.Ok || string.IsNullOrWhiteSpace(enrollment.DeviceToken) ||
         !string.Equals(enrollment.TenantId, tenantId, StringComparison.Ordinal) ||
         !string.Equals(enrollment.DeviceId, deviceId, StringComparison.OrdinalIgnoreCase))
@@ -165,10 +179,10 @@ if (command == "enroll")
     if (checkInEndpoint.Scheme != Uri.UriSchemeHttps &&
         (checkInEndpoint.Scheme != Uri.UriSchemeHttp || !checkInEndpoint.IsLoopback))
         throw new InvalidDataException("Enrollment returned an unsafe check-in endpoint.");
-    new PortalCredentialStore(Path.Combine(agentRoot, "portal-credential.bin"),
+    new PortalCredentialStore(credentialPath,
         new DpapiMachineStateProtector()).Save(new PortalCredential(
-        2, tenantId, deviceId, checkInEndpoint.AbsoluteUri,
-        enrollment.DeviceToken, enrollment.EnrolledAtUtc ?? DateTimeOffset.UtcNow, privateKeyPkcs8));
+        3, tenantId, deviceId, checkInEndpoint.AbsoluteUri,
+        enrollment.DeviceToken, enrollment.EnrolledAtUtc ?? DateTimeOffset.UtcNow, null, keyName));
     Console.WriteLine(JsonSerializer.Serialize(new
     {
         ok = true,
@@ -176,7 +190,64 @@ if (command == "enroll")
         deviceId,
         endpoint = checkInEndpoint.AbsoluteUri,
         enrolledAtUtc = enrollment.EnrolledAtUtc,
-        credentialProtected = true
+        credentialProtected = true,
+        signingKeyExportable = false
+    }, jsonOptions));
+    return;
+}
+
+if (command == "rotate-device-key")
+{
+    var credentialPath = Path.Combine(agentRoot, "portal-credential.bin");
+    var store = new PortalCredentialStore(credentialPath, new DpapiMachineStateProtector());
+    var credential = store.Load() ?? throw new InvalidOperationException("This device is not enrolled.");
+    if (!Uri.TryCreate(credential.Endpoint, UriKind.Absolute, out var checkInEndpoint))
+        throw new InvalidDataException("Stored Portal endpoint is invalid.");
+    var rotateEndpoint = new Uri(checkInEndpoint, "/api/agent/v1/rotate-key");
+    var keyName = DeviceSigningKey.NameFor(credential.TenantId, credential.DeviceId);
+    if (DeviceSigningKey.Exists(keyName))
+        throw new InvalidOperationException("The non-exportable replacement key already exists; no state was changed.");
+    try
+    {
+        var publicKeySpki = Convert.ToBase64String(DeviceSigningKey.Create(keyName));
+        var payload = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            tenantId = credential.TenantId,
+            deviceId = credential.DeviceId,
+            publicKeySpki
+        }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        using var request = new HttpRequestMessage(HttpMethod.Post, rotateEndpoint)
+        {
+            Content = new ByteArrayContent(payload)
+        };
+        request.Content.Headers.ContentType =
+            new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+        request.Headers.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", credential.DeviceToken);
+        SignDeviceRequest(request, payload, credential);
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        using var response = await client.SendAsync(request);
+        response.EnsureSuccessStatusCode();
+        store.Save(credential with
+        {
+            SchemaVersion = 3,
+            PrivateKeyPkcs8 = null,
+            KeyName = keyName
+        });
+    }
+    catch
+    {
+        if (DeviceSigningKey.Exists(keyName))
+            DeviceSigningKey.Delete(keyName);
+        throw;
+    }
+    Console.WriteLine(JsonSerializer.Serialize(new
+    {
+        ok = true,
+        credentialSchema = 3,
+        deviceIdentityPreserved = true,
+        portalCredentialPreserved = true,
+        signingKeyExportable = false
     }, jsonOptions));
     return;
 }
@@ -429,7 +500,7 @@ if (command is "create-test-policy" or "create-test-recovery")
     return;
 }
 
-Console.Error.WriteLine("Usage: sirkctl create-test-update-manifest --package <directory> --version <version>|verify-update|stage-update --package <directory> [--trusted-keys <path>]|enroll --endpoint <url> --bootstrap-token-file <path>|set-portal-endpoint --endpoint <checkin-url>|status|process|flush|sync|queue-status|queue-clear-test --confirm-test-clear|verify-integrity|create-test-policy|create-test-recovery");
+Console.Error.WriteLine("Usage: sirkctl create-test-update-manifest --package <directory> --version <version>|verify-update|stage-update --package <directory> [--trusted-keys <path>]|enroll --endpoint <url> --bootstrap-token-file <path>|rotate-device-key|set-portal-endpoint --endpoint <checkin-url>|status|process|flush|sync|queue-status|queue-clear-test --confirm-test-clear|verify-integrity|create-test-policy|create-test-recovery");
 Environment.ExitCode = 2;
 
 static JsonElement? ReadJsonFile(string path)
@@ -537,6 +608,31 @@ static async Task<string> RunControlFileFallbackAsync(string command)
 }
 
 static string Base64Url(byte[] value) => Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+static void SignDeviceRequest(HttpRequestMessage request, byte[] payload, PortalCredential credential)
+{
+    var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(
+        System.Globalization.CultureInfo.InvariantCulture);
+    var nonce = Guid.NewGuid().ToString("N");
+    var prefix = Encoding.UTF8.GetBytes(timestamp + "\n" + nonce + "\n");
+    var signed = new byte[prefix.Length + payload.Length];
+    Buffer.BlockCopy(prefix, 0, signed, 0, prefix.Length);
+    Buffer.BlockCopy(payload, 0, signed, prefix.Length, payload.Length);
+    byte[] signature;
+    if (!string.IsNullOrWhiteSpace(credential.KeyName))
+        signature = DeviceSigningKey.Sign(credential.KeyName, signed);
+    else if (!string.IsNullOrWhiteSpace(credential.PrivateKeyPkcs8))
+    {
+        using var key = ECDsa.Create();
+        key.ImportPkcs8PrivateKey(Convert.FromBase64String(credential.PrivateKeyPkcs8), out _);
+        signature = key.SignData(signed, HashAlgorithmName.SHA256,
+            DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
+    }
+    else throw new InvalidDataException("Portal credential does not contain a signing key.");
+    request.Headers.Add("X-SIRK-Timestamp", timestamp);
+    request.Headers.Add("X-SIRK-Nonce", nonce);
+    request.Headers.Add("X-SIRK-Signature", Convert.ToBase64String(signature));
+}
 
 static string? GetOption(string[] values, string name)
 {

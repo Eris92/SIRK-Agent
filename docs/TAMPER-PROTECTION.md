@@ -49,3 +49,15 @@ Proces z uprawnieniami kernel lub pelna kontrola SYSTEM moze probowac zatrzymac,
 - agent nie przyjmuje konfiguracji z rejestru ani pliku awaryjnego,
 - kolejka zdarzen jest szyfrowana i wysylana po odzyskaniu lacznosci,
 - brak danych jest traktowany jako zdarzenie bezpieczenstwa.
+
+## Klucz urządzenia w wersji 1.0
+
+Nowe enrollmenty tworzą klucz ECDSA P-256 w maszynowym Microsoft Software Key
+Storage Provider z `ExportPolicy=None`. `portal-credential.bin` w schemacie 3
+zawiera tylko nazwę klucza, token i metadane chronione DPAPI — nie zawiera
+materiału prywatnego. Polecenie `sirkctl rotate-device-key` uwierzytelnia zmianę
+starym kluczem, aktualizuje publiczny klucz w Portalu i dopiero po potwierdzeniu
+zastępuje lokalny credential. Device ID i token urządzenia pozostają bez zmian.
+
+Schemat 2 jest nadal odczytywany po aktualizacji, aby nie zerwać istniejących
+urządzeń. Należy wykonać jednorazową rotację do schematu 3.

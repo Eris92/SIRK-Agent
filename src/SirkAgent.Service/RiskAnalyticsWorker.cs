@@ -1,5 +1,6 @@
 using System.Net;
 using System.Security.Cryptography;
+using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Hosting;
@@ -16,7 +17,9 @@ internal sealed record RiskAnalyticsPolicy(
     DateTimeOffset ExpiresAtUtc,
     int WindowMinutes,
     int MassDownloadCount,
-    long MassDownloadBytes);
+    long MassDownloadBytes,
+    bool ScreenshotOnRisk,
+    int ScreenshotThreshold);
 
 internal sealed record RiskFinding(string Code, int Score, string Summary, long EventCount);
 internal sealed record RiskReport(
@@ -76,6 +79,9 @@ internal sealed class RiskAnalyticsWorker : BackgroundService
                         AtomicFile.WriteJson(manifestPath, manifest, _json);
                         telemetry.Enqueue("Risk", "Assessment", Priority(report.Score), report);
                         evidence.Append(TenantId, identity.DeviceId, "Risk", "Assessment", report);
+                        if (policy.ScreenshotOnRisk && report.Score >= policy.ScreenshotThreshold)
+                            await CaptureScreenshotAsync(paths.AgentDirectory, policy.CaseId!, report,
+                                protector, telemetry, evidence, identity.DeviceId, stoppingToken);
                         SaveBaseline(baselinePath, protector, new RiskBaseline(
                             baseline.Samples + 1,
                             ((baseline.AverageScore * baseline.Samples) + report.Score) / (baseline.Samples + 1),
@@ -113,7 +119,10 @@ internal sealed class RiskAnalyticsWorker : BackgroundService
             return new RiskAnalyticsPolicy(enabled, mode, caseId, expiry,
                 Integer(risk, "windowMinutes", 60, 5, 10080),
                 Integer(risk, "massDownloadCount", 20, 2, 10000),
-                Long(risk, "massDownloadBytes", 500L * 1024 * 1024, 1, 1L << 50));
+                Long(risk, "massDownloadBytes", 500L * 1024 * 1024, 1, 1L << 50),
+                risk.TryGetProperty("screenshotOnRisk", out var screenshot) &&
+                    screenshot.ValueKind == JsonValueKind.True,
+                Integer(risk, "screenshotThreshold", 80, 30, 100));
         }
         catch { return Disabled(); }
     }
@@ -239,7 +248,56 @@ internal sealed class RiskAnalyticsWorker : BackgroundService
     private static TelemetryPriority Priority(int score) =>
         score >= 55 ? TelemetryPriority.Critical : score >= 30 ? TelemetryPriority.High : TelemetryPriority.Normal;
     private static RiskAnalyticsPolicy Disabled() =>
-        new(false, "Normal", null, DateTimeOffset.MinValue, 60, 20, 500L * 1024 * 1024);
+        new(false, "Normal", null, DateTimeOffset.MinValue, 60, 20, 500L * 1024 * 1024,
+            false, 80);
+
+    private static async Task CaptureScreenshotAsync(string root, string caseId, RiskReport report,
+        IStateProtector protector, TelemetryQueue telemetry, EvidenceChain evidence, string deviceId,
+        CancellationToken cancellationToken)
+    {
+        await using var pipe = new NamedPipeClientStream(".", "SIRK-Agent-Interactive-Session",
+            PipeDirection.InOut, PipeOptions.Asynchronous);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        await pipe.ConnectAsync(timeout.Token);
+        using var reader = new StreamReader(pipe, Encoding.UTF8, false, 4096, true);
+        await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, true)
+            { AutoFlush = true };
+        await writer.WriteLineAsync("{\"type\":\"snapshot\"}");
+        var line = await reader.ReadLineAsync(timeout.Token);
+        using var response = JsonDocument.Parse(line ??
+            throw new InvalidDataException("Screenshot response is empty."));
+        if (!response.RootElement.TryGetProperty("ok", out var ok) || ok.ValueKind != JsonValueKind.True ||
+            !response.RootElement.TryGetProperty("imageBase64", out var image) ||
+            image.ValueKind != JsonValueKind.String)
+            throw new InvalidDataException("Screenshot capture was rejected.");
+        var bytes = Convert.FromBase64String(image.GetString() ?? "");
+        if (bytes.Length is < 100 or > 20 * 1024 * 1024)
+            throw new InvalidDataException("Screenshot size is invalid.");
+        var safeCase = new string(caseId.Where(value => char.IsLetterOrDigit(value) ||
+                                                        value is '-' or '_').Take(80).ToArray());
+        if (string.IsNullOrWhiteSpace(safeCase))
+            throw new InvalidDataException("Case ID cannot be used for evidence storage.");
+        var directory = Path.Combine(root, "Evidence", safeCase);
+        Directory.CreateDirectory(directory);
+        var name = $"screenshot-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}.jpg.bin";
+        var path = Path.Combine(directory, name);
+        AtomicFile.WriteBytes(path, protector.Protect(bytes));
+        var metadata = new
+        {
+            timestampUtc = DateTimeOffset.UtcNow,
+            caseId,
+            report.Score,
+            report.Severity,
+            file = Path.Combine("Evidence", safeCase, name),
+            bytes = bytes.Length,
+            sha256 = Convert.ToHexString(SHA256.HashData(bytes)),
+            encrypted = true
+        };
+        telemetry.Enqueue("Investigation", "ScreenshotCaptured", TelemetryPriority.Critical, metadata);
+        evidence.Append(TenantId, deviceId, "Investigation", "ScreenshotCaptured", metadata);
+        CryptographicOperations.ZeroMemory(bytes);
+    }
 
     private static RiskBaseline LoadBaseline(string path, IStateProtector protector, JsonSerializerOptions json)
     {

@@ -8,7 +8,7 @@ public sealed class ActivityCollectionPolicyTests
     [Fact]
     public void Detailed_collection_requires_case_mode_and_valid_expiry()
     {
-        var valid = new ActivityCollectionPolicy(true, true, true, true, true, true, [],
+        var valid = new ActivityCollectionPolicy(true, true, true, true, true, true, true, true, true, [],
             60, "Investigation", "CASE-42", DateTimeOffset.UtcNow.AddHours(1));
         var normal = valid with { Mode = "Normal" };
         var missingCase = valid with { CaseId = null };

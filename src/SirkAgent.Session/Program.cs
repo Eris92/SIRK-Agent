@@ -1,5 +1,6 @@
 using System.Drawing.Imaging;
 using System.Diagnostics;
+using System.IO;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Security.AccessControl;
@@ -7,6 +8,7 @@ using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using System.Windows.Forms;
+using System.Windows.Automation;
 
 namespace SirkAgent.Session;
 
@@ -18,6 +20,8 @@ internal static class Program
     private const uint MouseEventRightDown = 0x0008;
     private const uint MouseEventRightUp = 0x0010;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    private static DateTimeOffset _lastActivitySampleUtc = DateTimeOffset.UtcNow;
+    private static System.Drawing.Point? _lastCursorPosition;
 
     [STAThread]
     private static async Task Main()
@@ -161,6 +165,19 @@ internal static class Program
         var idleMilliseconds = GetLastInputInfo(ref lastInput)
             ? unchecked((uint)Environment.TickCount - lastInput.Time) : 0;
         var clipboard = ClipboardMetadata();
+        var now = DateTimeOffset.UtcNow;
+        var cursor = Cursor.Position;
+        var previousCursor = _lastCursorPosition;
+        var cursorDistance = previousCursor is null ? 0d : Math.Sqrt(
+            Math.Pow(cursor.X - previousCursor.Value.X, 2) +
+            Math.Pow(cursor.Y - previousCursor.Value.Y, 2));
+        var keyboard = new byte[256];
+        var pressedKeyCount = GetKeyboardState(keyboard)
+            ? keyboard.Count(value => (value & 0x80) != 0) : 0;
+        var sampleIntervalMs = Math.Max(0, (now - _lastActivitySampleUtc).TotalMilliseconds);
+        _lastActivitySampleUtc = now;
+        _lastCursorPosition = cursor;
+        var uiAutomation = UiAutomation(foreground);
         var data = JsonSerializer.SerializeToElement(new
         {
             sessionId = Process.GetCurrentProcess().SessionId,
@@ -168,9 +185,48 @@ internal static class Program
             foregroundProcess = processName,
             foregroundWindowTitle = Limit(title.ToString(), 512),
             idleSeconds = idleMilliseconds / 1000,
-            clipboard
+            clipboard,
+            inputTiming = new
+            {
+                sampleIntervalMs = Math.Round(sampleIntervalMs),
+                pressedKeyCount,
+                cursorDistancePixels = Math.Round(cursorDistance, 2),
+                cursorX = cursor.X,
+                cursorY = cursor.Y,
+                capturesCharacters = false,
+                capturesKeyCodes = false
+            },
+            uiAutomation
         }, Json);
         return new SessionResponse(true, "ACTIVITY_SNAPSHOT_OK", null, null, null, data);
+    }
+
+    private static object? UiAutomation(IntPtr foreground)
+    {
+        try
+        {
+            var element = AutomationElement.FromHandle(foreground);
+            var current = element.Current;
+            return new
+            {
+                name = Limit(current.Name, 512),
+                automationId = Limit(current.AutomationId, 256),
+                controlType = Limit(current.ControlType?.ProgrammaticName, 128),
+                className = Limit(current.ClassName, 256),
+                frameworkId = Limit(current.FrameworkId, 128),
+                bounds = new
+                {
+                    x = current.BoundingRectangle.X,
+                    y = current.BoundingRectangle.Y,
+                    width = current.BoundingRectangle.Width,
+                    height = current.BoundingRectangle.Height
+                }
+            };
+        }
+        catch (Exception error)
+        {
+            return new { available = false, error = error.GetType().Name };
+        }
     }
 
     private static object ClipboardMetadata()
@@ -209,6 +265,10 @@ internal static class Program
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetLastInputInfo(ref LastInputInfo info);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetKeyboardState(byte[] state);
 
     [DllImport("user32.dll")]
     private static extern IntPtr GetDC(IntPtr window);

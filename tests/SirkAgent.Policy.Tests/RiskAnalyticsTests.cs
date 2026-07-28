@@ -34,7 +34,7 @@ public sealed class RiskAnalyticsTests
             })
         };
         var policy = new RiskAnalyticsPolicy(true, "InsiderRisk", "CASE-7",
-            now.AddHours(1), 60, 20, 500_000_000);
+            now.AddHours(1), 60, 20, 500_000_000, true, 80);
 
         var report = RiskAnalyticsWorker.Evaluate(policy, "DEVICE-1", events,
             new RiskBaseline(10, 5, null));

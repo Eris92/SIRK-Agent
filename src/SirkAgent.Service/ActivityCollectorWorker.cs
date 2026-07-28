@@ -16,6 +16,9 @@ internal sealed record ActivityCollectionPolicy(
     bool CollectClipboardMetadata,
     bool CollectUsb,
     bool CollectPrinting,
+    bool CollectMouseTiming,
+    bool CollectKeyboardTiming,
+    bool CollectUiAutomation,
     IReadOnlyList<string> FileRoots,
     int IntervalSeconds,
     string Mode,
@@ -98,7 +101,7 @@ internal sealed class ActivityCollectorWorker : BackgroundService
             policy.ExpiresAtUtc,
             investigationAuthorized = policy.InvestigationAuthorized,
             processes,
-            interactive = RedactClipboard(interactive, policy.CollectClipboardMetadata),
+            interactive = FilterInteractive(interactive, policy),
             usb,
             printing,
             files
@@ -136,7 +139,8 @@ internal sealed class ActivityCollectorWorker : BackgroundService
                            intervalValue.TryGetInt32(out var seconds) ? Math.Clamp(seconds, 30, 3600) : 300;
             return new ActivityCollectionPolicy(Flag("enabled"), Flag("processes"),
                 Flag("interactiveContext"), Flag("clipboardMetadata"), Flag("usb"),
-                Flag("printing"), roots, interval, mode, caseId, expires);
+                Flag("printing"), Flag("mouseTiming"), Flag("keyboardTiming"),
+                Flag("uiAutomation"), roots, interval, mode, caseId, expires);
         }
         catch
         {
@@ -145,7 +149,7 @@ internal sealed class ActivityCollectorWorker : BackgroundService
     }
 
     private static ActivityCollectionPolicy Disabled() =>
-        new(false, false, false, false, false, false, [], 300, "Normal", null,
+        new(false, false, false, false, false, false, false, false, false, [], 300, "Normal", null,
             DateTimeOffset.MinValue);
 
     private static object[] ProcessSnapshot() =>
@@ -203,13 +207,29 @@ internal sealed class ActivityCollectorWorker : BackgroundService
         return response.RootElement.TryGetProperty("data", out var data) ? data.Clone() : null;
     }
 
-    private static JsonElement? RedactClipboard(JsonElement? interactive, bool clipboardAllowed)
+    private static JsonElement? FilterInteractive(JsonElement? interactive, ActivityCollectionPolicy policy)
     {
-        if (interactive is null || clipboardAllowed)
+        if (interactive is null)
             return interactive;
         var dictionary = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(interactive.Value.GetRawText())
                          ?? [];
-        dictionary.Remove("clipboard");
+        if (!policy.CollectClipboardMetadata) dictionary.Remove("clipboard");
+        if (!policy.CollectUiAutomation) dictionary.Remove("uiAutomation");
+        if (dictionary.TryGetValue("inputTiming", out var timing))
+        {
+            var values = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(timing.GetRawText()) ?? [];
+            if (!policy.CollectKeyboardTiming) values.Remove("pressedKeyCount");
+            if (!policy.CollectMouseTiming)
+            {
+                values.Remove("cursorDistancePixels");
+                values.Remove("cursorX");
+                values.Remove("cursorY");
+            }
+            if (!policy.CollectKeyboardTiming && !policy.CollectMouseTiming)
+                dictionary.Remove("inputTiming");
+            else
+                dictionary["inputTiming"] = JsonSerializer.SerializeToElement(values);
+        }
         return JsonSerializer.SerializeToElement(dictionary);
     }
 

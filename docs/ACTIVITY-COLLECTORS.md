@@ -11,6 +11,9 @@ podpisanej polityki w `settings.activityCollection`.
   "clipboardMetadata": true,
   "usb": true,
   "printing": true,
+  "mouseTiming": true,
+  "keyboardTiming": true,
+  "uiAutomation": true,
   "fileRoots": ["C:\\CaseData"],
   "intervalSeconds": 300
 }
@@ -27,6 +30,12 @@ Agent nie zapisuje znaków klawiatury ani treści schowka. Dla schowka zapisywan
 są wyłącznie formaty, długość tekstu i liczba plików. Zakres plików jest
 ograniczony do jawnych katalogów z polityki, maksymalnie 20 korzeni i 2000
 rekordów na korzeń.
+
+`keyboardTiming` zapisuje tylko odstęp próbkowania i liczbę aktualnie
+wciśniętych klawiszy — bez znaków i bez kodów klawiszy. `mouseTiming` zapisuje
+odległość ruchu i pozycję kursora pomiędzy próbkami. `uiAutomation` ogranicza
+się do metadanych bieżącego głównego okna (nazwa, typ kontrolki, framework,
+Automation ID i prostokąt), bez przeglądania treści całego drzewa UI.
 
 Dla katalogów sprawy `FileActivityWorker` utrzymuje ograniczony snapshot
 (maksymalnie 20 000 plików), emituje zdarzenia `Create`, `Change` i `Delete`

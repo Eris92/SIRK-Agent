@@ -114,3 +114,9 @@ Ustawienie `settings.riskAnalytics` jest aktywne wyłącznie w ważnej polityce
 Wyniki są zapisywane jako `risk-report.json`, `risk-report.html` oraz
 `risk-report-manifest.json` z SHA-256 obu plików i ostatnim hashem dowodowym.
 Ocena trafia również do szyfrowanej kolejki telemetrii i Evidence Chain.
+
+Po ustawieniu `screenshotOnRisk: true` agent może wykonać pojedynczy screenshot
+po przekroczeniu `screenshotThreshold` (30–100). Obraz jest natychmiast
+szyfrowany DPAPI, zapisany w katalogu konkretnej sprawy i opisany hashem SHA-256
+w Evidence Chain. Funkcja nie działa poza ważną, formalnie zatwierdzoną polityką
+`InsiderRisk`.

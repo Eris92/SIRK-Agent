@@ -10,7 +10,7 @@ Ten dokument jest aktualnym punktem przekazania projektu. W nowym czacie nalezy 
 - Runtime: .NET 8, build framework-dependent
 - Zasada pakowania: nie dolaczac calego .NET do EXE ani ZIP
 - Aktualny etap: `0.3.5-test` — Endurance Worker, raporty dlugotrwale i odzyskiwanie uslugi przez SCM
-- Ostatni potwierdzony stabilny pakiet na komputerze `DELL_K`: `0.3.4-test`
+- Ostatni potwierdzony stabilny pakiet testowy na komputerze `DELL_K`: `0.3.5-test`, commit `f208f0ec58dd9545c7f279b9701ddef0bd0f2a5c`
 - Aktualny commit przekazania: sprawdz najnowszy HEAD `main` przed rozpoczeciem pracy
 
 ## Cel projektu
@@ -135,7 +135,7 @@ Funkcje:
 
 ## Potwierdzone testy na DELL_K
 
-Wersje do `0.3.4-test` zostaly zweryfikowane na rzeczywistym Windows:
+Wersje do `0.3.5-test` zostaly zweryfikowane na rzeczywistym Windows:
 
 - `sirkctl status` zwraca pelny JSON,
 - podpisana polityka przechodzi `Incoming -> active-policy.json -> Archive\Accepted`,
@@ -147,6 +147,11 @@ Wersje do `0.3.4-test` zostaly zweryfikowane na rzeczywistym Windows:
 - CPU w spoczynku praktycznie 0%,
 - RAM po restartach okolo 41–42 MB,
 - `runtime-health.json` aktualizuje sie prawidlowo.
+- aktualizacja z `0.3.4-test` zachowala Device ID, aktywna polityke i stan chroniony,
+- recovery SCM przywrocilo usluge po wymuszonym zakonczeniu procesu,
+- lokalny SIRK Portal odebral uwierzytelniony check-in z heartbeat i runtime health,
+- ACL `C:\ProgramData\SIRK\Agent` blokuje zapis zwyklym uzytkownikom,
+- Endurance Report CI i wszystkie workflow regresyjne dla `f208f0e` sa zielone.
 
 Device ID komputera testowego:
 
@@ -162,6 +167,8 @@ Ostatnio poprawione problemy:
 
 - blad kompilatora `CS9006` w interpolowanym raw stringu HTML — generator przepisany na `StringBuilder`,
 - niekompletne probki z pierwszych sekund startu nie sa wliczane do statystyk endurance.
+- wyscig inicjalizacji `policy-state.bin` pomiedzy AgentWorker i ManagementWorker zostal usuniety przez serializowany zapis atomowy,
+- instalator usuwa odziedziczone prawo zapisu zwyklych uzytkownikow do katalogu danych Agenta.
 
 Przed przygotowaniem paczki nalezy:
 
@@ -174,7 +181,8 @@ Przed przygotowaniem paczki nalezy:
 7. uruchomic pozostale workflow regresyjne,
 8. dopiero po zielonym wyniku pobrac artefakt `SIRK-Agent-0.3.5-test-win-x64`.
 
-Nie nalezy twierdzic, ze `0.3.5-test` jest gotowy, dopoki powyzszy pipeline nie jest zielony.
+Powyższe kryteria sa spelnione dla commita `f208f0e`. Kazdy kolejny commit
+zmieniajacy runtime lub pakowanie wymaga ponownego pelnego CI i testu lokalnego.
 
 ## Najwazniejsze pliki runtime
 

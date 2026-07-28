@@ -22,10 +22,10 @@ Aktualny etap:
 0.3.5-test — Endurance Worker, raporty 24/48 h i recovery SCM
 ```
 
-Ostatni potwierdzony stabilny pakiet na komputerze `DELL_K`:
+Ostatni potwierdzony stabilny pakiet testowy na komputerze `DELL_K`:
 
 ```text
-0.3.4-test
+0.3.5-test — commit f208f0ec58dd9545c7f279b9701ddef0bd0f2a5c
 ```
 
 ## Zasady architektoniczne
@@ -63,6 +63,8 @@ Dzialajace elementy:
 - TestBundle,
 - runtime health: CPU, RAM, uptime, heartbeat i rotacja logow,
 - Endurance Worker z probkami, podsumowaniem JSON i raportem HTML.
+- uwierzytelniony check-in do SIRK Portal z heartbeat, runtime health i telemetria,
+- zabezpieczony ACL katalogu danych: zapis tylko dla SYSTEM i Administratorow.
 
 ## Najwazniejsze polecenia
 
@@ -135,16 +137,21 @@ C:\ProgramData\SIRK\Agent\endurance-report.html
 - po kazdym restarcie `Operational`, `Healthy` i swiezy heartbeat,
 - RAM po restartach okolo 41–42 MB,
 - CPU w spoczynku praktycznie 0%.
+- aktualizacja `0.3.4-test -> 0.3.5-test` bez zmiany Device ID i aktywnej polityki,
+- recovery SCM po wymuszonym zakonczeniu procesu,
+- rzeczywisty check-in `0.3.5-test` do lokalnego SIRK Portal,
+- brak prawa zapisu do katalogu danych dla zwyklych uzytkownikow.
 
 ## Aktualny etap 0.3.5-test
 
-Kod Endurance Worker jest na `main`. Przed wydaniem paczki nalezy potwierdzic zielony wynik:
+Kod Endurance Worker jest na `main`. Pakiet z commita `f208f0e` przeszedl:
 
 ```text
 SIRK Agent Endurance Report CI
 ```
 
-oraz pozostalych workflow regresyjnych. Nie nalezy przekazywac paczki `0.3.5-test`, jezeli test raportu, recovery SCM lub pakowanie nie zakonczyly sie sukcesem.
+oraz pozostale workflow regresyjne. Lokalnie na DELL_K potwierdzono instalacje,
+zachowanie chronionego stanu, recovery SCM, ACL danych i check-in do SIRK Portal.
 
 ## Struktura repozytorium
 

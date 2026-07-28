@@ -61,3 +61,14 @@ zastępuje lokalny credential. Device ID i token urządzenia pozostają bez zmia
 
 Schemat 2 jest nadal odczytywany po aktualizacji, aby nie zerwać istniejących
 urządzeń. Należy wykonać jednorazową rotację do schematu 3.
+
+Pakiet finalny można podpisać poleceniem:
+
+```powershell
+.\Sign-SirkAgent.ps1 -PackagePath 'C:\pakiet\SIRK-Agent-win-x64' `
+  -Thumbprint '<40-znakowy-thumbprint-certyfikatu-Code-Signing>'
+```
+
+Skrypt podpisuje wszystkie pliki EXE i DLL algorytmem SHA-256, po czym wymaga
+statusu `Valid` i zgodnego thumbprintu dla każdego pliku. Manifest integralności
+należy wygenerować dopiero po podpisaniu.

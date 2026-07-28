@@ -169,7 +169,7 @@ internal sealed class EnduranceWorker : BackgroundService
 
     private static void WriteHtmlAtomic(string path, EnduranceSummary summary, IReadOnlyList<EnduranceSample> samples)
     {
-        static string Mb(long value) => (value / 1024d / 1024d).ToString("0.00", CultureInfo.InvariantCulture);
+        static string Mb(double value) => (value / 1024d / 1024d).ToString("0.00", CultureInfo.InvariantCulture);
         var rows = string.Join("", samples.TakeLast(48).Reverse().Select(x => $"<tr><td>{x.TimestampUtc:O}</td><td>{x.ProcessId}</td><td>{x.CpuPercent:0.00}</td><td>{Mb(x.WorkingSetBytes)}</td><td>{x.HeartbeatFresh}</td><td>{System.Net.WebUtility.HtmlEncode(x.OverallHealth)}</td></tr>"));
         var html = $"""
 <!doctype html><html lang="pl"><head><meta charset="utf-8"><title>SIRK Agent Endurance</title>

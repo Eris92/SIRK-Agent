@@ -81,22 +81,29 @@ jobs:
       - name: Validate corrupt-state detection and test recovery
         shell: pwsh
         run: |
+          function Assert-Ci([bool]$Condition, [string]$Message) {
+            if (-not $Condition) {
+              Write-Output "::error title=Corrupt-state recovery failed::$Message"
+              throw $Message
+            }
+          }
+
           $agentRoot = Join-Path $env:ProgramData 'SIRK\Agent'
           $identityPath = Join-Path $agentRoot 'device-identity.bin'
           $identityHashBefore = (Get-FileHash $identityPath -Algorithm SHA256).Hash
           [IO.File]::WriteAllBytes((Join-Path $agentRoot 'policy-state.bin'), [byte[]](1,2,3,4))
           ./artifacts/SIRK-Agent-Runtime/SirkAgent.Service.exe --once
           $broken = Get-Content (Join-Path $agentRoot 'heartbeat-latest.json') -Raw | ConvertFrom-Json
-          if (-not $broken.tamperDetected) { throw 'Corrupt state was not detected.' }
-          if (-not $broken.quarantineActive) { throw 'Corrupt state did not activate quarantine.' }
+          Assert-Ci $broken.tamperDetected "Corrupt state was not detected: stateStatus=$($broken.stateStatus), tamperReason=$($broken.tamperReason)."
+          Assert-Ci $broken.quarantineActive "Corrupt state did not activate quarantine: stateStatus=$($broken.stateStatus), tamperReason=$($broken.tamperReason)."
           ./artifacts/SIRK-Agent-Runtime/Reset-SirkAgentTestState.ps1
           ./artifacts/SIRK-Agent-Runtime/SirkAgent.Service.exe --once
           $recovered = Get-Content (Join-Path $agentRoot 'heartbeat-latest.json') -Raw | ConvertFrom-Json
-          if ($recovered.tamperDetected) { throw "Recovered state still reports tamper: $($recovered.tamperReason)" }
-          if ($recovered.quarantineActive) { throw "Recovered state remains quarantined: $($recovered.quarantineReason)" }
+          Assert-Ci (-not $recovered.tamperDetected) "Recovered state still reports tamper: $($recovered.tamperReason)"
+          Assert-Ci (-not $recovered.quarantineActive) "Recovered state remains quarantined: $($recovered.quarantineReason)"
           $identityHashAfter = (Get-FileHash $identityPath -Algorithm SHA256).Hash
-          if ($identityHashBefore -ne $identityHashAfter) { throw 'Device identity changed during test-state recovery.' }
-          if (-not (Get-ChildItem (Join-Path $agentRoot 'ResetArchive') -Filter reset-manifest.json -Recurse -ErrorAction SilentlyContinue)) { throw 'Reset archive manifest was not generated.' }
+          Assert-Ci ($identityHashBefore -eq $identityHashAfter) 'Device identity changed during test-state recovery.'
+          Assert-Ci ([bool](Get-ChildItem (Join-Path $agentRoot 'ResetArchive') -Filter reset-manifest.json -Recurse -ErrorAction SilentlyContinue)) 'Reset archive manifest was not generated.'
 
       - name: Generate and validate HTML and JSON reports
         shell: pwsh

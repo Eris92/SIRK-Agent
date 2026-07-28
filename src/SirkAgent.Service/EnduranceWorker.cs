@@ -28,10 +28,10 @@ internal sealed class EnduranceWorker : BackgroundService
         {
             try
             {
-                var sample = CaptureSample(root);
+                var samples = LoadSamples(samplesPath);
+                var sample = CaptureSample(root, samples);
                 if (sample is not null)
                 {
-                    var samples = LoadSamples(samplesPath);
                     samples.Add(sample);
                     if (samples.Count > MaxSamples)
                         samples = samples.TakeLast(MaxSamples).ToList();
@@ -66,7 +66,7 @@ internal sealed class EnduranceWorker : BackgroundService
             : TimeSpan.FromMinutes(5);
     }
 
-    private static EnduranceSample? CaptureSample(string root)
+    private static EnduranceSample? CaptureSample(string root, IReadOnlyCollection<EnduranceSample> existingSamples)
     {
         using var process = Process.GetCurrentProcess();
         process.Refresh();
@@ -82,10 +82,11 @@ internal sealed class EnduranceWorker : BackgroundService
             string.IsNullOrWhiteSpace(overallHealth) || string.IsNullOrWhiteSpace(securityState))
             return null;
 
-        var processAge = DateTimeOffset.UtcNow - process.StartTime.ToUniversalTime();
-        if (processAge < TimeSpan.FromSeconds(30) &&
-            (!heartbeatFresh || !string.Equals(overallHealth, "Healthy", StringComparison.OrdinalIgnoreCase) ||
-             !string.Equals(securityState, "Operational", StringComparison.OrdinalIgnoreCase)))
+        var sampleHealthy = heartbeatFresh &&
+            string.Equals(overallHealth, "Healthy", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(securityState, "Operational", StringComparison.OrdinalIgnoreCase);
+        var currentPidHasBaseline = existingSamples.Any(x => x.ProcessId == Environment.ProcessId);
+        if (!currentPidHasBaseline && !sampleHealthy)
             return null;
 
         var queue = DirectorySize(Path.Combine(root, "TelemetryQueue"), "*.bin");

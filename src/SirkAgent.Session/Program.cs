@@ -180,7 +180,7 @@ internal static class Program
         quality = Math.Clamp(quality, 25, 80);
         var scale = Math.Min(1d, Math.Min((double)maxWidth / bounds.Width, 1080d / bounds.Height));
         var captureTimer = Stopwatch.StartNew();
-        using var bitmap = CaptureDesktopBitmap(monitorIndex, bounds, scale, out var captureBackend,
+        using var bitmap = CaptureDesktopBitmap(monitorIndex, bounds, out var captureBackend,
             out var dirtyRectangles, out var moveRectangles, out var accumulatedFrames);
         captureTimer.Stop();
         var now = DateTimeOffset.UtcNow;
@@ -252,25 +252,32 @@ internal static class Program
                     dirtyArea >= (long)bounds.Width * bounds.Height * 7 / 10;
         if (fullFrame)
         {
+            var width = Math.Max(1, (int)Math.Round(bounds.Width * scale));
+            var height = Math.Max(1, (int)Math.Round(bounds.Height * scale));
             patches =
             [
-                new DesktopPatch(0, 0, source.Width, source.Height,
+                new DesktopPatch(0, 0, width, height,
                     0, 0, bounds.Width, bounds.Height)
             ];
-            return (Bitmap)source.Clone();
+            var full = new Bitmap(width, height, PixelFormat.Format24bppRgb);
+            using var graphics = Graphics.FromImage(full);
+            graphics.CompositingMode = CompositingMode.SourceCopy;
+            graphics.InterpolationMode = InterpolationMode.Bilinear;
+            graphics.PixelOffsetMode = PixelOffsetMode.HighSpeed;
+            graphics.DrawImage(source, new Rectangle(0, 0, width, height),
+                new Rectangle(0, 0, source.Width, source.Height), GraphicsUnit.Pixel);
+            return full;
         }
 
         var scaled = regions.Select(region => new
         {
             Destination = region,
-            Source = Rectangle.FromLTRB(
-                Math.Clamp((int)Math.Floor(region.Left * scale), 0, source.Width - 1),
-                Math.Clamp((int)Math.Floor(region.Top * scale), 0, source.Height - 1),
-                Math.Clamp((int)Math.Ceiling(region.Right * scale), 1, source.Width),
-                Math.Clamp((int)Math.Ceiling(region.Bottom * scale), 1, source.Height))
+            Source = region,
+            Width = Math.Max(1, (int)Math.Ceiling(region.Width * scale)),
+            Height = Math.Max(1, (int)Math.Ceiling(region.Height * scale))
         }).Where(value => value.Source.Width > 0 && value.Source.Height > 0)
-          .OrderByDescending(value => value.Source.Height).ToArray();
-        var atlasLimit = Math.Max(1024, scaled.Max(value => value.Source.Width));
+          .OrderByDescending(value => value.Height).ToArray();
+        var atlasLimit = Math.Max(1024, scaled.Max(value => value.Width));
         var placements = new List<(Rectangle Atlas, Rectangle Source, Rectangle Destination)>();
         var x = 0;
         var y = 0;
@@ -278,16 +285,16 @@ internal static class Program
         var atlasWidth = 0;
         foreach (var item in scaled)
         {
-            if (x > 0 && x + item.Source.Width > atlasLimit)
+            if (x > 0 && x + item.Width > atlasLimit)
             {
                 y += rowHeight;
                 x = 0;
                 rowHeight = 0;
             }
-            var atlas = new Rectangle(x, y, item.Source.Width, item.Source.Height);
+            var atlas = new Rectangle(x, y, item.Width, item.Height);
             placements.Add((atlas, item.Source, item.Destination));
-            x += item.Source.Width;
-            rowHeight = Math.Max(rowHeight, item.Source.Height);
+            x += item.Width;
+            rowHeight = Math.Max(rowHeight, item.Height);
             atlasWidth = Math.Max(atlasWidth, x);
         }
         var atlasHeight = y + rowHeight;
@@ -328,7 +335,7 @@ internal static class Program
         return regions;
     }
 
-    private static Bitmap CaptureDesktopBitmap(int monitorIndex, Rectangle bounds, double scale,
+    private static Bitmap CaptureDesktopBitmap(int monitorIndex, Rectangle bounds,
         out string backend, out Rectangle[] dirtyRectangles, out DesktopMove[] moveRectangles,
         out uint accumulatedFrames)
     {
@@ -348,22 +355,11 @@ internal static class Program
                 }
                 frame = capture.Capture(16);
             }
-            using (frame)
-            {
-                var target = new Bitmap((int)(bounds.Width * scale), (int)(bounds.Height * scale),
-                    PixelFormat.Format24bppRgb);
-                using var graphics = Graphics.FromImage(target);
-                graphics.CompositingMode = CompositingMode.SourceCopy;
-                graphics.InterpolationMode = InterpolationMode.Bilinear;
-                graphics.PixelOffsetMode = PixelOffsetMode.HighSpeed;
-                graphics.DrawImage(frame.Bitmap, new Rectangle(0, 0, target.Width, target.Height),
-                    new Rectangle(0, 0, frame.Bitmap.Width, frame.Bitmap.Height), GraphicsUnit.Pixel);
-                backend = "DXGI_DESKTOP_DUPLICATION";
-                dirtyRectangles = frame.DirtyRectangles;
-                moveRectangles = frame.MoveRectangles;
-                accumulatedFrames = frame.AccumulatedFrames;
-                return target;
-            }
+            backend = "DXGI_DESKTOP_DUPLICATION";
+            dirtyRectangles = frame.DirtyRectangles;
+            moveRectangles = frame.MoveRectangles;
+            accumulatedFrames = frame.AccumulatedFrames;
+            return frame.Bitmap;
         }
         catch (Exception error)
         {
@@ -371,8 +367,7 @@ internal static class Program
             dirtyRectangles = [new Rectangle(0, 0, bounds.Width, bounds.Height)];
             moveRectangles = [];
             accumulatedFrames = 1;
-            var bitmap = new Bitmap((int)(bounds.Width * scale), (int)(bounds.Height * scale),
-                PixelFormat.Format24bppRgb);
+            var bitmap = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format24bppRgb);
             using var graphics = Graphics.FromImage(bitmap);
             var destination = graphics.GetHdc();
             var screen = GetDC(IntPtr.Zero);

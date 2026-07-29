@@ -58,7 +58,8 @@ internal sealed class RemoteCommandExecutor
         CancellationToken token)
     {
         var sessionId = InteractiveSessionPipe.Resolve(OptionalNullableInt(command.Parameters, "sessionId"));
-        InteractiveSessionPipe.EnsureAvailable(sessionId);
+        if (InteractiveSessionPipe.EnsureAvailable(sessionId))
+            InteractiveSessionClient.Invalidate(sessionId);
         string? responseLine;
         try
         {
@@ -99,7 +100,8 @@ internal sealed class RemoteCommandExecutor
     private RemoteCommandResult StartAdministrativeDesktop(PortalRemoteCommand command)
     {
         var sessionId = InteractiveSessionPipe.Resolve(OptionalNullableInt(command.Parameters, "sessionId"));
-        InteractiveSessionPipe.EnsureAvailable(sessionId);
+        if (InteractiveSessionPipe.EnsureAvailable(sessionId))
+            InteractiveSessionClient.Invalidate(sessionId);
         var tool = OptionalString(command.Parameters, "tool", "powershell", 64);
         var process = InteractiveAdminLauncher.Start(sessionId, tool);
         return new RemoteCommandResult(command.CommandId, true, "DESKTOP_ADMIN_STARTED", "",

@@ -56,9 +56,9 @@ internal static class InteractiveSessionPipe
             finally { process.Dispose(); }
         });
 
-    internal static void EnsureAvailable(int sessionId)
+    internal static bool EnsureAvailable(int sessionId)
     {
-        if (IsAvailable(sessionId)) return;
+        if (IsAvailable(sessionId)) return false;
         var executable = Path.Combine(AppContext.BaseDirectory, "SirkAgent.Session.exe");
         if (!File.Exists(executable)) throw new FileNotFoundException("Brak brokera sesji użytkownika.", executable);
         if (!WTSQueryUserToken((uint)sessionId, out var token))
@@ -89,7 +89,7 @@ internal static class InteractiveSessionPipe
         var deadline = DateTime.UtcNow.AddSeconds(3);
         while (DateTime.UtcNow < deadline)
         {
-            if (IsAvailable(sessionId)) return;
+            if (IsAvailable(sessionId)) return true;
             Thread.Sleep(25);
         }
         throw new InvalidOperationException("Broker sesji użytkownika nie uruchomił się.");

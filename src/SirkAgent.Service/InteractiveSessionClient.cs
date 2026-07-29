@@ -12,6 +12,11 @@ internal static class InteractiveSessionClient
     internal static Task<string?> SendAsync(int sessionId, string request, CancellationToken token) =>
         Channels.GetOrAdd(sessionId, static id => new SessionChannel(id)).SendAsync(request, token);
 
+    internal static void Invalidate(int sessionId)
+    {
+        if (Channels.TryRemove(sessionId, out var channel)) channel.Close();
+    }
+
     private sealed class SessionChannel(int sessionId)
     {
         private readonly SemaphoreSlim _gate = new(1, 1);
@@ -37,6 +42,11 @@ internal static class InteractiveSessionClient
                     catch (IOException) when (attempt == 0)
                     {
                         Reset();
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        Reset();
+                        throw;
                     }
                 }
                 return null;
@@ -68,5 +78,7 @@ internal static class InteractiveSessionClient
             _reader = null;
             _pipe = null;
         }
+
+        internal void Close() => Reset();
     }
 }

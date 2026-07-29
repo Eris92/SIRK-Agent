@@ -19,7 +19,7 @@ internal sealed class ManagementWorker : BackgroundService
     private readonly ILogger<ManagementWorker> _logger;
     private readonly JsonSerializerOptions _json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private readonly SemaphoreSlim _processLock = new(1, 1);
-    private readonly HttpClient _portalClient = new() { Timeout = Timeout.InfiniteTimeSpan };
+    private int _portalSessionGeneration;
 
     public ManagementWorker(ILogger<ManagementWorker> logger) => _logger = logger;
 
@@ -35,7 +35,8 @@ internal sealed class ManagementWorker : BackgroundService
             null, null, 0, 0, false, null), stoppingToken);
 
         var pipeTask = RunPipeServerAsync(paths, queue, stoppingToken);
-        var portalTask = RunPortalSessionAsync(paths, queue, identity.DeviceId, stoppingToken);
+        var portalSessionStartedUtc = DateTime.UtcNow;
+        var portalTask = StartPortalSession(paths, queue, identity.DeviceId, stoppingToken);
         var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
         try
         {
@@ -48,6 +49,16 @@ internal sealed class ManagementWorker : BackgroundService
                 await ProcessInboxAsync(paths, identity.DeviceId, stoppingToken);
                 await ValidateIntegrityAsync(paths, stoppingToken);
                 await FlushTelemetryAsync(paths, queue, stoppingToken);
+                var lastPortalActivity = File.Exists(paths.PortalStatusPath)
+                    ? File.GetLastWriteTimeUtc(paths.PortalStatusPath)
+                    : portalSessionStartedUtc;
+                if (DateTime.UtcNow - (lastPortalActivity > portalSessionStartedUtc
+                        ? lastPortalActivity : portalSessionStartedUtc) > TimeSpan.FromSeconds(12))
+                {
+                    portalSessionStartedUtc = DateTime.UtcNow;
+                    portalTask = StartPortalSession(paths, queue, identity.DeviceId, stoppingToken);
+                    WritePortalLoopDiagnostic(paths, "supervisor-restart");
+                }
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -61,10 +72,17 @@ internal sealed class ManagementWorker : BackgroundService
         }
     }
 
-    private async Task RunPortalSessionAsync(ManagementPaths paths, TelemetryQueue queue, string deviceId,
+    private Task StartPortalSession(ManagementPaths paths, TelemetryQueue queue, string deviceId,
         CancellationToken token)
     {
-        while (!token.IsCancellationRequested)
+        var generation = Interlocked.Increment(ref _portalSessionGeneration);
+        return RunPortalSessionAsync(paths, queue, deviceId, generation, token);
+    }
+
+    private async Task RunPortalSessionAsync(ManagementPaths paths, TelemetryQueue queue, string deviceId,
+        int generation, CancellationToken token)
+    {
+        while (!token.IsCancellationRequested && generation == Volatile.Read(ref _portalSessionGeneration))
         {
             try
             {
@@ -255,7 +273,7 @@ internal sealed class ManagementWorker : BackgroundService
     }
 
     private async Task CheckInPortalAsync(ManagementPaths paths, TelemetryQueue queue, string deviceId,
-        CancellationToken token, bool resultFollowup = false)
+        CancellationToken token)
     {
         ManagementConfig? config = null;
         if (File.Exists(paths.ManagementConfigPath))
@@ -321,14 +339,16 @@ internal sealed class ManagementWorker : BackgroundService
             telemetryQueue = queue.Snapshot(),
             acknowledgedPolicyIds = ReadAcknowledgedPolicyIds(paths.ActivePolicyPath),
             commandResults = ReadCommandResults(paths.CommandResultsDirectory),
-            waitMilliseconds = resultFollowup ? 0 : 5000,
+            waitMilliseconds = 5000,
             events = items.Select(x => x.Envelope).ToArray()
         };
 
         try
         {
             using var requestTimeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-            requestTimeout.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(config?.TimeoutSeconds ?? 30, 5, 120)));
+            var timeoutSeconds = Math.Clamp(config?.TimeoutSeconds ?? 15, 8, 30);
+            requestTimeout.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+            using var portalClient = new HttpClient { Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
             var payloadBytes = JsonSerializer.SerializeToUtf8Bytes(payload, _json);
             using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
             {
@@ -341,7 +361,20 @@ internal sealed class ManagementWorker : BackgroundService
             if (credential is not null)
                 SignPortalRequest(request, payloadBytes, credential);
             PortalCheckInResponse portalResponse;
-            using (var response = await _portalClient.SendAsync(request, requestTimeout.Token))
+            var sendTask = Task.Factory.StartNew(
+                    () => portalClient.SendAsync(request, requestTimeout.Token),
+                    CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)
+                .Unwrap();
+            var watchdog = Task.Delay(TimeSpan.FromSeconds(12), token);
+            if (await Task.WhenAny(sendTask, watchdog) != sendTask)
+            {
+                portalClient.CancelPendingRequests();
+                _ = sendTask.ContinueWith(static task => _ = task.Exception,
+                    CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted,
+                    TaskScheduler.Default);
+                throw new TimeoutException("Portal check-in transport did not complete within 12 seconds.");
+            }
+            using (var response = await sendTask)
             {
                 response.EnsureSuccessStatusCode();
                 portalResponse = await response.Content.ReadFromJsonAsync<PortalCheckInResponse>(
@@ -353,7 +386,7 @@ internal sealed class ManagementWorker : BackgroundService
             new PortalPolicyDeliveryStore(paths.InboxDirectory, _json)
                 .Store(TenantId, deviceId, portalResponse.Policies);
             DeleteCommandResults(paths.CommandResultsDirectory);
-            var executedCommands = await ExecuteRemoteCommandsAsync(paths, portalResponse.Commands, token);
+            _ = await ExecuteRemoteCommandsAsync(paths, portalResponse.Commands, token);
             foreach (var item in items)
                 queue.Complete(item);
             AtomicFile.WriteJson(paths.PortalStatusPath, new
@@ -363,8 +396,6 @@ internal sealed class ManagementWorker : BackgroundService
                 endpoint = endpoint.GetLeftPart(UriPartial.Authority),
                 deliveredCommands = portalResponse.Commands?.Count ?? 0
             }, _json);
-            if (executedCommands > 0 && !resultFollowup)
-                await CheckInPortalAsync(paths, queue, deviceId, token, resultFollowup: true);
         }
         catch (Exception ex)
         {
@@ -379,6 +410,10 @@ internal sealed class ManagementWorker : BackgroundService
             }, _json);
         }
     }
+
+    private void WritePortalLoopDiagnostic(ManagementPaths paths, string stage) =>
+        AtomicFile.WriteJson(Path.Combine(paths.Root, "portal-loop-diagnostic.json"),
+            new { timestampUtc = DateTimeOffset.UtcNow, stage }, _json);
 
     private async Task<int> ExecuteRemoteCommandsAsync(ManagementPaths paths,
         IReadOnlyList<PortalRemoteCommand>? commands, CancellationToken token)

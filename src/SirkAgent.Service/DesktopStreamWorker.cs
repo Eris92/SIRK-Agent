@@ -186,6 +186,12 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
             Interlocked.Increment(ref _inputCommands);
             return;
         }
+        if (string.Equals(Text(input, "action"), "streamStop", StringComparison.Ordinal))
+        {
+            Volatile.Write(ref _viewers, 0);
+            Interlocked.Increment(ref _inputCommands);
+            return;
+        }
         var sessionId = input.TryGetProperty("sessionId", out var selectedSession)
             ? selectedSession.GetInt32()
             : InteractiveSessionPipe.Resolve(null);

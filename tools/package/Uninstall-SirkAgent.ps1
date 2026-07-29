@@ -4,6 +4,7 @@
 param(
     [string]$InstallPath = "$env:ProgramFiles\SIRK Agent",
     [string]$ServiceName = "SirkAgent",
+    [string]$WatchdogServiceName = "SirkAgentWatchdog",
     [switch]$RemoveAgentData
 )
 
@@ -19,14 +20,16 @@ foreach ($key in @(
 )) {
     Remove-Item -LiteralPath $key -Recurse -Force -ErrorAction SilentlyContinue
 }
-$service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-if ($service) {
-    if ($service.Status -ne 'Stopped') {
-        Stop-Service -Name $ServiceName -Force
-        $service.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+foreach ($name in @($WatchdogServiceName, $ServiceName)) {
+    $service = Get-Service -Name $name -ErrorAction SilentlyContinue
+    if ($service) {
+        if ($service.Status -ne 'Stopped') {
+            Stop-Service -Name $name -Force
+            $service.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+        }
+        & sc.exe delete $name | Out-Null
+        Start-Sleep -Seconds 2
     }
-    & sc.exe delete $ServiceName | Out-Null
-    Start-Sleep -Seconds 2
 }
 
 if (Test-Path -LiteralPath $InstallPath) {

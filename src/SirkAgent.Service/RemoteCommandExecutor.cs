@@ -30,10 +30,15 @@ internal sealed class RemoteCommandExecutor
                     await ReadFileAsync(command, token),
                 "files.write" when Enabled(activePolicy, "remoteFilesEnabled") =>
                     await WriteFileAsync(command, token),
+                "desktop.sessions" when Enabled(activePolicy, "remoteDesktopEnabled") =>
+                    new RemoteCommandResult(command.CommandId, true, "DESKTOP_SESSIONS_OK", "",
+                        ToElement(InteractiveSessionPipe.Sessions())),
+                "desktop.monitors" when Enabled(activePolicy, "remoteDesktopEnabled") =>
+                    await ExecuteDesktopAsync(command, "monitors", token),
                 "desktop.snapshot" when Enabled(activePolicy, "remoteDesktopEnabled") =>
                     await ExecuteDesktopAsync(command, "snapshot", token),
                 "desktop.input" when Enabled(activePolicy, "remoteDesktopEnabled") =>
-                    await ExecuteDesktopAsync(command, "mouse", token),
+                    await ExecuteDesktopAsync(command, "input", token),
                 _ => Failure(command.CommandId, "OPERATION_NOT_ALLOWED",
                     "Operacja jest wyłączona przez podpisaną politykę urządzenia.")
             };
@@ -51,7 +56,8 @@ internal sealed class RemoteCommandExecutor
     private async Task<RemoteCommandResult> ExecuteDesktopAsync(PortalRemoteCommand command, string type,
         CancellationToken token)
     {
-        await using var pipe = new NamedPipeClientStream(".", "SIRK-Agent-Interactive-Session",
+        var sessionId = InteractiveSessionPipe.Resolve(OptionalNullableInt(command.Parameters, "sessionId"));
+        await using var pipe = new NamedPipeClientStream(".", InteractiveSessionPipe.Name(sessionId),
             PipeDirection.InOut, PipeOptions.Asynchronous, TokenImpersonationLevel.Impersonation);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
         timeout.CancelAfter(TimeSpan.FromSeconds(5));
@@ -64,15 +70,18 @@ internal sealed class RemoteCommandExecutor
         using var reader = new StreamReader(pipe, Encoding.UTF8, false, 4096, leaveOpen: true);
         await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, leaveOpen: true)
             { AutoFlush = true };
-        object request = type == "snapshot"
-            ? new { type }
-            : new
-            {
-                type,
-                action = OptionalString(command.Parameters, "action", "move", 32),
-                x = OptionalInt(command.Parameters, "x", 0),
-                y = OptionalInt(command.Parameters, "y", 0)
-            };
+        object request = new
+        {
+            type,
+            action = OptionalString(command.Parameters, "action", "", 32),
+            x = OptionalInt(command.Parameters, "x", 0),
+            y = OptionalInt(command.Parameters, "y", 0),
+            delta = OptionalInt(command.Parameters, "delta", 0),
+            monitorIndex = OptionalInt(command.Parameters, "monitorIndex", -1),
+            text = OptionalString(command.Parameters, "text", "", MaximumOutputBytes),
+            key = OptionalString(command.Parameters, "key", "", 32),
+            modifiers = OptionalString(command.Parameters, "modifiers", "", 64)
+        };
         await writer.WriteLineAsync(JsonSerializer.Serialize(request,
             new JsonSerializerOptions(JsonSerializerDefaults.Web)));
         var responseLine = await reader.ReadLineAsync(timeout.Token);
@@ -82,7 +91,9 @@ internal sealed class RemoteCommandExecutor
         var root = response.RootElement;
         var ok = root.TryGetProperty("ok", out var okValue) && okValue.ValueKind == JsonValueKind.True;
         var code = root.TryGetProperty("code", out var codeValue) ? codeValue.GetString() ?? "" : "";
-        return new RemoteCommandResult(command.CommandId, ok, code, "",
+        var output = root.TryGetProperty("error", out var errorValue) &&
+            errorValue.ValueKind == JsonValueKind.String ? errorValue.GetString() ?? "" : "";
+        return new RemoteCommandResult(command.CommandId, ok, code, output,
             ok ? root.Clone() : null);
     }
 
@@ -199,6 +210,10 @@ internal sealed class RemoteCommandExecutor
     private static int OptionalInt(JsonElement value, string name, int fallback) =>
         value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out var property) &&
         property.TryGetInt32(out var result) ? result : fallback;
+
+    private static int? OptionalNullableInt(JsonElement value, string name) =>
+        value.ValueKind == JsonValueKind.Object && value.TryGetProperty(name, out var property) &&
+        property.TryGetInt32(out var result) ? result : null;
 
     private static string OptionalString(JsonElement value, string name, string fallback, int maximumLength)
     {

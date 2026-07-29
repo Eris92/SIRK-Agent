@@ -255,7 +255,7 @@ internal sealed class RiskAnalyticsWorker : BackgroundService
         IStateProtector protector, TelemetryQueue telemetry, EvidenceChain evidence, string deviceId,
         CancellationToken cancellationToken)
     {
-        await using var pipe = new NamedPipeClientStream(".", "SIRK-Agent-Interactive-Session",
+        await using var pipe = new NamedPipeClientStream(".", InteractiveSessionPipe.ActiveName(),
             PipeDirection.InOut, PipeOptions.Asynchronous);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(10));

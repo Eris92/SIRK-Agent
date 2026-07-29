@@ -183,6 +183,30 @@ if (command == "enroll")
         new DpapiMachineStateProtector()).Save(new PortalCredential(
         3, tenantId, deviceId, checkInEndpoint.AbsoluteUri,
         enrollment.DeviceToken, enrollment.EnrolledAtUtc ?? DateTimeOffset.UtcNow, null, keyName));
+    var trustedPolicyKeysConfigured = false;
+    if (enrollment.TrustedPolicyKeys is { Count: > 0 })
+    {
+        if (enrollment.TrustedPolicyKeys.Count > 10)
+            throw new InvalidDataException("Enrollment returned too many trusted policy keys.");
+        foreach (var trustedKey in enrollment.TrustedPolicyKeys)
+        {
+            if (string.IsNullOrWhiteSpace(trustedKey.KeyId) || trustedKey.KeyId.Length > 128 ||
+                string.IsNullOrWhiteSpace(trustedKey.PublicKeyPem))
+                throw new InvalidDataException("Enrollment returned an invalid trusted policy key.");
+            using var policyKey = ECDsa.Create();
+            policyKey.ImportFromPem(trustedKey.PublicKeyPem);
+            if (policyKey.KeySize != 256)
+                throw new InvalidDataException("Enrollment policy key must use ECDSA P-256.");
+        }
+        var trustedPath = Path.Combine(agentRoot, "trusted-keys.json");
+        var temporaryTrustedPath = trustedPath + ".tmp-" + Guid.NewGuid().ToString("N");
+        await File.WriteAllTextAsync(temporaryTrustedPath,
+            JsonSerializer.Serialize(new { keys = enrollment.TrustedPolicyKeys },
+                new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }),
+            new UTF8Encoding(false));
+        File.Move(temporaryTrustedPath, trustedPath, overwrite: true);
+        trustedPolicyKeysConfigured = true;
+    }
     Console.WriteLine(JsonSerializer.Serialize(new
     {
         ok = true,
@@ -191,7 +215,8 @@ if (command == "enroll")
         endpoint = checkInEndpoint.AbsoluteUri,
         enrolledAtUtc = enrollment.EnrolledAtUtc,
         credentialProtected = true,
-        signingKeyExportable = false
+        signingKeyExportable = false,
+        trustedPolicyKeysConfigured
     }, jsonOptions));
     return;
 }
@@ -643,4 +668,6 @@ static string? GetOption(string[] values, string name)
 sealed record IntegrityManifest(IReadOnlyList<IntegrityManifestEntry> Files);
 sealed record IntegrityManifestEntry(string Path, string Sha256);
 sealed record EnrollmentResponse(bool Ok, string TenantId, string DeviceId, string DeviceToken,
-    string? CheckInEndpoint, DateTimeOffset? EnrolledAtUtc);
+    string? CheckInEndpoint, DateTimeOffset? EnrolledAtUtc,
+    IReadOnlyList<EnrollmentTrustedPolicyKey>? TrustedPolicyKeys);
+sealed record EnrollmentTrustedPolicyKey(string KeyId, string PublicKeyPem);

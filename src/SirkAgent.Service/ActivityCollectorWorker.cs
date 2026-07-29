@@ -192,7 +192,7 @@ internal sealed class ActivityCollectorWorker : BackgroundService
 
     private async Task<JsonElement?> InteractiveSnapshotAsync(CancellationToken cancellationToken)
     {
-        await using var pipe = new NamedPipeClientStream(".", "SIRK-Agent-Interactive-Session",
+        await using var pipe = new NamedPipeClientStream(".", InteractiveSessionPipe.ActiveName(),
             PipeDirection.InOut, PipeOptions.Asynchronous);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(5));

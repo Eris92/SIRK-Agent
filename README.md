@@ -188,9 +188,15 @@ C:\ProgramData\SIRK\Agent\endurance-report.html
 - rzeczywisty check-in `1.0.0` do lokalnego SIRK Portal,
 - brak prawa zapisu do katalogu danych dla zwyklych uzytkownikow.
 - Terminal, Pliki i Pulpit przez uwierzytelniony kanal SIRK Agent bez Mesh Agenta,
-- broker aktywnej sesji Windows z obrazem pulpitu i obsluga myszy,
+- broker każdej zalogowanej sesji Windows z wyborem monitora, obrazem pulpitu,
+  ruchem, przyciskami, przeciąganiem i kółkiem myszy, klawiaturą oraz schowkiem,
 - pobieranie i wysylanie plikow do 1 MiB,
 - niezalezny SIRK Portal HTTPS z per-device ECDSA i brokerem polecen.
+- produkcyjny klucz polityk ES256 przekazywany przy uwierzytelnionym enrollment,
+  bez lokalnego klucza testowego i bez resetowania Device ID lub poświadczenia,
+- pełne odczyty Security, Endurance, Activity, Risk, Quarantine i Telemetry Queue
+  przesyłane podczas check-in do zakładki Security > SIRK Agent,
+- grupowe pakiety enrollment dla instalacji cichej i trybu run-only.
 
 ## Aktualny etap 1.0.0
 

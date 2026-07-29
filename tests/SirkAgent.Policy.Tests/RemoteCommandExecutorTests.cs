@@ -64,6 +64,27 @@ public sealed class RemoteCommandExecutorTests
         }
     }
 
+    [Fact]
+    public async Task DesktopSessionsRequiresPolicyAndReturnsACollection()
+    {
+        var executor = new RemoteCommandExecutor(Json);
+        var command = Command("desktop.sessions", new { });
+
+        var denied = await executor.ExecuteAsync(command, null, CancellationToken.None);
+        Assert.False(denied.Ok);
+        Assert.Equal("OPERATION_NOT_ALLOWED", denied.Code);
+
+        var policy = JsonSerializer.SerializeToElement(new
+        {
+            settings = new { remoteDesktopEnabled = true }
+        }, Json);
+        var allowed = await executor.ExecuteAsync(command, policy, CancellationToken.None);
+
+        Assert.True(allowed.Ok);
+        Assert.Equal("DESKTOP_SESSIONS_OK", allowed.Code);
+        Assert.Equal(JsonValueKind.Array, allowed.Data!.Value.ValueKind);
+    }
+
     private static PortalRemoteCommand Command(string type, object parameters) =>
         new(Guid.NewGuid().ToString("N"), type, JsonSerializer.SerializeToElement(parameters, Json),
             DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddMinutes(5));

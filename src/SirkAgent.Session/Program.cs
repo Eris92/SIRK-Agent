@@ -14,11 +14,15 @@ namespace SirkAgent.Session;
 
 internal static class Program
 {
-    private const string PipeName = "SIRK-Agent-Interactive-Session";
+    private static readonly int SessionId = Process.GetCurrentProcess().SessionId;
+    private static readonly string PipeName = "SIRK-Agent-Interactive-Session-" + SessionId;
     private const uint MouseEventLeftDown = 0x0002;
     private const uint MouseEventLeftUp = 0x0004;
     private const uint MouseEventRightDown = 0x0008;
     private const uint MouseEventRightUp = 0x0010;
+    private const uint MouseEventMiddleDown = 0x0020;
+    private const uint MouseEventMiddleUp = 0x0040;
+    private const uint MouseEventWheel = 0x0800;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private static DateTimeOffset _lastActivitySampleUtc = DateTimeOffset.UtcNow;
     private static System.Drawing.Point? _lastCursorPosition;
@@ -26,6 +30,9 @@ internal static class Program
     [STAThread]
     private static async Task Main()
     {
+        using var singleInstance = new Mutex(true, "Local\\SIRK-Agent-Interactive-Session-" + SessionId,
+            out var ownsMutex);
+        if (!ownsMutex) return;
         while (true)
         {
             try
@@ -47,8 +54,9 @@ internal static class Program
                 {
                     response = request?.Type switch
                     {
-                        "snapshot" => Snapshot(),
-                        "mouse" => Mouse(request),
+                        "monitors" => Monitors(),
+                        "snapshot" => Snapshot(request.MonitorIndex ?? -1),
+                        "mouse" or "input" => Input(request),
                         "activity" => Activity(),
                         _ => new SessionResponse(false, "SESSION_REQUEST_INVALID", null, null, null)
                     };
@@ -59,7 +67,7 @@ internal static class Program
                         request?.Type == "snapshot"
                             ? "DESKTOP_CAPTURE_UNAVAILABLE"
                             : "SESSION_OPERATION_FAILED",
-                        null, null, null);
+                        null, null, null, Error: error.Message);
                     LogError(error);
                 }
                 await writer.WriteLineAsync(JsonSerializer.Serialize(response, Json));
@@ -112,9 +120,33 @@ internal static class Program
         return authorized;
     }
 
-    private static SessionResponse Snapshot()
+    private static SessionResponse Monitors()
     {
-        var bounds = SystemInformation.VirtualScreen;
+        var monitors = Screen.AllScreens.Select((screen, index) => new
+        {
+            index,
+            name = screen.DeviceName,
+            primary = screen.Primary,
+            x = screen.Bounds.X,
+            y = screen.Bounds.Y,
+            width = screen.Bounds.Width,
+            height = screen.Bounds.Height
+        }).ToArray();
+        return new SessionResponse(true, "DESKTOP_MONITORS_OK", null, null, null,
+            JsonSerializer.SerializeToElement(new { sessionId = SessionId, monitors }, Json));
+    }
+
+    private static Rectangle CaptureBounds(int monitorIndex)
+    {
+        if (monitorIndex < 0) return SystemInformation.VirtualScreen;
+        var screens = Screen.AllScreens;
+        if (monitorIndex >= screens.Length) throw new InvalidDataException("Wybrany monitor nie istnieje.");
+        return screens[monitorIndex].Bounds;
+    }
+
+    private static SessionResponse Snapshot(int monitorIndex)
+    {
+        var bounds = CaptureBounds(monitorIndex);
         if (bounds.Width <= 0 || bounds.Height <= 0)
             throw new InvalidOperationException("Aktywna sesja nie udostępnia ekranu.");
         using var source = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format24bppRgb);
@@ -144,14 +176,55 @@ internal static class Program
         parameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 65L);
         bitmap.Save(output, encoder, parameters);
         return new SessionResponse(true, "DESKTOP_SNAPSHOT_OK", Convert.ToBase64String(output.ToArray()),
-            bounds.Width, bounds.Height);
+            bounds.Width, bounds.Height, JsonSerializer.SerializeToElement(new
+            {
+                sessionId = SessionId,
+                monitorIndex,
+                originX = bounds.Left,
+                originY = bounds.Top
+            }, Json));
     }
 
-    private static SessionResponse Mouse(SessionRequest request)
+    private static SessionResponse Input(SessionRequest request)
     {
-        var bounds = SystemInformation.VirtualScreen;
+        if (request.Action == "clipboardSet")
+        {
+            var text = request.Text ?? "";
+            if (text.Length > 1024 * 1024) throw new InvalidDataException("Schowek przekracza limit 1 MiB.");
+            RunSta(() =>
+            {
+                if (text.Length == 0) Clipboard.Clear();
+                else Clipboard.SetText(text);
+                return true;
+            });
+            return new SessionResponse(true, "DESKTOP_CLIPBOARD_SET_OK", null, null, null);
+        }
+        if (request.Action == "clipboardGet")
+        {
+            var text = RunSta(() => Clipboard.ContainsText() ? Clipboard.GetText() : "");
+            if (text.Length > 1024 * 1024) text = text[..(1024 * 1024)];
+            return new SessionResponse(true, "DESKTOP_CLIPBOARD_GET_OK", null, null, null,
+                JsonSerializer.SerializeToElement(new { text }, Json));
+        }
+        if (request.Action == "text")
+        {
+            RunSta(() => { SendKeys.SendWait(EscapeSendKeys(request.Text ?? "")); return true; });
+            return new SessionResponse(true, "DESKTOP_TEXT_OK", null, null, null);
+        }
+        if (request.Action == "key")
+        {
+            RunSta(() => { SendKeys.SendWait(KeySequence(request.Key, request.Modifiers)); return true; });
+            return new SessionResponse(true, "DESKTOP_KEY_OK", null, null, null);
+        }
+
+        var allowedMouseActions = new[] { "move", "click", "doubleClick", "rightClick", "middleClick",
+            "leftDown", "leftUp", "rightDown", "rightUp", "wheel" };
+        if (!allowedMouseActions.Contains(request.Action, StringComparer.Ordinal))
+            throw new InvalidDataException("Niedozwolona operacja myszy.");
+        var bounds = CaptureBounds(request.MonitorIndex ?? -1);
         var x = Math.Clamp(request.X ?? 0, 0, Math.Max(0, bounds.Width - 1)) + bounds.Left;
         var y = Math.Clamp(request.Y ?? 0, 0, Math.Max(0, bounds.Height - 1)) + bounds.Top;
+        var previous = Cursor.Position;
         Cursor.Position = new Point(x, y);
         if (request.Action is "click" or "doubleClick")
         {
@@ -167,7 +240,75 @@ internal static class Program
             MouseEvent(MouseEventRightDown);
             MouseEvent(MouseEventRightUp);
         }
-        return new SessionResponse(true, "DESKTOP_INPUT_OK", null, bounds.Width, bounds.Height);
+        else if (request.Action == "middleClick")
+        {
+            MouseEvent(MouseEventMiddleDown);
+            MouseEvent(MouseEventMiddleUp);
+        }
+        else if (request.Action == "leftDown") MouseEvent(MouseEventLeftDown);
+        else if (request.Action == "leftUp") MouseEvent(MouseEventLeftUp);
+        else if (request.Action == "rightDown") MouseEvent(MouseEventRightDown);
+        else if (request.Action == "rightUp") MouseEvent(MouseEventRightUp);
+        else if (request.Action == "wheel")
+            mouse_event(MouseEventWheel, 0, 0, unchecked((uint)(request.Delta ?? 0)), UIntPtr.Zero);
+        return new SessionResponse(true, "DESKTOP_INPUT_OK", null, bounds.Width, bounds.Height,
+            JsonSerializer.SerializeToElement(new
+            {
+                sessionId = SessionId,
+                action = request.Action,
+                x = x - bounds.Left,
+                y = y - bounds.Top,
+                previousX = previous.X - bounds.Left,
+                previousY = previous.Y - bounds.Top
+            }, Json));
+    }
+
+    private static T RunSta<T>(Func<T> action)
+    {
+        T? result = default;
+        Exception? failure = null;
+        using var completed = new ManualResetEventSlim();
+        var thread = new Thread(() =>
+        {
+            try { result = action(); }
+            catch (Exception ex) { failure = ex; }
+            finally { completed.Set(); }
+        })
+        {
+            IsBackground = true,
+            Name = "SIRK Agent interactive STA"
+        };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        if (!completed.Wait(TimeSpan.FromSeconds(10)))
+            throw new TimeoutException("Operacja sesji interaktywnej przekroczyła limit czasu.");
+        if (failure is not null) throw new InvalidOperationException(failure.Message, failure);
+        return result!;
+    }
+
+    private static string EscapeSendKeys(string value) => value
+        .Replace("{", "{{}").Replace("}", "{}}")
+        .Replace("+", "{+}").Replace("^", "{^}").Replace("%", "{%}").Replace("~", "{~}");
+
+    private static string KeySequence(string? key, string? modifiers)
+    {
+        var allowed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Enter"] = "{ENTER}", ["Tab"] = "{TAB}", ["Escape"] = "{ESC}", ["Backspace"] = "{BS}",
+            ["Delete"] = "{DEL}", ["Up"] = "{UP}", ["Down"] = "{DOWN}", ["Left"] = "{LEFT}",
+            ["Right"] = "{RIGHT}", ["Home"] = "{HOME}", ["End"] = "{END}", ["PageUp"] = "{PGUP}",
+            ["PageDown"] = "{PGDN}", ["F1"] = "{F1}", ["F2"] = "{F2}", ["F3"] = "{F3}",
+            ["F4"] = "{F4}", ["F5"] = "{F5}", ["F6"] = "{F6}", ["F7"] = "{F7}",
+            ["F8"] = "{F8}", ["F9"] = "{F9}", ["F10"] = "{F10}", ["F11"] = "{F11}", ["F12"] = "{F12}"
+        };
+        if (!allowed.TryGetValue(key ?? "", out var sequence))
+            throw new InvalidDataException("Niedozwolony klawisz specjalny.");
+        var values = (modifiers ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var prefix = "";
+        if (values.Contains("Control", StringComparer.OrdinalIgnoreCase)) prefix += "^";
+        if (values.Contains("Alt", StringComparer.OrdinalIgnoreCase)) prefix += "%";
+        if (values.Contains("Shift", StringComparer.OrdinalIgnoreCase)) prefix += "+";
+        return prefix + sequence;
     }
 
     private static SessionResponse Activity()
@@ -300,9 +441,10 @@ internal static class Program
         IntPtr source, int sourceX, int sourceY, uint operation);
 }
 
-internal sealed record SessionRequest(string Type, string? Action, int? X, int? Y);
+internal sealed record SessionRequest(string Type, string? Action, int? X, int? Y, int? Delta, int? MonitorIndex,
+    string? Text, string? Key, string? Modifiers);
 internal sealed record SessionResponse(bool Ok, string Code, string? ImageBase64, int? Width, int? Height,
-    JsonElement? Data = null);
+    JsonElement? Data = null, string? Error = null);
 
 [StructLayout(LayoutKind.Sequential)]
 internal struct LastInputInfo

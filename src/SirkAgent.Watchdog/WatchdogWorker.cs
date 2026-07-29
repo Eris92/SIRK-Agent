@@ -163,7 +163,7 @@ internal sealed class WatchdogWorker : BackgroundService
             incidentId = Guid.NewGuid(), timestampUtc = now, sample.Code, sample.Detail,
             sample.ProcessId, sample.CpuPercent, sample.PrivateMemoryBytes,
             sample.HeartbeatAgeSeconds, action, error
-        }, _json);
+        });
         File.AppendAllText(Path.Combine(root, "watchdog-incidents.jsonl"), value + Environment.NewLine);
     }
 

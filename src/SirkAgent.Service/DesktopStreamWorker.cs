@@ -27,6 +27,11 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
     private int _forceFullFrame = 1;
     private int _monitorIndex;
     private int _sessionId = -1;
+    private int _targetKbps = 1000;
+    private int _profileMaxWidth = 1920;
+    private int _profileQuality = 72;
+    private readonly Queue<(DateTimeOffset At, int Bytes)> _bandwidthWindow = new();
+    private DateTimeOffset _lastAdaptiveChange = DateTimeOffset.MinValue;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -165,6 +170,9 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
         {
             Volatile.Write(ref _maxWidth, Math.Clamp(Integer(input, "maxWidth"), 640, 1920));
             Volatile.Write(ref _quality, Math.Clamp(Integer(input, "quality"), 25, 80));
+            Volatile.Write(ref _profileMaxWidth, Volatile.Read(ref _maxWidth));
+            Volatile.Write(ref _profileQuality, Volatile.Read(ref _quality));
+            Volatile.Write(ref _targetKbps, Math.Clamp(Integer(input, "targetKbps"), 300, 8000));
             Volatile.Write(ref _monitorIndex, Math.Clamp(Integer(input, "monitorIndex"), 0, 15));
             var requestedSession = Integer(input, "sessionId");
             Volatile.Write(ref _sessionId, requestedSession is >= 0 and <= 65535 ? requestedSession : -1);
@@ -236,6 +244,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                 using var published = JsonDocument.Parse(await uploaded.Content.ReadAsByteArrayAsync(token));
                 var viewers = published.RootElement.TryGetProperty("viewers", out var count) ? count.GetInt32() : 0;
                 Volatile.Write(ref _viewers, viewers);
+                var bitrateKbps = AdaptToBandwidth(frame.Bytes.Length);
                 AtomicFile.WriteJson(Path.Combine(paths.Root, "desktop-stream-status.json"), new
                 {
                     ok = true, timestampUtc = DateTimeOffset.UtcNow, frameBytes = frame.Bytes.Length, viewers,
@@ -244,7 +253,9 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                     queueCapacity = 1, latestFrameWins = true,
                     inputCommands = Interlocked.Read(ref _inputCommands),
                     maxWidth = Volatile.Read(ref _maxWidth),
-                    quality = Volatile.Read(ref _quality)
+                    quality = Volatile.Read(ref _quality),
+                    targetKbps = Volatile.Read(ref _targetKbps),
+                    bitrateKbps
                 }, Json);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
@@ -255,6 +266,38 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                 logger.LogDebug(error, "Direct desktop upload failed.");
             }
         }
+    }
+
+    private int AdaptToBandwidth(int bytes)
+    {
+        var now = DateTimeOffset.UtcNow;
+        _bandwidthWindow.Enqueue((now, bytes));
+        while (_bandwidthWindow.Count > 0 && now - _bandwidthWindow.Peek().At > TimeSpan.FromSeconds(2))
+            _bandwidthWindow.Dequeue();
+        if (_bandwidthWindow.Count < 2) return 0;
+        var elapsed = Math.Max(0.1, (now - _bandwidthWindow.Peek().At).TotalSeconds);
+        var bitrateKbps = (int)Math.Round(_bandwidthWindow.Sum(value => (long)value.Bytes) * 8d /
+                                          elapsed / 1000d);
+        if (elapsed < 1 || now - _lastAdaptiveChange < TimeSpan.FromMilliseconds(500))
+            return bitrateKbps;
+        var target = Volatile.Read(ref _targetKbps);
+        var quality = Volatile.Read(ref _quality);
+        var width = Volatile.Read(ref _maxWidth);
+        if (bitrateKbps > target * 1.1)
+        {
+            if (quality > 30) Volatile.Write(ref _quality, Math.Max(25, quality - 3));
+            else if (width > 640) Volatile.Write(ref _maxWidth, Math.Max(640, width - 160));
+            _lastAdaptiveChange = now;
+        }
+        else if (bitrateKbps < target * 0.55)
+        {
+            var requestedWidth = Volatile.Read(ref _profileMaxWidth);
+            var requestedQuality = Volatile.Read(ref _profileQuality);
+            if (width < requestedWidth) Volatile.Write(ref _maxWidth, Math.Min(requestedWidth, width + 160));
+            else if (quality < requestedQuality) Volatile.Write(ref _quality, Math.Min(requestedQuality, quality + 1));
+            _lastAdaptiveChange = now;
+        }
+        return bitrateKbps;
     }
 
     private static string Number(JsonElement data, string name) =>

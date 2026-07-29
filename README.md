@@ -240,6 +240,7 @@ schemas/
 - [Management Plane Health](docs/MANAGEMENT-PLANE-HEALTH.md)
 - [Browser Bridge](docs/BROWSER-BRIDGE.md)
 - [Remote Desktop low latency architecture](docs/REMOTE-DESKTOP-PERFORMANCE.md)
+- [Watchdog and network recovery](docs/WATCHDOG-AND-NETWORK-RECOVERY.md)
 
 ## Polecenie do wznowienia w nowym oknie
 

@@ -4,6 +4,7 @@
 param(
     [string]$InstallPath = "$env:ProgramFiles\SIRK\Agent",
     [string]$ServiceName = "SirkAgent",
+    [string]$WatchdogServiceName = "SirkAgentWatchdog",
     [switch]$NoStart
 )
 
@@ -11,6 +12,7 @@ $ErrorActionPreference = 'Stop'
 $source = Split-Path -Parent $MyInvocation.MyCommand.Path
 $exeName = 'SirkAgent.Service.exe'
 $sourceExe = Join-Path $source $exeName
+$watchdogExeName = 'SirkAgent.Watchdog.exe'
 
 if (-not (Test-Path -LiteralPath $sourceExe)) {
     throw "Brak pliku $exeName w katalogu pakietu: $source"
@@ -19,6 +21,15 @@ if (-not (Test-Path -LiteralPath $sourceExe)) {
 $runtime = & dotnet --list-runtimes 2>$null
 if (-not ($runtime -match '^Microsoft\.NETCore\.App 8\.')) {
     throw 'Brak Microsoft .NET 8 Runtime x64. Zainstaluj: winget install Microsoft.DotNet.Runtime.8'
+}
+
+$existingWatchdog = Get-Service -Name $WatchdogServiceName -ErrorAction SilentlyContinue
+if ($existingWatchdog) {
+    if ($existingWatchdog.Status -ne 'Stopped') {
+        Stop-Service -Name $WatchdogServiceName -Force
+        $existingWatchdog.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+    }
+    & sc.exe delete $WatchdogServiceName | Out-Null
 }
 
 $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
@@ -102,10 +113,24 @@ $targetExe = Join-Path $InstallPath $exeName
 & sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/15000/restart/60000 | Out-Null
 & sc.exe failureflag $ServiceName 1 | Out-Null
 
+$watchdogExe = Join-Path $InstallPath $watchdogExeName
+if (-not (Test-Path -LiteralPath $watchdogExe)) {
+    throw "Brak pliku $watchdogExeName w pakiecie."
+}
+& sc.exe create $WatchdogServiceName binPath= ('"{0}"' -f $watchdogExe) `
+    start= delayed-auto DisplayName= 'SIRK Agent Watchdog' | Out-Null
+& sc.exe description $WatchdogServiceName `
+    'Minimal watchdog, recovery and signed update coordinator for SIRK Agent.' | Out-Null
+& sc.exe failure $WatchdogServiceName reset= 86400 `
+    actions= restart/5000/restart/15000/restart/60000 | Out-Null
+& sc.exe failureflag $WatchdogServiceName 1 | Out-Null
+
 if (-not $NoStart) {
     Start-Service -Name $ServiceName
     (Get-Service -Name $ServiceName).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+    Start-Service -Name $WatchdogServiceName
+    (Get-Service -Name $WatchdogServiceName).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
 }
 
 Write-Host "SIRK Agent zainstalowany: $InstallPath" -ForegroundColor Green
-Get-Service -Name $ServiceName | Format-Table Name, Status, StartType -AutoSize
+Get-Service -Name $ServiceName, $WatchdogServiceName | Format-Table Name, Status, StartType -AutoSize

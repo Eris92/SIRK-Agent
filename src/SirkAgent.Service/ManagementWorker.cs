@@ -17,11 +17,16 @@ internal sealed class ManagementWorker : BackgroundService
     private const string TenantId = "investa";
     private const string PipeName = "SIRK-Agent-Control";
     private readonly ILogger<ManagementWorker> _logger;
+    private readonly PortalReconnectSignal _reconnectSignal;
     private readonly JsonSerializerOptions _json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private readonly SemaphoreSlim _processLock = new(1, 1);
     private int _portalSessionGeneration;
 
-    public ManagementWorker(ILogger<ManagementWorker> logger) => _logger = logger;
+    public ManagementWorker(ILogger<ManagementWorker> logger, PortalReconnectSignal reconnectSignal)
+    {
+        _logger = logger;
+        _reconnectSignal = reconnectSignal;
+    }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -86,7 +91,24 @@ internal sealed class ManagementWorker : BackgroundService
         {
             try
             {
-                await CheckInPortalAsync(paths, queue, deviceId, token);
+                var observedNetwork = _reconnectSignal.Generation;
+                using var cycle = CancellationTokenSource.CreateLinkedTokenSource(token);
+                using var networkWait = CancellationTokenSource.CreateLinkedTokenSource(token);
+                var checkIn = CheckInPortalAsync(paths, queue, deviceId, cycle.Token);
+                var networkChange = _reconnectSignal.WaitForChangeAsync(observedNetwork, networkWait.Token);
+                var completed = await Task.WhenAny(checkIn, networkChange);
+                if (completed == networkChange)
+                {
+                    cycle.Cancel();
+                    try { await checkIn; }
+                    catch (OperationCanceledException) when (cycle.IsCancellationRequested) { }
+                    WritePortalLoopDiagnostic(paths, "network-change-reconnect");
+                    continue;
+                }
+                networkWait.Cancel();
+                try { await networkChange; }
+                catch (OperationCanceledException) when (networkWait.IsCancellationRequested) { }
+                await checkIn;
                 var status = ReadJson(paths.PortalStatusPath);
                 var connected = status is { ValueKind: JsonValueKind.Object } &&
                                 status.Value.TryGetProperty("ok", out var ok) &&
@@ -328,6 +350,8 @@ internal sealed class ManagementWorker : BackgroundService
             heartbeat = ReadJson(paths.HeartbeatPath),
             management = ReadJson(paths.ManagementStatePath),
             runtimeHealth = ReadJson(Path.Combine(paths.Root, "runtime-health.json")),
+            watchdog = ReadJson(Path.Combine(paths.Root, "Watchdog", "watchdog-status.json")),
+            network = ReadJson(Path.Combine(paths.Root, "network-status.json")),
             security = ReadJson(Path.Combine(paths.Root, "security-state.json")),
             quarantine = ReadJson(Path.Combine(paths.Root, "quarantine-status.json")),
             endurance = ReadJson(Path.Combine(paths.Root, "endurance-summary.json")),

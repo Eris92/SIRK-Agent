@@ -18,5 +18,7 @@ builder.Services.AddHostedService<ActivityCollectorWorker>();
 builder.Services.AddHostedService<FileActivityWorker>();
 builder.Services.AddHostedService<BrowserBridgeWorker>();
 builder.Services.AddHostedService<RiskAnalyticsWorker>();
+builder.Services.AddSingleton<PortalReconnectSignal>();
+builder.Services.AddHostedService<NetworkChangeWorker>();
 
 await builder.Build().RunAsync();

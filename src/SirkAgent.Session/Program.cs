@@ -1,4 +1,5 @@
 using System.Drawing.Imaging;
+using System.Drawing.Drawing2D;
 using System.Collections.Specialized;
 using System.Diagnostics;
 using System.IO;
@@ -27,6 +28,8 @@ internal static class Program
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private static DateTimeOffset _lastActivitySampleUtc = DateTimeOffset.UtcNow;
     private static System.Drawing.Point? _lastCursorPosition;
+    private static readonly object CaptureSync = new();
+    private static readonly Dictionary<int, DxgiDesktopCapture> DxgiCaptures = [];
 
     [STAThread]
     private static async Task Main()
@@ -159,26 +162,9 @@ internal static class Program
         maxWidth = Math.Clamp(maxWidth, 640, 1920);
         quality = Math.Clamp(quality, 25, 80);
         var scale = Math.Min(1d, Math.Min((double)maxWidth / bounds.Width, 1080d / bounds.Height));
-        using var bitmap = new Bitmap((int)(bounds.Width * scale), (int)(bounds.Height * scale),
-            PixelFormat.Format24bppRgb);
         var captureTimer = Stopwatch.StartNew();
-        using (var graphics = Graphics.FromImage(bitmap))
-        {
-            var destination = graphics.GetHdc();
-            var screen = GetDC(IntPtr.Zero);
-            try
-            {
-                _ = SetStretchBltMode(destination, 3);
-                if (screen == IntPtr.Zero || !StretchBlt(destination, 0, 0, bitmap.Width, bitmap.Height,
-                        screen, bounds.Left, bounds.Top, bounds.Width, bounds.Height, 0x00CC0020))
-                    throw new InvalidOperationException("Nie udało się przechwycić aktywnego pulpitu.");
-            }
-            finally
-            {
-                if (screen != IntPtr.Zero) ReleaseDC(IntPtr.Zero, screen);
-                graphics.ReleaseHdc(destination);
-            }
-        }
+        using var bitmap = CaptureDesktopBitmap(monitorIndex, bounds, scale, out var captureBackend,
+            out var dirtyRectangles, out var accumulatedFrames);
         captureTimer.Stop();
         var encodeTimer = Stopwatch.StartNew();
         using var output = new MemoryStream();
@@ -205,9 +191,80 @@ internal static class Program
                 encodeMilliseconds = Math.Round(encodeTimer.Elapsed.TotalMilliseconds, 2),
                 agentFrameMilliseconds = Math.Round(totalTimer.Elapsed.TotalMilliseconds, 2),
                 encodedBytes = bytes.Length,
-                captureBackend = "GDI_STRETCHBLT",
+                captureBackend,
+                dirtyRectangleCount = dirtyRectangles.Length,
+                dirtyPixelRatio = Math.Round(DirtyPixelRatio(dirtyRectangles, bounds.Width, bounds.Height), 6),
+                accumulatedFrames,
                 encoding = "JPEG"
             }, Json));
+    }
+
+    private static Bitmap CaptureDesktopBitmap(int monitorIndex, Rectangle bounds, double scale,
+        out string backend, out Rectangle[] dirtyRectangles, out uint accumulatedFrames)
+    {
+        try
+        {
+            var outputIndex = monitorIndex < 0
+                ? Array.FindIndex(Screen.AllScreens, value => value.Primary)
+                : monitorIndex;
+            outputIndex = Math.Max(0, outputIndex);
+            DxgiFrame frame;
+            lock (CaptureSync)
+            {
+                if (!DxgiCaptures.TryGetValue(outputIndex, out var capture))
+                {
+                    capture = new DxgiDesktopCapture(outputIndex);
+                    DxgiCaptures[outputIndex] = capture;
+                }
+                frame = capture.Capture(16);
+            }
+            using (frame)
+            {
+                var target = new Bitmap((int)(bounds.Width * scale), (int)(bounds.Height * scale),
+                    PixelFormat.Format24bppRgb);
+                using var graphics = Graphics.FromImage(target);
+                graphics.CompositingMode = CompositingMode.SourceCopy;
+                graphics.InterpolationMode = InterpolationMode.Bilinear;
+                graphics.PixelOffsetMode = PixelOffsetMode.HighSpeed;
+                graphics.DrawImage(frame.Bitmap, new Rectangle(0, 0, target.Width, target.Height),
+                    new Rectangle(0, 0, frame.Bitmap.Width, frame.Bitmap.Height), GraphicsUnit.Pixel);
+                backend = "DXGI_DESKTOP_DUPLICATION";
+                dirtyRectangles = frame.DirtyRectangles;
+                accumulatedFrames = frame.AccumulatedFrames;
+                return target;
+            }
+        }
+        catch
+        {
+            backend = "GDI_STRETCHBLT_FALLBACK";
+            dirtyRectangles = [new Rectangle(0, 0, bounds.Width, bounds.Height)];
+            accumulatedFrames = 1;
+            var bitmap = new Bitmap((int)(bounds.Width * scale), (int)(bounds.Height * scale),
+                PixelFormat.Format24bppRgb);
+            using var graphics = Graphics.FromImage(bitmap);
+            var destination = graphics.GetHdc();
+            var screen = GetDC(IntPtr.Zero);
+            try
+            {
+                _ = SetStretchBltMode(destination, 3);
+                if (screen == IntPtr.Zero || !StretchBlt(destination, 0, 0, bitmap.Width, bitmap.Height,
+                        screen, bounds.Left, bounds.Top, bounds.Width, bounds.Height, 0x00CC0020))
+                    throw new InvalidOperationException("Nie udało się przechwycić aktywnego pulpitu.");
+            }
+            finally
+            {
+                if (screen != IntPtr.Zero) ReleaseDC(IntPtr.Zero, screen);
+                graphics.ReleaseHdc(destination);
+            }
+            return bitmap;
+        }
+    }
+
+    private static double DirtyPixelRatio(IEnumerable<Rectangle> rectangles, int width, int height)
+    {
+        var total = Math.Max(1L, (long)width * height);
+        var dirty = rectangles.Sum(value => Math.Max(0L, (long)value.Width * value.Height));
+        return Math.Min(1d, (double)dirty / total);
     }
 
     private static SessionResponse Input(SessionRequest request)

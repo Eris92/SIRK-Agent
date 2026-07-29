@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [string]$RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
-    [string]$Version = '1.0.3',
+    [string]$Version = '1.0.4',
     [Parameter(Mandatory)]
     [ValidatePattern('^[A-Fa-f0-9]{40}$')]
     [string]$SigningThumbprint
@@ -27,7 +27,8 @@ $projects = @(
     'src/SirkAgent.Report/SirkAgent.Report.csproj',
     'src/SirkAgent.Cli/SirkAgent.Cli.csproj',
     'src/SirkAgent.Session/SirkAgent.Session.csproj',
-    'src/SirkAgent.BrowserHost/SirkAgent.BrowserHost.csproj'
+    'src/SirkAgent.BrowserHost/SirkAgent.BrowserHost.csproj',
+    'src/SirkAgent.Watchdog/SirkAgent.Watchdog.csproj'
 )
 $commit = (& git -C $RepositoryRoot rev-parse --short=12 HEAD).Trim()
 foreach ($project in $projects) {

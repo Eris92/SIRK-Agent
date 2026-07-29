@@ -34,7 +34,7 @@ internal sealed class DxgiDesktopCapture : IDisposable
     {
         var result = _duplication.AcquireNextFrame(timeoutMilliseconds, out var frameInfo, out var resource);
         if (result == Vortice.DXGI.ResultCode.WaitTimeout && _lastBitmap is not null)
-            return new DxgiFrame((Bitmap)_lastBitmap.Clone(), [], 0, false, 0, 0);
+            return new DxgiFrame((Bitmap)_lastBitmap.Clone(), [], [], 0, false, 0, 0);
         result.CheckError();
         try
         {
@@ -60,8 +60,9 @@ internal sealed class DxgiDesktopCapture : IDisposable
                 finally { bitmap.UnlockBits(data); }
                 _lastBitmap?.Dispose();
                 _lastBitmap = (Bitmap)bitmap.Clone();
+                var moves = MoveRectangles(frameInfo.TotalMetadataBufferSize);
                 var dirty = DirtyRectangles(frameInfo.TotalMetadataBufferSize);
-                return new DxgiFrame(bitmap, dirty, frameInfo.AccumulatedFrames,
+                return new DxgiFrame(bitmap, dirty, moves, frameInfo.AccumulatedFrames,
                     frameInfo.PointerPosition.Visible, frameInfo.PointerPosition.Position.X,
                     frameInfo.PointerPosition.Position.Y);
             }
@@ -84,6 +85,20 @@ internal sealed class DxgiDesktopCapture : IDisposable
         if (result.Failure || required == 0) return [];
         return values.Take((int)(required / (uint)Marshal.SizeOf<Vortice.RawRect>()))
             .Select(value => Rectangle.FromLTRB(value.Left, value.Top, value.Right, value.Bottom)).ToArray();
+    }
+
+    private DesktopMove[] MoveRectangles(uint metadataBytes)
+    {
+        if (metadataBytes == 0) return [];
+        var size = Marshal.SizeOf<OutduplMoveRect>();
+        var values = new OutduplMoveRect[Math.Max(1, (int)(metadataBytes / (uint)size))];
+        var result = _duplication.GetFrameMoveRects((uint)(values.Length * size), values, out var required);
+        if (result.Failure || required == 0) return [];
+        return values.Take((int)(required / (uint)size)).Select(value => new DesktopMove(
+            value.SourcePoint.X, value.SourcePoint.Y,
+            value.DestinationRect.Left, value.DestinationRect.Top,
+            value.DestinationRect.Right - value.DestinationRect.Left,
+            value.DestinationRect.Bottom - value.DestinationRect.Top)).ToArray();
     }
 
     private void EnsureStaging(int width, int height, Format format)
@@ -120,8 +135,11 @@ internal sealed class DxgiDesktopCapture : IDisposable
     private static extern void CopyMemory(IntPtr destination, IntPtr source, nuint length);
 }
 
-internal sealed record DxgiFrame(Bitmap Bitmap, Rectangle[] DirtyRectangles, uint AccumulatedFrames,
+internal sealed record DxgiFrame(Bitmap Bitmap, Rectangle[] DirtyRectangles, DesktopMove[] MoveRectangles,
+    uint AccumulatedFrames,
     bool PointerVisible, int PointerX, int PointerY) : IDisposable
 {
     public void Dispose() => Bitmap.Dispose();
 }
+
+internal sealed record DesktopMove(int SourceX, int SourceY, int X, int Y, int Width, int Height);

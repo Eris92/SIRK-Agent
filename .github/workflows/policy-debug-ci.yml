@@ -26,12 +26,12 @@ jobs:
           dotnet publish src/SirkAgent.Service/SirkAgent.Service.csproj -c Release -r win-x64 --self-contained false -o artifacts/runtime
           dotnet publish src/SirkAgent.Report/SirkAgent.Report.csproj -c Release -r win-x64 --self-contained false -o artifacts/runtime
           dotnet publish src/SirkAgent.Cli/SirkAgent.Cli.csproj -c Release -r win-x64 --self-contained false -o artifacts/runtime
-          dotnet publish src/SirkAgent.Session/SirkAgent.Session.csproj -c Release -r win-x64 --self-contained false -o artifacts/runtime
+          dotnet publish src/SirkAgent.Session/SirkAgent.Session.csproj -c Release -r win-x64 --self-contained false -o artifacts/runtime/Session
           dotnet publish src/SirkAgent.BrowserHost/SirkAgent.BrowserHost.csproj -c Release -r win-x64 --self-contained false -o artifacts/runtime
           dotnet publish src/SirkAgent.Watchdog/SirkAgent.Watchdog.csproj -c Release -r win-x64 --self-contained false -o artifacts/runtime
           Copy-Item tools/package/*.ps1 artifacts/runtime/ -Force
           Copy-Item browser-extension artifacts/runtime/BrowserExtension -Recurse -Force
-          $protected = @('SirkAgent.Service.exe','SirkAgent.Service.dll','SirkAgent.Policy.dll','SirkAgent.Report.exe','sirkctl.exe','SirkAgent.Session.exe','SirkAgent.Session.dll','SirkAgent.BrowserHost.exe','SirkAgent.BrowserHost.dll','SirkAgent.Watchdog.exe','SirkAgent.Watchdog.dll')
+          $protected = @('SirkAgent.Service.exe','SirkAgent.Service.dll','SirkAgent.Policy.dll','SirkAgent.Report.exe','sirkctl.exe','Session/SirkAgent.Session.exe','Session/SirkAgent.Session.dll','SirkAgent.BrowserHost.exe','SirkAgent.BrowserHost.dll','SirkAgent.Watchdog.exe','SirkAgent.Watchdog.dll')
           $files = foreach ($name in $protected) { @{ path=$name; sha256=(Get-FileHash (Join-Path artifacts/runtime $name) -Algorithm SHA256).Hash } }
           @{ files=$files } | ConvertTo-Json -Depth 5 | Set-Content artifacts/runtime/integrity-manifest.json -Encoding UTF8
 

@@ -62,6 +62,13 @@ foreach ($packageFile in $packageFiles) {
     }
 }
 
+$sessionSource = Join-Path $source 'Session'
+$sessionTarget = Join-Path $InstallPath 'Session'
+if (Test-Path -LiteralPath $sessionSource) {
+    New-Item -ItemType Directory -Path $sessionTarget -Force | Out-Null
+    Copy-Item -Path (Join-Path $sessionSource '*') -Destination $sessionTarget -Recurse -Force
+}
+
 $extensionSource = Join-Path $source 'BrowserExtension'
 $extensionTarget = Join-Path $InstallPath 'BrowserExtension'
 if (Test-Path -LiteralPath $extensionSource) {
@@ -77,7 +84,10 @@ if ((Test-Path -LiteralPath (Join-Path $InstallPath 'SirkAgent.BrowserHost.exe')
     & $browserInstaller -InstallPath $InstallPath
 }
 
-$sessionExe = Join-Path $InstallPath 'SirkAgent.Session.exe'
+$sessionExe = Join-Path $InstallPath 'Session\SirkAgent.Session.exe'
+if (-not (Test-Path -LiteralPath $sessionExe)) {
+    $sessionExe = Join-Path $InstallPath 'SirkAgent.Session.exe'
+}
 if (Test-Path -LiteralPath $sessionExe) {
     $runKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
     New-Item -Path $runKey -Force | Out-Null

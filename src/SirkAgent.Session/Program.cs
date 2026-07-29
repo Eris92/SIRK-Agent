@@ -1,5 +1,6 @@
 using System.Drawing.Imaging;
 using System.Drawing.Drawing2D;
+using System.ComponentModel;
 using System.Collections.Specialized;
 using System.Diagnostics;
 using System.IO;
@@ -30,6 +31,7 @@ internal static class Program
     private static System.Drawing.Point? _lastCursorPosition;
     private static readonly object CaptureSync = new();
     private static readonly Dictionary<int, DxgiDesktopCapture> DxgiCaptures = [];
+    private static readonly Dictionary<int, DateTimeOffset> LastFullFrames = [];
 
     [STAThread]
     private static async Task Main()
@@ -39,15 +41,34 @@ internal static class Program
         if (!ownsMutex) return;
         while (true)
         {
+            NamedPipeServerStream? pipe = null;
             try
             {
-                await using var pipe = CreatePipe();
+                pipe = CreatePipe();
                 await pipe.WaitForConnectionAsync();
                 if (!Authorized(pipe))
                 {
-                    pipe.Disconnect();
+                    await pipe.DisposeAsync();
                     continue;
                 }
+                _ = HandlePipeAsync(pipe);
+                pipe = null;
+            }
+            catch (Exception error)
+            {
+                if (pipe is not null) await pipe.DisposeAsync();
+                LogError(error);
+                await Task.Delay(1000);
+            }
+        }
+    }
+
+    private static async Task HandlePipeAsync(NamedPipeServerStream pipe)
+    {
+        await using (pipe)
+        {
+            try
+            {
                 using var reader = new StreamReader(pipe, Encoding.UTF8, false, 4096, leaveOpen: true);
                 await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, leaveOpen: true)
                     { AutoFlush = true };
@@ -63,7 +84,7 @@ internal static class Program
                         {
                             "monitors" => Monitors(),
                             "snapshot" => Snapshot(request.MonitorIndex ?? -1, request.MaxWidth ?? 1280,
-                                request.Quality ?? 40),
+                                request.Quality ?? 40, request.ForceFull == true),
                             "mouse" or "input" => Input(request),
                             "activity" => Activity(),
                             _ => new SessionResponse(false, "SESSION_REQUEST_INVALID", null, null, null)
@@ -81,11 +102,7 @@ internal static class Program
                     await writer.WriteLineAsync(JsonSerializer.Serialize(response, Json));
                 }
             }
-            catch (Exception error)
-            {
-                LogError(error);
-                await Task.Delay(1000);
-            }
+            catch (Exception error) { LogError(error); }
         }
     }
 
@@ -113,7 +130,7 @@ internal static class Program
             PipeAccessRights.FullControl, AccessControlType.Allow));
         if (identity.User is not null)
             security.AddAccessRule(new PipeAccessRule(identity.User, PipeAccessRights.FullControl, AccessControlType.Allow));
-        return NamedPipeServerStreamAcl.Create(PipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+        return NamedPipeServerStreamAcl.Create(PipeName, PipeDirection.InOut, 4, PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous, 1024 * 1024, 1024 * 1024, security);
     }
 
@@ -153,7 +170,7 @@ internal static class Program
         return screens[monitorIndex].Bounds;
     }
 
-    private static SessionResponse Snapshot(int monitorIndex, int maxWidth, int quality)
+    private static SessionResponse Snapshot(int monitorIndex, int maxWidth, int quality, bool requestedFull)
     {
         var totalTimer = Stopwatch.StartNew();
         var bounds = CaptureBounds(monitorIndex);
@@ -164,14 +181,37 @@ internal static class Program
         var scale = Math.Min(1d, Math.Min((double)maxWidth / bounds.Width, 1080d / bounds.Height));
         var captureTimer = Stopwatch.StartNew();
         using var bitmap = CaptureDesktopBitmap(monitorIndex, bounds, scale, out var captureBackend,
-            out var dirtyRectangles, out var accumulatedFrames);
+            out var dirtyRectangles, out var moveRectangles, out var accumulatedFrames);
         captureTimer.Stop();
+        var now = DateTimeOffset.UtcNow;
+        var forceFull = requestedFull || !LastFullFrames.TryGetValue(monitorIndex, out var lastFull) ||
+                        now - lastFull >= TimeSpan.FromSeconds(5);
+        if (dirtyRectangles.Length == 0 && accumulatedFrames == 0 && !forceFull)
+        {
+            totalTimer.Stop();
+            return new SessionResponse(true, "DESKTOP_NO_CHANGE", null, bounds.Width, bounds.Height,
+                JsonSerializer.SerializeToElement(new
+                {
+                    sessionId = SessionId,
+                    monitorIndex,
+                    captureMilliseconds = Math.Round(captureTimer.Elapsed.TotalMilliseconds, 2),
+                    agentFrameMilliseconds = Math.Round(totalTimer.Elapsed.TotalMilliseconds, 2),
+                    captureBackend,
+                    dirtyRectangleCount = 0,
+                    dirtyPixelRatio = 0,
+                    accumulatedFrames = 0,
+                    encoding = "NONE"
+                }, Json));
+        }
         var encodeTimer = Stopwatch.StartNew();
         using var output = new MemoryStream();
+        using var encodedBitmap = BuildEncodedBitmap(bitmap, bounds, dirtyRectangles, scale, forceFull,
+            out var fullFrame, out var patches);
+        if (fullFrame) LastFullFrames[monitorIndex] = now;
         var encoder = ImageCodecInfo.GetImageEncoders().First(value => value.FormatID == ImageFormat.Jpeg.Guid);
         using var parameters = new EncoderParameters(1);
         parameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, (long)quality);
-        bitmap.Save(output, encoder, parameters);
+        encodedBitmap.Save(output, encoder, parameters);
         encodeTimer.Stop();
         var bytes = output.ToArray();
         totalTimer.Stop();
@@ -181,8 +221,11 @@ internal static class Program
             {
                 sessionId = SessionId,
                 monitorIndex,
-                encodedWidth = bitmap.Width,
-                encodedHeight = bitmap.Height,
+                encodedWidth = encodedBitmap.Width,
+                encodedHeight = encodedBitmap.Height,
+                fullFrame,
+                patches,
+                moves = fullFrame ? [] : moveRectangles,
                 originX = bounds.Left,
                 originY = bounds.Top,
                 cursorX = Math.Clamp(cursor.X - bounds.Left, 0, Math.Max(0, bounds.Width - 1)),
@@ -193,14 +236,101 @@ internal static class Program
                 encodedBytes = bytes.Length,
                 captureBackend,
                 dirtyRectangleCount = dirtyRectangles.Length,
+                moveRectangleCount = moveRectangles.Length,
                 dirtyPixelRatio = Math.Round(DirtyPixelRatio(dirtyRectangles, bounds.Width, bounds.Height), 6),
                 accumulatedFrames,
                 encoding = "JPEG"
             }, Json));
     }
 
+    private static Bitmap BuildEncodedBitmap(Bitmap source, Rectangle bounds, Rectangle[] dirtyRectangles,
+        double scale, bool forceFull, out bool fullFrame, out DesktopPatch[] patches)
+    {
+        var regions = MergeDirtyRectangles(dirtyRectangles, bounds);
+        var dirtyArea = regions.Sum(value => (long)value.Width * value.Height);
+        fullFrame = forceFull || regions.Count == 0 || regions.Count > 64 ||
+                    dirtyArea >= (long)bounds.Width * bounds.Height * 7 / 10;
+        if (fullFrame)
+        {
+            patches =
+            [
+                new DesktopPatch(0, 0, source.Width, source.Height,
+                    0, 0, bounds.Width, bounds.Height)
+            ];
+            return (Bitmap)source.Clone();
+        }
+
+        var scaled = regions.Select(region => new
+        {
+            Destination = region,
+            Source = Rectangle.FromLTRB(
+                Math.Clamp((int)Math.Floor(region.Left * scale), 0, source.Width - 1),
+                Math.Clamp((int)Math.Floor(region.Top * scale), 0, source.Height - 1),
+                Math.Clamp((int)Math.Ceiling(region.Right * scale), 1, source.Width),
+                Math.Clamp((int)Math.Ceiling(region.Bottom * scale), 1, source.Height))
+        }).Where(value => value.Source.Width > 0 && value.Source.Height > 0)
+          .OrderByDescending(value => value.Source.Height).ToArray();
+        var atlasLimit = Math.Max(1024, scaled.Max(value => value.Source.Width));
+        var placements = new List<(Rectangle Atlas, Rectangle Source, Rectangle Destination)>();
+        var x = 0;
+        var y = 0;
+        var rowHeight = 0;
+        var atlasWidth = 0;
+        foreach (var item in scaled)
+        {
+            if (x > 0 && x + item.Source.Width > atlasLimit)
+            {
+                y += rowHeight;
+                x = 0;
+                rowHeight = 0;
+            }
+            var atlas = new Rectangle(x, y, item.Source.Width, item.Source.Height);
+            placements.Add((atlas, item.Source, item.Destination));
+            x += item.Source.Width;
+            rowHeight = Math.Max(rowHeight, item.Source.Height);
+            atlasWidth = Math.Max(atlasWidth, x);
+        }
+        var atlasHeight = y + rowHeight;
+        var bitmap = new Bitmap(Math.Max(1, atlasWidth), Math.Max(1, atlasHeight),
+            PixelFormat.Format24bppRgb);
+        using (var graphics = Graphics.FromImage(bitmap))
+        {
+            graphics.CompositingMode = CompositingMode.SourceCopy;
+            foreach (var placement in placements)
+                graphics.DrawImage(source, placement.Atlas, placement.Source, GraphicsUnit.Pixel);
+        }
+        patches = placements.Select(value => new DesktopPatch(
+            value.Atlas.X, value.Atlas.Y, value.Atlas.Width, value.Atlas.Height,
+            value.Destination.X, value.Destination.Y, value.Destination.Width, value.Destination.Height)).ToArray();
+        return bitmap;
+    }
+
+    private static List<Rectangle> MergeDirtyRectangles(IEnumerable<Rectangle> values, Rectangle bounds)
+    {
+        var regions = new List<Rectangle>();
+        foreach (var original in values)
+        {
+            var candidate = original;
+            candidate.Intersect(new Rectangle(0, 0, bounds.Width, bounds.Height));
+            if (candidate.Width <= 0 || candidate.Height <= 0) continue;
+            candidate.Inflate(2, 2);
+            candidate.Intersect(new Rectangle(0, 0, bounds.Width, bounds.Height));
+            for (var index = regions.Count - 1; index >= 0; index--)
+            {
+                var expanded = regions[index];
+                expanded.Inflate(8, 8);
+                if (!expanded.IntersectsWith(candidate)) continue;
+                candidate = Rectangle.Union(candidate, regions[index]);
+                regions.RemoveAt(index);
+            }
+            regions.Add(candidate);
+        }
+        return regions;
+    }
+
     private static Bitmap CaptureDesktopBitmap(int monitorIndex, Rectangle bounds, double scale,
-        out string backend, out Rectangle[] dirtyRectangles, out uint accumulatedFrames)
+        out string backend, out Rectangle[] dirtyRectangles, out DesktopMove[] moveRectangles,
+        out uint accumulatedFrames)
     {
         try
         {
@@ -230,14 +360,16 @@ internal static class Program
                     new Rectangle(0, 0, frame.Bitmap.Width, frame.Bitmap.Height), GraphicsUnit.Pixel);
                 backend = "DXGI_DESKTOP_DUPLICATION";
                 dirtyRectangles = frame.DirtyRectangles;
+                moveRectangles = frame.MoveRectangles;
                 accumulatedFrames = frame.AccumulatedFrames;
                 return target;
             }
         }
-        catch
+        catch (Exception error)
         {
-            backend = "GDI_STRETCHBLT_FALLBACK";
+            backend = "GDI_STRETCHBLT_FALLBACK:" + error.GetType().Name;
             dirtyRectangles = [new Rectangle(0, 0, bounds.Width, bounds.Height)];
+            moveRectangles = [];
             accumulatedFrames = 1;
             var bitmap = new Bitmap((int)(bounds.Width * scale), (int)(bounds.Height * scale),
                 PixelFormat.Format24bppRgb);
@@ -249,7 +381,8 @@ internal static class Program
                 _ = SetStretchBltMode(destination, 3);
                 if (screen == IntPtr.Zero || !StretchBlt(destination, 0, 0, bitmap.Width, bitmap.Height,
                         screen, bounds.Left, bounds.Top, bounds.Width, bounds.Height, 0x00CC0020))
-                    throw new InvalidOperationException("Nie udało się przechwycić aktywnego pulpitu.");
+                    throw new AggregateException("DXGI and GDI capture failed.", error,
+                        new Win32Exception(Marshal.GetLastWin32Error()));
             }
             finally
             {
@@ -572,9 +705,11 @@ internal static class Program
 
 internal sealed record SessionRequest(string Type, string? Action, int? X, int? Y, int? Delta, int? MonitorIndex,
     int? MaxWidth, int? Quality, string? Text, string? Key, string? Modifiers,
-    string? FileName, string? FileBase64);
+    string? FileName, string? FileBase64, bool? ForceFull);
 internal sealed record SessionResponse(bool Ok, string Code, string? ImageBase64, int? Width, int? Height,
     JsonElement? Data = null, string? Error = null);
+internal sealed record DesktopPatch(int AtlasX, int AtlasY, int AtlasWidth, int AtlasHeight,
+    int X, int Y, int Width, int Height);
 
 [StructLayout(LayoutKind.Sequential)]
 internal struct LastInputInfo

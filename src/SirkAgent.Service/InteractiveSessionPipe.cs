@@ -59,7 +59,9 @@ internal static class InteractiveSessionPipe
     internal static bool EnsureAvailable(int sessionId)
     {
         if (IsAvailable(sessionId)) return false;
-        var executable = Path.Combine(AppContext.BaseDirectory, "SirkAgent.Session.exe");
+        var executable = Path.Combine(AppContext.BaseDirectory, "Session", "SirkAgent.Session.exe");
+        if (!File.Exists(executable))
+            executable = Path.Combine(AppContext.BaseDirectory, "SirkAgent.Session.exe");
         if (!File.Exists(executable)) throw new FileNotFoundException("Brak brokera sesji użytkownika.", executable);
         if (!WTSQueryUserToken((uint)sessionId, out var token))
             throw new Win32Exception(Marshal.GetLastWin32Error(), "Nie można otworzyć aktywnej sesji użytkownika.");

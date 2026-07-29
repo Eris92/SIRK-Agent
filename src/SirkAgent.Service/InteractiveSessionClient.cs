@@ -7,14 +7,25 @@ namespace SirkAgent.Service;
 
 internal static class InteractiveSessionClient
 {
-    private static readonly ConcurrentDictionary<int, SessionChannel> Channels = new();
+    private static readonly ConcurrentDictionary<(int SessionId, string Lane), SessionChannel> Channels = new();
 
     internal static Task<string?> SendAsync(int sessionId, string request, CancellationToken token) =>
-        Channels.GetOrAdd(sessionId, static id => new SessionChannel(id)).SendAsync(request, token);
+        SendAsync(sessionId, "command", request, token);
+
+    internal static Task<string?> SendCaptureAsync(int sessionId, string request, CancellationToken token) =>
+        SendAsync(sessionId, "capture", request, token);
+
+    internal static Task<string?> SendInputAsync(int sessionId, string request, CancellationToken token) =>
+        SendAsync(sessionId, "input", request, token);
+
+    private static Task<string?> SendAsync(int sessionId, string lane, string request, CancellationToken token) =>
+        Channels.GetOrAdd((sessionId, lane), static key => new SessionChannel(key.SessionId))
+            .SendAsync(request, token);
 
     internal static void Invalidate(int sessionId)
     {
-        if (Channels.TryRemove(sessionId, out var channel)) channel.Close();
+        foreach (var item in Channels.Where(item => item.Key.SessionId == sessionId).ToArray())
+            if (Channels.TryRemove(item.Key, out var channel)) channel.Close();
     }
 
     private sealed class SessionChannel(int sessionId)
@@ -39,9 +50,10 @@ internal static class InteractiveSessionClient
                         await _writer!.WriteLineAsync(request.AsMemory(), timeout.Token);
                         return await _reader!.ReadLineAsync(timeout.Token);
                     }
-                    catch (IOException) when (attempt == 0)
+                    catch (IOException)
                     {
                         Reset();
+                        if (attempt > 0) throw;
                     }
                     catch (OperationCanceledException)
                     {

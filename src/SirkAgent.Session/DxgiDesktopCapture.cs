@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
 using Vortice.DXGI;
+using Vortice.Mathematics;
 using static Vortice.Direct3D11.D3D11;
 
 namespace SirkAgent.Session;
@@ -41,28 +42,47 @@ internal sealed class DxgiDesktopCapture : IDisposable
             using var texture = resource.QueryInterface<ID3D11Texture2D>();
             var description = texture.Description;
             EnsureStaging((int)description.Width, (int)description.Height, description.Format);
-            _context.CopyResource(_staging!, texture);
+            var moves = MoveRectangles(frameInfo.TotalMetadataBufferSize);
+            var dirty = DirtyRectangles(frameInfo.TotalMetadataBufferSize);
+            var regions = dirty.Concat(moves.Select(value =>
+                    new Rectangle(value.X, value.Y, value.Width, value.Height)))
+                .Select(value => Rectangle.Intersect(value, new Rectangle(0, 0, _width, _height)))
+                .Where(value => value.Width > 0 && value.Height > 0)
+                .ToArray();
+            var fullCopy = _lastBitmap is null;
+            if (fullCopy)
+                _context.CopyResource(_staging!, texture);
+            else
+                foreach (var region in regions)
+                    _context.CopySubresourceRegion(_staging!, 0,
+                        (uint)region.X, (uint)region.Y, 0, texture, 0,
+                        new Box(region.Left, region.Top, 0, region.Right, region.Bottom, 1));
+            if (!fullCopy && regions.Length == 0)
+                return new DxgiFrame((Bitmap)_lastBitmap!.Clone(), dirty, moves,
+                    frameInfo.AccumulatedFrames, frameInfo.PointerPosition.Visible,
+                    frameInfo.PointerPosition.Position.X, frameInfo.PointerPosition.Position.Y);
             var mapped = _context.Map(_staging!, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
             try
             {
-                var bitmap = new Bitmap(_width, _height, PixelFormat.Format32bppArgb);
-                var data = bitmap.LockBits(new Rectangle(0, 0, _width, _height),
-                    ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+                _lastBitmap ??= new Bitmap(_width, _height, PixelFormat.Format32bppArgb);
+                var updated = fullCopy ? [new Rectangle(0, 0, _width, _height)] : regions;
+                var data = _lastBitmap.LockBits(new Rectangle(0, 0, _width, _height),
+                    ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
                 try
                 {
-                    for (var row = 0; row < _height; row++)
+                    foreach (var region in updated)
                     {
-                        var source = IntPtr.Add(mapped.DataPointer, checked((int)(row * mapped.RowPitch)));
-                        var target = IntPtr.Add(data.Scan0, row * data.Stride);
-                        CopyMemory(target, source, (nuint)(_width * 4));
+                        for (var row = region.Top; row < region.Bottom; row++)
+                        {
+                            var source = IntPtr.Add(mapped.DataPointer,
+                                checked((int)(row * mapped.RowPitch + region.Left * 4)));
+                            var target = IntPtr.Add(data.Scan0, row * data.Stride + region.Left * 4);
+                            CopyMemory(target, source, (nuint)(region.Width * 4));
+                        }
                     }
                 }
-                finally { bitmap.UnlockBits(data); }
-                _lastBitmap?.Dispose();
-                _lastBitmap = (Bitmap)bitmap.Clone();
-                var moves = MoveRectangles(frameInfo.TotalMetadataBufferSize);
-                var dirty = DirtyRectangles(frameInfo.TotalMetadataBufferSize);
-                return new DxgiFrame(bitmap, dirty, moves, frameInfo.AccumulatedFrames,
+                finally { _lastBitmap.UnlockBits(data); }
+                return new DxgiFrame((Bitmap)_lastBitmap.Clone(), dirty, moves, frameInfo.AccumulatedFrames,
                     frameInfo.PointerPosition.Visible, frameInfo.PointerPosition.Position.X,
                     frameInfo.PointerPosition.Position.Y);
             }
@@ -106,6 +126,7 @@ internal sealed class DxgiDesktopCapture : IDisposable
         if (_staging is not null && _width == width && _height == height) return;
         _staging?.Dispose();
         _lastBitmap?.Dispose();
+        _lastBitmap = null;
         _width = width;
         _height = height;
         _staging = _device.CreateTexture2D(new Texture2DDescription

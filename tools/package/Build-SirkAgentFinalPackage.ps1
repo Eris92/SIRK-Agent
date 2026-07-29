@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [string]$RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
-    [string]$Version = '1.0.2',
+    [string]$Version = '1.0.3',
     [Parameter(Mandatory)]
     [ValidatePattern('^[A-Fa-f0-9]{40}$')]
     [string]$SigningThumbprint

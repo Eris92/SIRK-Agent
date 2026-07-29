@@ -1,4 +1,5 @@
 using System.Drawing.Imaging;
+using System.Collections.Specialized;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
@@ -225,10 +226,32 @@ internal static class Program
         }
         if (request.Action == "clipboardGet")
         {
-            var text = RunSta(() => Clipboard.ContainsText() ? Clipboard.GetText() : "");
-            if (text.Length > 1024 * 1024) text = text[..(1024 * 1024)];
+            var clipboard = RunSta(ReadClipboard);
             return new SessionResponse(true, "DESKTOP_CLIPBOARD_GET_OK", null, null, null,
-                JsonSerializer.SerializeToElement(new { text }, Json));
+                JsonSerializer.SerializeToElement(clipboard, Json));
+        }
+        if (request.Action == "clipboardFileSet")
+        {
+            var fileName = Path.GetFileName(request.FileName ?? "");
+            if (string.IsNullOrWhiteSpace(fileName))
+                throw new InvalidDataException("Nazwa pliku jest nieprawidłowa.");
+            byte[] content;
+            try { content = Convert.FromBase64String(request.FileBase64 ?? ""); }
+            catch (FormatException) { throw new InvalidDataException("Zawartość pliku nie jest Base64."); }
+            if (content.Length > 512 * 1024)
+                throw new InvalidDataException("Transfer schowka przekracza limit 512 KiB.");
+            var directory = Path.Combine(Environment.GetFolderPath(
+                Environment.SpecialFolder.LocalApplicationData), "SIRK", "Transfers");
+            Directory.CreateDirectory(directory);
+            var path = Path.Combine(directory, fileName);
+            File.WriteAllBytes(path, content);
+            RunSta(() =>
+            {
+                Clipboard.SetFileDropList(new StringCollection { path });
+                return true;
+            });
+            return new SessionResponse(true, "DESKTOP_CLIPBOARD_FILE_SET_OK", null, null, null,
+                JsonSerializer.SerializeToElement(new { fileName, path, bytes = content.Length }, Json));
         }
         if (request.Action == "text")
         {
@@ -325,6 +348,8 @@ internal static class Program
             ["F4"] = "{F4}", ["F5"] = "{F5}", ["F6"] = "{F6}", ["F7"] = "{F7}",
             ["F8"] = "{F8}", ["F9"] = "{F9}", ["F10"] = "{F10}", ["F11"] = "{F11}", ["F12"] = "{F12}"
         };
+        foreach (var letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+            allowed[letter.ToString()] = letter.ToString().ToLowerInvariant();
         if (!allowed.TryGetValue(key ?? "", out var sequence))
             throw new InvalidDataException("Niedozwolony klawisz specjalny.");
         var values = (modifiers ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -333,6 +358,26 @@ internal static class Program
         if (values.Contains("Alt", StringComparer.OrdinalIgnoreCase)) prefix += "%";
         if (values.Contains("Shift", StringComparer.OrdinalIgnoreCase)) prefix += "+";
         return prefix + sequence;
+    }
+
+    private static object ReadClipboard()
+    {
+        if (Clipboard.ContainsFileDropList())
+        {
+            var paths = Clipboard.GetFileDropList().Cast<string>().Where(File.Exists).Take(1).ToArray();
+            if (paths.Length > 0)
+            {
+                var info = new FileInfo(paths[0]);
+                if (info.Length > 512 * 1024)
+                    return new { kind = "file", fileName = info.Name, bytes = info.Length,
+                        tooLarge = true, maximumBytes = 512 * 1024 };
+                return new { kind = "file", fileName = info.Name, bytes = info.Length,
+                    fileBase64 = Convert.ToBase64String(File.ReadAllBytes(info.FullName)), tooLarge = false };
+            }
+        }
+        var text = Clipboard.ContainsText() ? Clipboard.GetText() : "";
+        if (text.Length > 1024 * 1024) text = text[..(1024 * 1024)];
+        return new { kind = "text", text };
     }
 
     private static SessionResponse Activity()
@@ -469,7 +514,8 @@ internal static class Program
 }
 
 internal sealed record SessionRequest(string Type, string? Action, int? X, int? Y, int? Delta, int? MonitorIndex,
-    int? MaxWidth, int? Quality, string? Text, string? Key, string? Modifiers);
+    int? MaxWidth, int? Quality, string? Text, string? Key, string? Modifiers,
+    string? FileName, string? FileBase64);
 internal sealed record SessionResponse(bool Ok, string Code, string? ImageBase64, int? Width, int? Height,
     JsonElement? Data = null, string? Error = null);
 

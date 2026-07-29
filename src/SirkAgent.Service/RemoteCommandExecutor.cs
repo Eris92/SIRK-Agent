@@ -75,7 +75,9 @@ internal sealed class RemoteCommandExecutor
                 quality = Math.Clamp(OptionalInt(command.Parameters, "quality", 40), 25, 80),
                 text = OptionalString(command.Parameters, "text", "", MaximumOutputBytes),
                 key = OptionalString(command.Parameters, "key", "", 32),
-                modifiers = OptionalString(command.Parameters, "modifiers", "", 64)
+                modifiers = OptionalString(command.Parameters, "modifiers", "", 64),
+                fileName = OptionalString(command.Parameters, "fileName", "", 255),
+                fileBase64 = OptionalString(command.Parameters, "fileBase64", "", MaximumOutputBytes * 2)
             };
             responseLine = await InteractiveSessionClient.SendAsync(sessionId,
                 JsonSerializer.Serialize(request, new JsonSerializerOptions(JsonSerializerDefaults.Web)), token);

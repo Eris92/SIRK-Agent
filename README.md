@@ -239,6 +239,7 @@ schemas/
 - [Evidence Engine](docs/EVIDENCE-ENGINE.md)
 - [Management Plane Health](docs/MANAGEMENT-PLANE-HEALTH.md)
 - [Browser Bridge](docs/BROWSER-BRIDGE.md)
+- [Remote Desktop low latency architecture](docs/REMOTE-DESKTOP-PERFORMANCE.md)
 
 ## Polecenie do wznowienia w nowym oknie
 

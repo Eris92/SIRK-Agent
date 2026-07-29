@@ -2,7 +2,7 @@
 #requires -RunAsAdministrator
 [CmdletBinding()]
 param(
-    [string]$InstallPath = "$env:ProgramFiles\SIRK Agent",
+    [string]$InstallPath = "$env:ProgramFiles\SIRK\Agent",
     [string]$ServiceName = "SirkAgent",
     [switch]$NoStart
 )

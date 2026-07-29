@@ -10,9 +10,9 @@
     <PublishTrimmed>false</PublishTrimmed>
     <SelfContained>false</SelfContained>
     <AssemblyName>SirkAgent.Service</AssemblyName>
-    <Version>1.0.1</Version>
-    <FileVersion>1.0.1.0</FileVersion>
-    <InformationalVersion>1.0.1</InformationalVersion>
+    <Version>1.0.2</Version>
+    <FileVersion>1.0.2.0</FileVersion>
+    <InformationalVersion>1.0.2</InformationalVersion>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../SirkAgent.Policy/SirkAgent.Policy.csproj" />

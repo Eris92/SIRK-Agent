@@ -151,14 +151,16 @@ internal static class Program
 
     private static SessionResponse Snapshot(int monitorIndex, int maxWidth, int quality)
     {
+        var totalTimer = Stopwatch.StartNew();
         var bounds = CaptureBounds(monitorIndex);
         if (bounds.Width <= 0 || bounds.Height <= 0)
             throw new InvalidOperationException("Aktywna sesja nie udostępnia ekranu.");
         maxWidth = Math.Clamp(maxWidth, 640, 1920);
         quality = Math.Clamp(quality, 25, 80);
-        var scale = Math.Min(1d, Math.Min((double)maxWidth / bounds.Width, 900d / bounds.Height));
+        var scale = Math.Min(1d, Math.Min((double)maxWidth / bounds.Width, 1080d / bounds.Height));
         using var bitmap = new Bitmap((int)(bounds.Width * scale), (int)(bounds.Height * scale),
             PixelFormat.Format24bppRgb);
+        var captureTimer = Stopwatch.StartNew();
         using (var graphics = Graphics.FromImage(bitmap))
         {
             var destination = graphics.GetHdc();
@@ -176,12 +178,18 @@ internal static class Program
                 graphics.ReleaseHdc(destination);
             }
         }
+        captureTimer.Stop();
+        var encodeTimer = Stopwatch.StartNew();
         using var output = new MemoryStream();
         var encoder = ImageCodecInfo.GetImageEncoders().First(value => value.FormatID == ImageFormat.Jpeg.Guid);
         using var parameters = new EncoderParameters(1);
         parameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, (long)quality);
         bitmap.Save(output, encoder, parameters);
-        return new SessionResponse(true, "DESKTOP_SNAPSHOT_OK", Convert.ToBase64String(output.ToArray()),
+        encodeTimer.Stop();
+        var bytes = output.ToArray();
+        totalTimer.Stop();
+        var cursor = Cursor.Position;
+        return new SessionResponse(true, "DESKTOP_SNAPSHOT_OK", Convert.ToBase64String(bytes),
             bounds.Width, bounds.Height, JsonSerializer.SerializeToElement(new
             {
                 sessionId = SessionId,
@@ -189,7 +197,15 @@ internal static class Program
                 encodedWidth = bitmap.Width,
                 encodedHeight = bitmap.Height,
                 originX = bounds.Left,
-                originY = bounds.Top
+                originY = bounds.Top,
+                cursorX = Math.Clamp(cursor.X - bounds.Left, 0, Math.Max(0, bounds.Width - 1)),
+                cursorY = Math.Clamp(cursor.Y - bounds.Top, 0, Math.Max(0, bounds.Height - 1)),
+                captureMilliseconds = Math.Round(captureTimer.Elapsed.TotalMilliseconds, 2),
+                encodeMilliseconds = Math.Round(encodeTimer.Elapsed.TotalMilliseconds, 2),
+                agentFrameMilliseconds = Math.Round(totalTimer.Elapsed.TotalMilliseconds, 2),
+                encodedBytes = bytes.Length,
+                captureBackend = "GDI_STRETCHBLT",
+                encoding = "JPEG"
             }, Json));
     }
 

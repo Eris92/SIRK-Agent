@@ -19,6 +19,7 @@ internal sealed class ManagementWorker : BackgroundService
     private readonly ILogger<ManagementWorker> _logger;
     private readonly JsonSerializerOptions _json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private readonly SemaphoreSlim _processLock = new(1, 1);
+    private readonly HttpClient _portalClient = new() { Timeout = Timeout.InfiniteTimeSpan };
 
     public ManagementWorker(ILogger<ManagementWorker> logger) => _logger = logger;
 
@@ -34,20 +35,19 @@ internal sealed class ManagementWorker : BackgroundService
             null, null, 0, 0, false, null), stoppingToken);
 
         var pipeTask = RunPipeServerAsync(paths, queue, stoppingToken);
+        var portalTask = RunPortalSessionAsync(paths, queue, identity.DeviceId, stoppingToken);
         var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
         try
         {
             await ProcessInboxAsync(paths, identity.DeviceId, stoppingToken);
             await ValidateIntegrityAsync(paths, stoppingToken);
             await FlushTelemetryAsync(paths, queue, stoppingToken);
-            await CheckInPortalAsync(paths, queue, identity.DeviceId, stoppingToken);
 
             while (await timer.WaitForNextTickAsync(stoppingToken))
             {
                 await ProcessInboxAsync(paths, identity.DeviceId, stoppingToken);
                 await ValidateIntegrityAsync(paths, stoppingToken);
                 await FlushTelemetryAsync(paths, queue, stoppingToken);
-                await CheckInPortalAsync(paths, queue, identity.DeviceId, stoppingToken);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -57,6 +57,33 @@ internal sealed class ManagementWorker : BackgroundService
         {
             timer.Dispose();
             try { await pipeTask; } catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
+            try { await portalTask; } catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
+        }
+    }
+
+    private async Task RunPortalSessionAsync(ManagementPaths paths, TelemetryQueue queue, string deviceId,
+        CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            try
+            {
+                await CheckInPortalAsync(paths, queue, deviceId, token);
+                var status = ReadJson(paths.PortalStatusPath);
+                var connected = status is { ValueKind: JsonValueKind.Object } &&
+                                status.Value.TryGetProperty("ok", out var ok) &&
+                                ok.ValueKind == JsonValueKind.True;
+                if (!connected) await Task.Delay(TimeSpan.FromSeconds(1), token);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception error)
+            {
+                _logger.LogWarning(error, "Persistent Portal session failed; reconnecting.");
+                await Task.Delay(TimeSpan.FromSeconds(1), token);
+            }
         }
     }
 
@@ -270,9 +297,6 @@ internal sealed class ManagementWorker : BackgroundService
         }
 
         var items = queue.ReadReady(Math.Clamp(config?.BatchSize ?? 25, 1, 100), DateTimeOffset.UtcNow);
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(Math.Clamp(config?.TimeoutSeconds ?? 30, 5, 120)) };
-        client.DefaultRequestHeaders.Authorization =
-            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", tokenValue);
         var payload = new
         {
             protocolVersion = 1,
@@ -297,11 +321,14 @@ internal sealed class ManagementWorker : BackgroundService
             telemetryQueue = queue.Snapshot(),
             acknowledgedPolicyIds = ReadAcknowledgedPolicyIds(paths.ActivePolicyPath),
             commandResults = ReadCommandResults(paths.CommandResultsDirectory),
+            waitMilliseconds = resultFollowup ? 0 : 5000,
             events = items.Select(x => x.Envelope).ToArray()
         };
 
         try
         {
+            using var requestTimeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+            requestTimeout.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(config?.TimeoutSeconds ?? 30, 5, 120)));
             var payloadBytes = JsonSerializer.SerializeToUtf8Bytes(payload, _json);
             using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
             {
@@ -313,10 +340,14 @@ internal sealed class ManagementWorker : BackgroundService
                 new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", tokenValue);
             if (credential is not null)
                 SignPortalRequest(request, payloadBytes, credential);
-            using var response = await client.SendAsync(request, token);
-            response.EnsureSuccessStatusCode();
-            var portalResponse = await response.Content.ReadFromJsonAsync<PortalCheckInResponse>(_json, token)
+            PortalCheckInResponse portalResponse;
+            using (var response = await _portalClient.SendAsync(request, requestTimeout.Token))
+            {
+                response.EnsureSuccessStatusCode();
+                portalResponse = await response.Content.ReadFromJsonAsync<PortalCheckInResponse>(
+                                     _json, requestTimeout.Token)
                                  ?? throw new InvalidDataException("Portal check-in response is empty.");
+            }
             if (!portalResponse.Ok)
                 throw new InvalidDataException("Portal rejected the check-in.");
             new PortalPolicyDeliveryStore(paths.InboxDirectory, _json)

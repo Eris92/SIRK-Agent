@@ -9,8 +9,8 @@ Ten dokument jest aktualnym punktem przekazania projektu. W nowym czacie nalezy 
 - Platforma docelowa: Windows x64
 - Runtime: .NET 8, build framework-dependent
 - Zasada pakowania: nie dolaczac calego .NET do EXE ani ZIP
-- Aktualny etap: `1.0.0` — niezalezny Portal, bezpieczne aktualizacje oraz Pulpit, Terminal i Pliki przez SIRK Agent
-- Potwierdzony pakiet na komputerze `DELL_K`: `1.0.0`, Windows x64 framework-dependent .NET 8
+- Aktualny etap: `1.0.1` — szybki Pulpit live, narzedzia administracyjne SYSTEM, bezpieczne aktualizacje oraz Terminal i Pliki przez SIRK Agent
+- Potwierdzony pakiet na komputerze `DELL_K`: `1.0.1`, Windows x64 framework-dependent .NET 8
 - Aktualny commit przekazania: sprawdz najnowszy HEAD `main` przed rozpoczeciem pracy
 
 ## Cel projektu
@@ -173,7 +173,7 @@ Device ID komputera testowego:
 cb0bfc0d-4376-4f42-b781-6dc2be0405e9
 ```
 
-## Aktualny stan prac 1.0.0
+## Aktualny stan prac 1.0.1
 
 Kod Endurance Worker, raportow i workflow znajduje sie na `main`.
 
@@ -193,7 +193,7 @@ Przed przygotowaniem paczki nalezy:
 5. zabic proces uslugi i potwierdzic recovery SCM,
 6. potwierdzic zapis zmiany PID jako restartu,
 7. uruchomic pozostale workflow regresyjne,
-8. dopiero po zielonym wyniku pobrac artefakt `SIRK-Agent-1.0.0-win-x64`.
+8. dopiero po zielonym wyniku pobrac artefakt `SIRK-Agent-1.0.1-win-x64`.
 
 Powyższe kryteria sa spelnione dla commita `f208f0e`. Kazdy kolejny commit
 zmieniajacy runtime lub pakowanie wymaga ponownego pelnego CI i testu lokalnego.

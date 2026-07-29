@@ -47,30 +47,35 @@ internal static class Program
                 using var reader = new StreamReader(pipe, Encoding.UTF8, false, 4096, leaveOpen: true);
                 await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, leaveOpen: true)
                     { AutoFlush = true };
-                var line = await reader.ReadLineAsync();
-                var request = JsonSerializer.Deserialize<SessionRequest>(line ?? "{}", Json);
-                SessionResponse response;
-                try
+                while (pipe.IsConnected)
                 {
-                    response = request?.Type switch
+                    var line = await reader.ReadLineAsync();
+                    if (line is null) break;
+                    var request = JsonSerializer.Deserialize<SessionRequest>(line, Json);
+                    SessionResponse response;
+                    try
                     {
-                        "monitors" => Monitors(),
-                        "snapshot" => Snapshot(request.MonitorIndex ?? -1),
-                        "mouse" or "input" => Input(request),
-                        "activity" => Activity(),
-                        _ => new SessionResponse(false, "SESSION_REQUEST_INVALID", null, null, null)
-                    };
+                        response = request?.Type switch
+                        {
+                            "monitors" => Monitors(),
+                            "snapshot" => Snapshot(request.MonitorIndex ?? -1, request.MaxWidth ?? 1280,
+                                request.Quality ?? 40),
+                            "mouse" or "input" => Input(request),
+                            "activity" => Activity(),
+                            _ => new SessionResponse(false, "SESSION_REQUEST_INVALID", null, null, null)
+                        };
+                    }
+                    catch (Exception error)
+                    {
+                        response = new SessionResponse(false,
+                            request?.Type == "snapshot"
+                                ? "DESKTOP_CAPTURE_UNAVAILABLE"
+                                : "SESSION_OPERATION_FAILED",
+                            null, null, null, Error: error.Message);
+                        LogError(error);
+                    }
+                    await writer.WriteLineAsync(JsonSerializer.Serialize(response, Json));
                 }
-                catch (Exception error)
-                {
-                    response = new SessionResponse(false,
-                        request?.Type == "snapshot"
-                            ? "DESKTOP_CAPTURE_UNAVAILABLE"
-                            : "SESSION_OPERATION_FAILED",
-                        null, null, null, Error: error.Message);
-                    LogError(error);
-                }
-                await writer.WriteLineAsync(JsonSerializer.Serialize(response, Json));
             }
             catch (Exception error)
             {
@@ -144,20 +149,25 @@ internal static class Program
         return screens[monitorIndex].Bounds;
     }
 
-    private static SessionResponse Snapshot(int monitorIndex)
+    private static SessionResponse Snapshot(int monitorIndex, int maxWidth, int quality)
     {
         var bounds = CaptureBounds(monitorIndex);
         if (bounds.Width <= 0 || bounds.Height <= 0)
             throw new InvalidOperationException("Aktywna sesja nie udostępnia ekranu.");
-        using var source = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format24bppRgb);
-        using (var graphics = Graphics.FromImage(source))
+        maxWidth = Math.Clamp(maxWidth, 640, 1920);
+        quality = Math.Clamp(quality, 25, 80);
+        var scale = Math.Min(1d, Math.Min((double)maxWidth / bounds.Width, 900d / bounds.Height));
+        using var bitmap = new Bitmap((int)(bounds.Width * scale), (int)(bounds.Height * scale),
+            PixelFormat.Format24bppRgb);
+        using (var graphics = Graphics.FromImage(bitmap))
         {
             var destination = graphics.GetHdc();
             var screen = GetDC(IntPtr.Zero);
             try
             {
-                if (screen == IntPtr.Zero || !BitBlt(destination, 0, 0, bounds.Width, bounds.Height,
-                        screen, bounds.Left, bounds.Top, 0x00CC0020))
+                _ = SetStretchBltMode(destination, 3);
+                if (screen == IntPtr.Zero || !StretchBlt(destination, 0, 0, bitmap.Width, bitmap.Height,
+                        screen, bounds.Left, bounds.Top, bounds.Width, bounds.Height, 0x00CC0020))
                     throw new InvalidOperationException("Nie udało się przechwycić aktywnego pulpitu.");
             }
             finally
@@ -166,20 +176,18 @@ internal static class Program
                 graphics.ReleaseHdc(destination);
             }
         }
-        var scale = Math.Min(1d, Math.Min(1600d / bounds.Width, 900d / bounds.Height));
-        using var bitmap = scale < 1d
-            ? new Bitmap(source, new Size((int)(bounds.Width * scale), (int)(bounds.Height * scale)))
-            : new Bitmap(source);
         using var output = new MemoryStream();
         var encoder = ImageCodecInfo.GetImageEncoders().First(value => value.FormatID == ImageFormat.Jpeg.Guid);
         using var parameters = new EncoderParameters(1);
-        parameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 65L);
+        parameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, (long)quality);
         bitmap.Save(output, encoder, parameters);
         return new SessionResponse(true, "DESKTOP_SNAPSHOT_OK", Convert.ToBase64String(output.ToArray()),
             bounds.Width, bounds.Height, JsonSerializer.SerializeToElement(new
             {
                 sessionId = SessionId,
                 monitorIndex,
+                encodedWidth = bitmap.Width,
+                encodedHeight = bitmap.Height,
                 originX = bounds.Left,
                 originY = bounds.Top
             }, Json));
@@ -437,12 +445,15 @@ internal static class Program
 
     [DllImport("gdi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool BitBlt(IntPtr destination, int x, int y, int width, int height,
-        IntPtr source, int sourceX, int sourceY, uint operation);
+    private static extern bool StretchBlt(IntPtr destination, int x, int y, int width, int height,
+        IntPtr source, int sourceX, int sourceY, int sourceWidth, int sourceHeight, uint operation);
+
+    [DllImport("gdi32.dll")]
+    private static extern int SetStretchBltMode(IntPtr deviceContext, int mode);
 }
 
 internal sealed record SessionRequest(string Type, string? Action, int? X, int? Y, int? Delta, int? MonitorIndex,
-    string? Text, string? Key, string? Modifiers);
+    int? MaxWidth, int? Quality, string? Text, string? Key, string? Modifiers);
 internal sealed record SessionResponse(bool Ok, string Code, string? ImageBase64, int? Width, int? Height,
     JsonElement? Data = null, string? Error = null);
 

@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.IO.Pipes;
-using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 
@@ -35,6 +33,9 @@ internal sealed class RemoteCommandExecutor
                         ToElement(InteractiveSessionPipe.Sessions())),
                 "desktop.monitors" when Enabled(activePolicy, "remoteDesktopEnabled") =>
                     await ExecuteDesktopAsync(command, "monitors", token),
+                "desktop.admin.start" when Enabled(activePolicy, "remoteAdministrativeDesktopEnabled") ||
+                                           Enabled(activePolicy, "remoteDesktopEnabled") =>
+                    StartAdministrativeDesktop(command),
                 "desktop.snapshot" when Enabled(activePolicy, "remoteDesktopEnabled") =>
                     await ExecuteDesktopAsync(command, "snapshot", token),
                 "desktop.input" when Enabled(activePolicy, "remoteDesktopEnabled") =>
@@ -57,34 +58,32 @@ internal sealed class RemoteCommandExecutor
         CancellationToken token)
     {
         var sessionId = InteractiveSessionPipe.Resolve(OptionalNullableInt(command.Parameters, "sessionId"));
-        await using var pipe = new NamedPipeClientStream(".", InteractiveSessionPipe.Name(sessionId),
-            PipeDirection.InOut, PipeOptions.Asynchronous, TokenImpersonationLevel.Impersonation);
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-        timeout.CancelAfter(TimeSpan.FromSeconds(5));
-        try { await pipe.ConnectAsync(timeout.Token); }
+        InteractiveSessionPipe.EnsureAvailable(sessionId);
+        string? responseLine;
+        try
+        {
+            object request = new
+            {
+                type,
+                action = OptionalString(command.Parameters, "action", "", 32),
+                x = OptionalInt(command.Parameters, "x", 0),
+                y = OptionalInt(command.Parameters, "y", 0),
+                delta = OptionalInt(command.Parameters, "delta", 0),
+                monitorIndex = OptionalInt(command.Parameters, "monitorIndex", -1),
+                maxWidth = Math.Clamp(OptionalInt(command.Parameters, "maxWidth", 1280), 640, 1920),
+                quality = Math.Clamp(OptionalInt(command.Parameters, "quality", 40), 25, 80),
+                text = OptionalString(command.Parameters, "text", "", MaximumOutputBytes),
+                key = OptionalString(command.Parameters, "key", "", 32),
+                modifiers = OptionalString(command.Parameters, "modifiers", "", 64)
+            };
+            responseLine = await InteractiveSessionClient.SendAsync(sessionId,
+                JsonSerializer.Serialize(request, new JsonSerializerOptions(JsonSerializerDefaults.Web)), token);
+        }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         {
             return Failure(command.CommandId, "INTERACTIVE_HELPER_UNAVAILABLE",
                 "Broker aktywnej sesji użytkownika nie odpowiada.");
         }
-        using var reader = new StreamReader(pipe, Encoding.UTF8, false, 4096, leaveOpen: true);
-        await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, leaveOpen: true)
-            { AutoFlush = true };
-        object request = new
-        {
-            type,
-            action = OptionalString(command.Parameters, "action", "", 32),
-            x = OptionalInt(command.Parameters, "x", 0),
-            y = OptionalInt(command.Parameters, "y", 0),
-            delta = OptionalInt(command.Parameters, "delta", 0),
-            monitorIndex = OptionalInt(command.Parameters, "monitorIndex", -1),
-            text = OptionalString(command.Parameters, "text", "", MaximumOutputBytes),
-            key = OptionalString(command.Parameters, "key", "", 32),
-            modifiers = OptionalString(command.Parameters, "modifiers", "", 64)
-        };
-        await writer.WriteLineAsync(JsonSerializer.Serialize(request,
-            new JsonSerializerOptions(JsonSerializerDefaults.Web)));
-        var responseLine = await reader.ReadLineAsync(timeout.Token);
         if (string.IsNullOrWhiteSpace(responseLine))
             return Failure(command.CommandId, "INTERACTIVE_HELPER_INVALID", "Broker nie zwrócił odpowiedzi.");
         using var response = JsonDocument.Parse(responseLine);
@@ -95,6 +94,16 @@ internal sealed class RemoteCommandExecutor
             errorValue.ValueKind == JsonValueKind.String ? errorValue.GetString() ?? "" : "";
         return new RemoteCommandResult(command.CommandId, ok, code, output,
             ok ? root.Clone() : null);
+    }
+
+    private RemoteCommandResult StartAdministrativeDesktop(PortalRemoteCommand command)
+    {
+        var sessionId = InteractiveSessionPipe.Resolve(OptionalNullableInt(command.Parameters, "sessionId"));
+        InteractiveSessionPipe.EnsureAvailable(sessionId);
+        var tool = OptionalString(command.Parameters, "tool", "powershell", 64);
+        var process = InteractiveAdminLauncher.Start(sessionId, tool);
+        return new RemoteCommandResult(command.CommandId, true, "DESKTOP_ADMIN_STARTED", "",
+            ToElement(new { process.ProcessId, process.SessionId, process.Tool }));
     }
 
     private async Task<RemoteCommandResult> ExecuteTerminalAsync(PortalRemoteCommand command,

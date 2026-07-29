@@ -85,6 +85,15 @@ public sealed class RemoteCommandExecutorTests
         Assert.Equal(JsonValueKind.Array, allowed.Data!.Value.ValueKind);
     }
 
+    [Fact]
+    public void AdministrativeDesktopTools_AreRestrictedToTheBuiltInAllowlist()
+    {
+        Assert.EndsWith("powershell.exe",
+            InteractiveAdminLauncher.ResolveTool("powershell").Application,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Throws<InvalidDataException>(() => InteractiveAdminLauncher.ResolveTool("C:\\temp\\tool.exe"));
+    }
+
     private static PortalRemoteCommand Command(string type, object parameters) =>
         new(Guid.NewGuid().ToString("N"), type, JsonSerializer.SerializeToElement(parameters, Json),
             DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddMinutes(5));

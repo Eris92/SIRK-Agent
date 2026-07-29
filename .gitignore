@@ -2,3 +2,4 @@
 **/obj/
 artifacts/
 downloads/
+.local-publish/

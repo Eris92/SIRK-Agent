@@ -32,6 +32,7 @@ internal static class Program
     private static readonly object CaptureSync = new();
     private static readonly Dictionary<int, DxgiDesktopCapture> DxgiCaptures = [];
     private static readonly Dictionary<int, DateTimeOffset> LastFullFrames = [];
+    private static readonly Dictionary<int, DxgiH264Capture> H264Captures = [];
     private static SessionH264Encoder? _h264Encoder;
 
     [STAThread]
@@ -252,6 +253,48 @@ internal static class Program
         var bounds = CaptureBounds(monitorIndex);
         maxWidth = Math.Clamp(maxWidth, 640, 1920);
         targetKbps = Math.Clamp(targetKbps, 300, 8000);
+        try
+        {
+            var outputIndex = monitorIndex < 0
+                ? Array.FindIndex(Screen.AllScreens, value => value.Primary)
+                : monitorIndex;
+            outputIndex = Math.Max(0, outputIndex);
+            DxgiH264Frame gpuFrame;
+            lock (CaptureSync)
+            {
+                H264Captures.TryGetValue(outputIndex, out var existingCapture);
+                if (forceKeyFrame || existingCapture is null || !existingCapture.Matches(maxWidth, targetKbps))
+                {
+                    existingCapture?.Dispose();
+                    existingCapture = new DxgiH264Capture(outputIndex, maxWidth, targetKbps);
+                    H264Captures[outputIndex] = existingCapture;
+                }
+                gpuFrame = existingCapture.Capture(16);
+            }
+            if (gpuFrame.Bytes.Length == 0)
+                return new SessionResponse(true, "DESKTOP_NO_CHANGE", null, bounds.Width, bounds.Height);
+            var gpuCursor = Cursor.Position;
+            totalTimer.Stop();
+            return new SessionResponse(true, "DESKTOP_VIDEO_FRAME_OK",
+                Convert.ToBase64String(gpuFrame.Bytes), bounds.Width, bounds.Height,
+                JsonSerializer.SerializeToElement(new
+                {
+                    sessionId = SessionId, monitorIndex, encodedWidth = gpuFrame.Width,
+                    encodedHeight = gpuFrame.Height, fullFrame = true, keyFrame = gpuFrame.KeyFrame,
+                    cursorX = Math.Clamp(gpuCursor.X - bounds.Left, 0, Math.Max(0, bounds.Width - 1)),
+                    cursorY = Math.Clamp(gpuCursor.Y - bounds.Top, 0, Math.Max(0, bounds.Height - 1)),
+                    captureMilliseconds = Math.Round(gpuFrame.CaptureMilliseconds, 2),
+                    encodeMilliseconds = Math.Round(gpuFrame.EncodeMilliseconds, 2),
+                    agentFrameMilliseconds = Math.Round(totalTimer.Elapsed.TotalMilliseconds, 2),
+                    encodedBytes = gpuFrame.Bytes.Length, captureBackend = "DXGI_D3D11_MF_ZERO_COPY",
+                    dirtyRectangleCount = gpuFrame.DirtyRectangleCount,
+                    accumulatedFrames = gpuFrame.AccumulatedFrames, encoding = "H264_ANNEX_B"
+                }, Json));
+        }
+        catch (Exception error)
+        {
+            LogError(new InvalidOperationException("Zero-copy H.264 fallback activated.", error));
+        }
         var scale = Math.Min(1d, Math.Min((double)maxWidth / bounds.Width, 1080d / bounds.Height));
         var width = Math.Max(16, (int)Math.Round(bounds.Width * scale) & ~15);
         var height = Math.Max(16, (int)Math.Round(bounds.Height * scale) & ~15);
@@ -277,11 +320,11 @@ internal static class Program
         }
         var bytes = _h264Encoder.Encode(scaled);
         encodeTimer.Stop();
-        if (bytes.Length == 0) return new SessionResponse(true, "DESKTOP_NO_CHANGE", null, width, height,
+        if (bytes.Length == 0) return new SessionResponse(true, "DESKTOP_NO_CHANGE", null, bounds.Width, bounds.Height,
             JsonSerializer.SerializeToElement(new { encoderInputs = _h264Encoder.InputFrames,
                 encoderOutputs = _h264Encoder.OutputFrames }, Json));
         var cursor = Cursor.Position;
-        return new SessionResponse(true, "DESKTOP_VIDEO_FRAME_OK", Convert.ToBase64String(bytes), width, height,
+        return new SessionResponse(true, "DESKTOP_VIDEO_FRAME_OK", Convert.ToBase64String(bytes), bounds.Width, bounds.Height,
             JsonSerializer.SerializeToElement(new
             {
                 sessionId = SessionId, monitorIndex, encodedWidth = width, encodedHeight = height,

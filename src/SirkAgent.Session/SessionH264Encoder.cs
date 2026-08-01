@@ -4,6 +4,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using Windows.Win32;
 using Vortice.MediaFoundation;
+using Vortice.Direct3D11;
 using MfColorConverter = SharpMediaFoundationInterop.Transforms.Colors.ColorConverter;
 
 namespace SirkAgent.Session;
@@ -83,9 +84,10 @@ internal sealed class DirectHardwareH264Encoder : IDisposable
     private readonly int _frameBytes;
     private readonly long _duration;
     private bool _needInput;
+    private readonly IMFDXGIDeviceManager? _deviceManager;
     public int OutputFrames { get; private set; }
 
-    public DirectHardwareH264Encoder(int width, int height, int fps, int bitrate)
+    public DirectHardwareH264Encoder(int width, int height, int fps, int bitrate, ID3D11Device? device = null)
     {
         MediaFactory.MFStartup().CheckError();
         _frameBytes = width * height * 3 / 2;
@@ -96,6 +98,13 @@ internal sealed class DirectHardwareH264Encoder : IDisposable
         var activation = activations.FirstOrDefault() ?? throw new NotSupportedException("Brak sprzętowego kodera H.264 Media Foundation.");
         _transform = activation.ActivateObject<IMFTransform>();
         _transform.Attributes.Set(TransformAttributeKeys.TransformAsyncUnlock, 1u).CheckError();
+        if (device is not null)
+        {
+            _deviceManager = MediaFactory.MFCreateDXGIDeviceManager();
+            _deviceManager.ResetDevice(device).CheckError();
+            _transform.ProcessMessage(TMessageType.MessageSetD3DManager,
+                unchecked((UIntPtr)_deviceManager.NativePointer.ToInt64()));
+        }
         ConfigureCodec(_transform, bitrate, fps);
         using var outputType = _transform.GetOutputAvailableType(0, 0);
         Configure(outputType, width, height, fps);
@@ -121,6 +130,19 @@ internal sealed class DirectHardwareH264Encoder : IDisposable
         buffer.Lock(out var pointer, out _, out _);
         try { Marshal.Copy(nv12, 0, pointer, _frameBytes); } finally { buffer.Unlock(); }
         buffer.CurrentLength = _frameBytes;
+        using var sample = MediaFactory.MFCreateSample();
+        sample.AddBuffer(buffer); sample.SampleTime = timestamp; sample.SampleDuration = _duration;
+        _transform.ProcessInput(0, sample, 0); _needInput = false;
+        while (!_needInput) { using var mediaEvent = _events.GetEvent(0); ProcessEvent(mediaEvent, output); }
+        return output.ToArray();
+    }
+
+    public byte[] Encode(ID3D11Texture2D texture, long timestamp)
+    {
+        using var output = new MemoryStream();
+        DrainAvailable(output); WaitForInput(output);
+        using var buffer = MediaFactory.MFCreateDXGISurfaceBuffer(typeof(ID3D11Texture2D).GUID,
+            texture, 0, false);
         using var sample = MediaFactory.MFCreateSample();
         sample.AddBuffer(buffer); sample.SampleTime = timestamp; sample.SampleDuration = _duration;
         _transform.ProcessInput(0, sample, 0); _needInput = false;
@@ -194,7 +216,7 @@ internal sealed class DirectHardwareH264Encoder : IDisposable
     {
         _transform.ProcessMessage(TMessageType.MessageNotifyEndOfStream, UIntPtr.Zero);
         _transform.ProcessMessage(TMessageType.MessageNotifyEndStreaming, UIntPtr.Zero);
-        _events.Dispose(); _transform.Dispose();
+        _events.Dispose(); _transform.Dispose(); _deviceManager?.Dispose();
     }
 }
 

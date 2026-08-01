@@ -29,6 +29,8 @@ internal static class Program
     private const uint MouseEventMiddleUp = 0x0040;
     private const uint MouseEventWheel = 0x0800;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    private static readonly ImageCodecInfo JpegEncoder = ImageCodecInfo.GetImageEncoders()
+        .First(value => value.FormatID == ImageFormat.Jpeg.Guid);
     private static DateTimeOffset _lastActivitySampleUtc = DateTimeOffset.UtcNow;
     private static System.Drawing.Point? _lastCursorPosition;
     private static readonly object CaptureSync = new();
@@ -341,10 +343,9 @@ internal static class Program
             PendingRefinementRegions.Remove(monitorIndex);
             LastDirtyFrameTimestamps.Remove(monitorIndex);
         }
-        var encoder = ImageCodecInfo.GetImageEncoders().First(value => value.FormatID == ImageFormat.Jpeg.Guid);
         using var parameters = new EncoderParameters(1);
         parameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, (long)quality);
-        encodedBitmap.Save(output, encoder, parameters);
+        encodedBitmap.Save(output, JpegEncoder, parameters);
         encodeTimer.Stop();
         var bytes = output.ToArray();
         totalTimer.Stop();
@@ -624,43 +625,60 @@ internal static class Program
         var atlasHeight = y + rowHeight;
         var bitmap = new Bitmap(Math.Max(1, atlasWidth), Math.Max(1, atlasHeight),
             PixelFormat.Format32bppArgb);
-        foreach (var placement in placements)
-            CopyBitmapRegion(source, placement.Source, bitmap, placement.Atlas);
+        CopyBitmapRegions(source, bitmap, placements);
         patches = placements.Select(value => new DesktopPatch(
             value.Atlas.X, value.Atlas.Y, value.Atlas.Width, value.Atlas.Height,
             value.Destination.X, value.Destination.Y, value.Destination.Width, value.Destination.Height)).ToArray();
         return bitmap;
     }
 
-    private static unsafe void CopyBitmapRegion(Bitmap source, Rectangle sourceRegion,
-        Bitmap destination, Rectangle destinationRegion)
+    private static unsafe void CopyBitmapRegions(Bitmap source, Bitmap destination,
+        IReadOnlyList<(Rectangle Atlas, Rectangle Source, Rectangle Destination)> placements)
     {
-        var sourceData = source.LockBits(sourceRegion, ImageLockMode.ReadOnly,
-            PixelFormat.Format32bppArgb);
+        if (source.PixelFormat != PixelFormat.Format32bppArgb)
+        {
+            using var graphics = Graphics.FromImage(destination);
+            graphics.CompositingMode = CompositingMode.SourceCopy;
+            graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
+            foreach (var placement in placements)
+                graphics.DrawImage(source, placement.Atlas, placement.Source, GraphicsUnit.Pixel);
+            return;
+        }
+        var sourceData = source.LockBits(new Rectangle(0, 0, source.Width, source.Height),
+            ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
         try
         {
-            var destinationData = destination.LockBits(destinationRegion, ImageLockMode.WriteOnly,
-                PixelFormat.Format32bppArgb);
+            var destinationData = destination.LockBits(new Rectangle(0, 0, destination.Width, destination.Height),
+                ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
             try
             {
-                if (sourceRegion.Size == destinationRegion.Size)
+                foreach (var placement in placements)
                 {
-                    var bytes = sourceRegion.Width * 4;
-                    for (var row = 0; row < sourceRegion.Height; row++)
-                        CopyMemory(IntPtr.Add(destinationData.Scan0, row * destinationData.Stride),
-                            IntPtr.Add(sourceData.Scan0, row * sourceData.Stride), (nuint)bytes);
-                }
-                else
-                {
-                    for (var y = 0; y < destinationRegion.Height; y++)
+                    var sourceRegion = placement.Source;
+                    var destinationRegion = placement.Atlas;
+                    if (sourceRegion.Size == destinationRegion.Size)
                     {
-                        var sourceY = y * sourceRegion.Height / destinationRegion.Height;
-                        var sourceRow = (uint*)IntPtr.Add(sourceData.Scan0,
-                            sourceY * sourceData.Stride).ToPointer();
-                        var destinationRow = (uint*)IntPtr.Add(destinationData.Scan0,
-                            y * destinationData.Stride).ToPointer();
-                        for (var x = 0; x < destinationRegion.Width; x++)
-                            destinationRow[x] = sourceRow[x * sourceRegion.Width / destinationRegion.Width];
+                        var bytes = sourceRegion.Width * 4;
+                        for (var row = 0; row < sourceRegion.Height; row++)
+                            CopyMemory(
+                                IntPtr.Add(destinationData.Scan0,
+                                    (destinationRegion.Y + row) * destinationData.Stride + destinationRegion.X * 4),
+                                IntPtr.Add(sourceData.Scan0,
+                                    (sourceRegion.Y + row) * sourceData.Stride + sourceRegion.X * 4),
+                                (nuint)bytes);
+                    }
+                    else
+                    {
+                        for (var y = 0; y < destinationRegion.Height; y++)
+                        {
+                            var sourceY = sourceRegion.Y + y * sourceRegion.Height / destinationRegion.Height;
+                            var sourceRow = (uint*)IntPtr.Add(sourceData.Scan0,
+                                sourceY * sourceData.Stride + sourceRegion.X * 4).ToPointer();
+                            var destinationRow = (uint*)IntPtr.Add(destinationData.Scan0,
+                                (destinationRegion.Y + y) * destinationData.Stride + destinationRegion.X * 4).ToPointer();
+                            for (var x = 0; x < destinationRegion.Width; x++)
+                                destinationRow[x] = sourceRow[x * sourceRegion.Width / destinationRegion.Width];
+                        }
                     }
                 }
             }

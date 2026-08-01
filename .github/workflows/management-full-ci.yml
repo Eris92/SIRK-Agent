@@ -158,6 +158,8 @@ jobs:
         run: |
           $installed = Join-Path $env:ProgramFiles 'SIRK Agent CI'
           $cli = Join-Path $installed 'sirkctl.exe'
+          Stop-Service SirkAgentWatchdog -Force
+          (Get-Service SirkAgentWatchdog).WaitForStatus('Stopped',[TimeSpan]::FromSeconds(30))
           Stop-Service SirkAgent -Force
           (Get-Service SirkAgent).WaitForStatus('Stopped',[TimeSpan]::FromSeconds(30))
           try {
@@ -177,6 +179,8 @@ jobs:
           finally {
             Start-Service SirkAgent
             (Get-Service SirkAgent).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))
+            Start-Service SirkAgentWatchdog
+            (Get-Service SirkAgentWatchdog).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))
           }
 
       - name: Validate diagnostics and TestBundle

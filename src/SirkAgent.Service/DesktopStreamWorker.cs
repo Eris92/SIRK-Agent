@@ -98,9 +98,15 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                 var data = root.GetProperty("data");
                 var encoding = data.TryGetProperty("encoding", out var encodingValue)
                     ? encodingValue.GetString() ?? "JPEG" : "JPEG";
+                var sourceWidth = Number(root, "width");
+                var sourceHeight = Number(root, "height");
+                var encodedWidth = Number(data, "encodedWidth");
+                var encodedHeight = Number(data, "encodedHeight");
                 var frame = new DesktopFrame(
                     Convert.FromBase64String(root.GetProperty("imageBase64").GetString() ?? ""),
-                    Number(root, "width"), Number(root, "height"),
+                    encodedWidth == "0" ? sourceWidth : encodedWidth,
+                    encodedHeight == "0" ? sourceHeight : encodedHeight,
+                    sourceWidth, sourceHeight,
                     Number(data, "captureMilliseconds"), Number(data, "encodeMilliseconds"),
                     data.TryGetProperty("captureBackend", out var backend) ? backend.GetString() ?? "" : "",
                     Bool(data, "fullFrame"),
@@ -256,6 +262,8 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                 {
                     width = int.Parse(frame.Width, CultureInfo.InvariantCulture),
                     height = int.Parse(frame.Height, CultureInfo.InvariantCulture),
+                    sourceWidth = int.Parse(frame.SourceWidth, CultureInfo.InvariantCulture),
+                    sourceHeight = int.Parse(frame.SourceHeight, CultureInfo.InvariantCulture),
                     captureMilliseconds = double.Parse(frame.CaptureMilliseconds, CultureInfo.InvariantCulture),
                     encodeMilliseconds = double.Parse(frame.EncodeMilliseconds, CultureInfo.InvariantCulture),
                     captureBackend = frame.CaptureBackend, fullFrame = frame.FullFrame,
@@ -444,6 +452,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
 }
 
 internal sealed record DesktopFrame(byte[] Bytes, string Width, string Height,
+    string SourceWidth, string SourceHeight,
     string CaptureMilliseconds, string EncodeMilliseconds, string CaptureBackend,
     bool FullFrame, string Patches, string Moves, string CursorX, string CursorY,
     long CapturedAtUnixMilliseconds, string ContentType, string Encoding, bool KeyFrame);

@@ -265,7 +265,8 @@ internal static class Program
                 H264Captures.TryGetValue(outputIndex, out var existingCapture);
                 if (forceKeyFrame || existingCapture is null || !existingCapture.Matches(maxWidth, targetKbps))
                 {
-                    existingCapture?.Dispose();
+                    H264Captures.Remove(outputIndex);
+                    try { existingCapture?.Dispose(); } catch (Exception disposeError) { LogError(disposeError); }
                     existingCapture = new DxgiH264Capture(outputIndex, maxWidth, targetKbps);
                     H264Captures[outputIndex] = existingCapture;
                 }

@@ -214,9 +214,11 @@ internal sealed class DirectHardwareH264Encoder : IDisposable
     }
     public void Dispose()
     {
-        _transform.ProcessMessage(TMessageType.MessageNotifyEndOfStream, UIntPtr.Zero);
-        _transform.ProcessMessage(TMessageType.MessageNotifyEndStreaming, UIntPtr.Zero);
-        _events.Dispose(); _transform.Dispose(); _deviceManager?.Dispose();
+        try { _transform?.ProcessMessage(TMessageType.MessageNotifyEndOfStream, UIntPtr.Zero); } catch { }
+        try { _transform?.ProcessMessage(TMessageType.MessageNotifyEndStreaming, UIntPtr.Zero); } catch { }
+        try { _events?.Dispose(); } catch { }
+        try { _transform?.Dispose(); } catch { }
+        try { _deviceManager?.Dispose(); } catch { }
     }
 }
 

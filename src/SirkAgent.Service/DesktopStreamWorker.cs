@@ -38,6 +38,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
     private int _h264Available = 1;
     private int _profileMaxWidth = 1920;
     private int _profileQuality = 72;
+    private long _lastStreamStatusWrite;
     private readonly Queue<(DateTimeOffset At, int Bytes)> _bandwidthWindow = new();
     private DateTimeOffset _lastAdaptiveChange = DateTimeOffset.MinValue;
 
@@ -323,25 +324,30 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                 sequence++;
                 Interlocked.Increment(ref _uploadedFrames);
                 var bitrateKbps = AdaptToBandwidth(frame.Bytes.Length);
-                AtomicFile.WriteJson(Path.Combine(paths.Root, "desktop-stream-status.json"), new
+                var statusTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+                if (statusTimestamp - _lastStreamStatusWrite >= System.Diagnostics.Stopwatch.Frequency / 4)
                 {
-                    ok = true, timestampUtc = DateTimeOffset.UtcNow, frameBytes = frame.Bytes.Length,
-                    viewers = Volatile.Read(ref _viewers), sequence,
-                    queueCapacity = 1, latestFrameWins = true,
-                    capturedFrames = Interlocked.Read(ref _capturedFrames),
-                    uploadedFrames = Interlocked.Read(ref _uploadedFrames),
-                    droppedFrames = Math.Max(0, Interlocked.Read(ref _capturedFrames) -
-                        Interlocked.Read(ref _uploadedFrames) - 1),
-                    sendMilliseconds = Math.Round(sendTimer.Elapsed.TotalMilliseconds, 2),
-                    inputCommands = Interlocked.Read(ref _inputCommands),
-                    sessionTransport = Interlocked.Read(ref _binaryCaptures) > 0 ? "BINARY_PIPE" : "JSON_BASE64",
-                    binaryCaptures = Interlocked.Read(ref _binaryCaptures),
-                    legacyCaptures = Interlocked.Read(ref _legacyCaptures),
-                    maxWidth = Volatile.Read(ref _maxWidth),
-                    quality = Volatile.Read(ref _quality),
-                    targetKbps = Volatile.Read(ref _targetKbps),
-                    bitrateKbps
-                }, Json);
+                    _lastStreamStatusWrite = statusTimestamp;
+                    AtomicFile.WriteJson(Path.Combine(paths.Root, "desktop-stream-status.json"), new
+                    {
+                        ok = true, timestampUtc = DateTimeOffset.UtcNow, frameBytes = frame.Bytes.Length,
+                        viewers = Volatile.Read(ref _viewers), sequence,
+                        queueCapacity = 1, latestFrameWins = true,
+                        capturedFrames = Interlocked.Read(ref _capturedFrames),
+                        uploadedFrames = Interlocked.Read(ref _uploadedFrames),
+                        droppedFrames = Math.Max(0, Interlocked.Read(ref _capturedFrames) -
+                            Interlocked.Read(ref _uploadedFrames) - 1),
+                        sendMilliseconds = Math.Round(sendTimer.Elapsed.TotalMilliseconds, 2),
+                        inputCommands = Interlocked.Read(ref _inputCommands),
+                        sessionTransport = Interlocked.Read(ref _binaryCaptures) > 0 ? "BINARY_PIPE" : "JSON_BASE64",
+                        binaryCaptures = Interlocked.Read(ref _binaryCaptures),
+                        legacyCaptures = Interlocked.Read(ref _legacyCaptures),
+                        maxWidth = Volatile.Read(ref _maxWidth),
+                        quality = Volatile.Read(ref _quality),
+                        targetKbps = Volatile.Read(ref _targetKbps),
+                        bitrateKbps
+                    }, Json);
+                }
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
             catch (Exception error)

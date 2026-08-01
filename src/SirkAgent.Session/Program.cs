@@ -277,6 +277,14 @@ internal static class Program
     private static SessionVideoPayload SnapshotPayload(int monitorIndex, int maxWidth, int quality,
         int targetFps, int deltaScalePercent, bool requestedFull)
     {
+        lock (CaptureSync)
+            return SnapshotPayloadLocked(monitorIndex, maxWidth, quality, targetFps, deltaScalePercent,
+                requestedFull);
+    }
+
+    private static SessionVideoPayload SnapshotPayloadLocked(int monitorIndex, int maxWidth, int quality,
+        int targetFps, int deltaScalePercent, bool requestedFull)
+    {
         Volatile.Write(ref _lastVideoRequestTimestamp, Stopwatch.GetTimestamp());
         var totalTimer = Stopwatch.StartNew();
         var bounds = CaptureBounds(monitorIndex);
@@ -289,9 +297,11 @@ internal static class Program
         var fullScale = Math.Min(1d, Math.Min((double)maxWidth / bounds.Width, 1080d / bounds.Height));
         var captureTimer = Stopwatch.StartNew();
         var captureTimeoutMilliseconds = Math.Clamp(1000 / targetFps, 1, 16);
-        using var bitmap = CaptureDesktopBitmap(monitorIndex, bounds, captureTimeoutMilliseconds,
+        using var captured = CaptureDesktopBitmap(monitorIndex, bounds, captureTimeoutMilliseconds,
+            borrowDxgiBitmap: true,
             out var captureBackend,
             out var dirtyRectangles, out var moveRectangles, out var accumulatedFrames);
+        var bitmap = captured.Bitmap;
         captureTimer.Stop();
         var now = DateTimeOffset.UtcNow;
         var forceFull = requestedFull || !LastFullFrames.TryGetValue(monitorIndex, out var lastFull) ||
@@ -471,8 +481,10 @@ internal static class Program
         var width = Math.Max(16, (int)Math.Round(bounds.Width * scale) & ~15);
         var height = Math.Max(16, (int)Math.Round(bounds.Height * scale) & ~15);
         var captureTimer = Stopwatch.StartNew();
-        using var bitmap = CaptureDesktopBitmap(monitorIndex, bounds, 16, out var backend,
+        using var captured = CaptureDesktopBitmap(monitorIndex, bounds, 16, borrowDxgiBitmap: false,
+            out var backend,
             out var dirty, out _, out var accumulatedFrames);
+        var bitmap = captured.Bitmap;
         captureTimer.Stop();
         if (dirty.Length == 0 && accumulatedFrames == 0 && !forceKeyFrame &&
             _h264Encoder?.HasProducedFrame == true)
@@ -728,7 +740,8 @@ internal static class Program
         return cells.Values.ToList();
     }
 
-    private static Bitmap CaptureDesktopBitmap(int monitorIndex, Rectangle bounds, int timeoutMilliseconds,
+    private static CapturedBitmap CaptureDesktopBitmap(int monitorIndex, Rectangle bounds, int timeoutMilliseconds,
+        bool borrowDxgiBitmap,
         out string backend, out Rectangle[] dirtyRectangles, out DesktopMove[] moveRectangles,
         out uint accumulatedFrames)
     {
@@ -746,13 +759,13 @@ internal static class Program
                     capture = new DxgiDesktopCapture(outputIndex);
                     DxgiCaptures[outputIndex] = capture;
                 }
-                frame = capture.Capture((uint)Math.Clamp(timeoutMilliseconds, 1, 100));
+                frame = capture.Capture((uint)Math.Clamp(timeoutMilliseconds, 1, 100), !borrowDxgiBitmap);
             }
             backend = "DXGI_DESKTOP_DUPLICATION";
             dirtyRectangles = frame.DirtyRectangles;
             moveRectangles = frame.MoveRectangles;
             accumulatedFrames = frame.AccumulatedFrames;
-            return frame.Bitmap;
+            return new CapturedBitmap(frame.Bitmap, frame.OwnsBitmap);
         }
         catch (Exception error)
         {
@@ -777,7 +790,7 @@ internal static class Program
                 if (screen != IntPtr.Zero) ReleaseDC(IntPtr.Zero, screen);
                 graphics.ReleaseHdc(destination);
             }
-            return bitmap;
+            return new CapturedBitmap(bitmap, true);
         }
     }
 
@@ -1092,6 +1105,11 @@ internal static class Program
 
     [DllImport("kernel32.dll", EntryPoint = "RtlMoveMemory")]
     private static extern void CopyMemory(IntPtr destination, IntPtr source, nuint length);
+}
+
+internal sealed record CapturedBitmap(Bitmap Bitmap, bool OwnsBitmap) : IDisposable
+{
+    public void Dispose() { if (OwnsBitmap) Bitmap.Dispose(); }
 }
 
 internal sealed record SessionRequest(string Type, string? Action, int? X, int? Y, int? Delta, int? MonitorIndex,

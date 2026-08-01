@@ -31,11 +31,11 @@ internal sealed class DxgiDesktopCapture : IDisposable
         _duplication = output1.DuplicateOutput(_device);
     }
 
-    public DxgiFrame Capture(uint timeoutMilliseconds)
+    public DxgiFrame Capture(uint timeoutMilliseconds, bool cloneBitmap = true)
     {
         var result = _duplication.AcquireNextFrame(timeoutMilliseconds, out var frameInfo, out var resource);
         if (result == Vortice.DXGI.ResultCode.WaitTimeout && _lastBitmap is not null)
-            return new DxgiFrame((Bitmap)_lastBitmap.Clone(), [], [], 0, false, 0, 0);
+            return Frame(_lastBitmap, cloneBitmap, [], [], 0, false, 0, 0);
         result.CheckError();
         try
         {
@@ -58,9 +58,9 @@ internal sealed class DxgiDesktopCapture : IDisposable
                         (uint)region.X, (uint)region.Y, 0, texture, 0,
                         new Box(region.Left, region.Top, 0, region.Right, region.Bottom, 1));
             if (!fullCopy && regions.Length == 0)
-                return new DxgiFrame((Bitmap)_lastBitmap!.Clone(), dirty, moves,
-                    frameInfo.AccumulatedFrames, frameInfo.PointerPosition.Visible,
-                    frameInfo.PointerPosition.Position.X, frameInfo.PointerPosition.Position.Y);
+                return Frame(_lastBitmap!, cloneBitmap, dirty, moves, frameInfo.AccumulatedFrames,
+                    frameInfo.PointerPosition.Visible, frameInfo.PointerPosition.Position.X,
+                    frameInfo.PointerPosition.Position.Y);
             var mapped = _context.Map(_staging!, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
             try
             {
@@ -82,7 +82,7 @@ internal sealed class DxgiDesktopCapture : IDisposable
                     }
                 }
                 finally { _lastBitmap.UnlockBits(data); }
-                return new DxgiFrame((Bitmap)_lastBitmap.Clone(), dirty, moves, frameInfo.AccumulatedFrames,
+                return Frame(_lastBitmap, cloneBitmap, dirty, moves, frameInfo.AccumulatedFrames,
                     frameInfo.PointerPosition.Visible, frameInfo.PointerPosition.Position.X,
                     frameInfo.PointerPosition.Position.Y);
             }
@@ -94,6 +94,11 @@ internal sealed class DxgiDesktopCapture : IDisposable
             _duplication.ReleaseFrame();
         }
     }
+
+    private static DxgiFrame Frame(Bitmap bitmap, bool cloneBitmap, Rectangle[] dirty, DesktopMove[] moves,
+        uint accumulatedFrames, bool pointerVisible, int pointerX, int pointerY) =>
+        new(cloneBitmap ? (Bitmap)bitmap.Clone() : bitmap, cloneBitmap, dirty, moves, accumulatedFrames,
+            pointerVisible, pointerX, pointerY);
 
     private Rectangle[] DirtyRectangles(uint metadataBytes)
     {
@@ -156,11 +161,11 @@ internal sealed class DxgiDesktopCapture : IDisposable
     private static extern void CopyMemory(IntPtr destination, IntPtr source, nuint length);
 }
 
-internal sealed record DxgiFrame(Bitmap Bitmap, Rectangle[] DirtyRectangles, DesktopMove[] MoveRectangles,
-    uint AccumulatedFrames,
+internal sealed record DxgiFrame(Bitmap Bitmap, bool OwnsBitmap, Rectangle[] DirtyRectangles,
+    DesktopMove[] MoveRectangles, uint AccumulatedFrames,
     bool PointerVisible, int PointerX, int PointerY) : IDisposable
 {
-    public void Dispose() => Bitmap.Dispose();
+    public void Dispose() { if (OwnsBitmap) Bitmap.Dispose(); }
 }
 
 internal sealed record DesktopMove(int SourceX, int SourceY, int X, int Y, int Width, int Height);

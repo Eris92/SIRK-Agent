@@ -43,8 +43,9 @@ if ($existing) {
 }
 
 New-Item -ItemType Directory -Path $InstallPath -Force | Out-Null
-Get-Process 'SirkAgent.Session' -ErrorAction SilentlyContinue |
-    Stop-Process -Force -ErrorAction SilentlyContinue
+$sessionProcesses = @(Get-Process 'SirkAgent.Session' -ErrorAction SilentlyContinue)
+$sessionProcesses | Stop-Process -Force -ErrorAction SilentlyContinue
+$sessionProcesses | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
 $packageFiles = Get-ChildItem -LiteralPath $source -File | Where-Object {
     $_.Name -notlike '*.zip' -and $_.Name -notlike 'TestBundle-*'
 }
@@ -66,7 +67,15 @@ $sessionSource = Join-Path $source 'Session'
 $sessionTarget = Join-Path $InstallPath 'Session'
 if (Test-Path -LiteralPath $sessionSource) {
     New-Item -ItemType Directory -Path $sessionTarget -Force | Out-Null
-    Copy-Item -Path (Join-Path $sessionSource '*') -Destination $sessionTarget -Recurse -Force
+    foreach ($sessionFile in Get-ChildItem -LiteralPath $sessionSource -File -Recurse) {
+        $relative = [IO.Path]::GetRelativePath($sessionSource, $sessionFile.FullName)
+        $destination = Join-Path $sessionTarget $relative
+        New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+        for ($attempt = 1; $attempt -le 10; $attempt++) {
+            try { Copy-Item -LiteralPath $sessionFile.FullName -Destination $destination -Force; break }
+            catch { if ($attempt -eq 10) { throw }; Start-Sleep -Milliseconds 500 }
+        }
+    }
 }
 
 $extensionSource = Join-Path $source 'BrowserExtension'

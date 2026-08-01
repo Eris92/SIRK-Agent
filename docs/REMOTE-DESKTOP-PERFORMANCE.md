@@ -31,6 +31,14 @@ not hold a 1 Mbit/s ceiling for high-motion content. The production path must
 therefore combine GPU scale/colour conversion, hardware H.264 and congestion
 feedback; merely replacing JPEG with full-screen H.264 is insufficient.
 
+The direct implementation now initializes and drives the asynchronous Intel
+MFT without FFmpeg. A D3D11 video processor scales BGRA 3440x1440 to NV12
+1920x800 in 2.84 ms p50/5.42 ms p95. The Intel encoder processes synthetic
+NV12 1280x720/60 at 204 FPS with encode p50 3.64 ms/p95 10.96 ms and produces
+0.893 Mbit/s when configured for 500 kbit/s. At 1920x1080 the tested driver
+enforces an effective floor near 2.1 Mbit/s, so the adaptive profile must use
+1280x720 for the strict sub-1-Mbit/s mode.
+
 Reproduce the hardware probe with `tools/Test-HardwareDesktopPipeline.ps1`.
 FFmpeg is a test oracle only and is not shipped as an Agent runtime dependency.
 

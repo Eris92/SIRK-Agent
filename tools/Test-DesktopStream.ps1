@@ -12,7 +12,9 @@ param(
     [ValidateRange(640, 1920)][int]$MaxWidth = 1920,
     [ValidateRange(25, 80)][int]$Quality = 72,
     [ValidateRange(300, 8000)][int]$TargetKbps = 1000,
-    [ValidateRange(5, 60)][int]$TargetFps = 60,
+    [ValidateRange(5, 120)][int]$TargetFps = 120,
+    [ValidateSet('tiles', 'h264')][string]$FrameMode = 'tiles',
+    [ValidateRange(10, 100)][int]$DeltaScalePercent = 25,
     [switch]$GenerateWindowMotion
 )
 
@@ -36,6 +38,8 @@ $profileBody = @{
         quality = $Quality
         targetKbps = $TargetKbps
         targetFps = $TargetFps
+        frameMode = $FrameMode
+        deltaScalePercent = $DeltaScalePercent
     }
 } | ConvertTo-Json -Depth 4
 Invoke-WebRequest -Uri "$portal/api/agent-desktop/input" -Method Post `
@@ -44,8 +48,8 @@ Invoke-WebRequest -Uri "$portal/api/agent-desktop/input" -Method Post `
 
 $motion = $null
 if ($GenerateWindowMotion) {
-    $motion = Start-Job -ArgumentList ($DurationSeconds + $WarmupSeconds) -ScriptBlock {
-        param($MotionSeconds)
+    $motion = Start-Job -ArgumentList ($DurationSeconds + $WarmupSeconds), $TargetFps -ScriptBlock {
+        param($MotionSeconds, $MotionFps)
         Add-Type @'
 using System;
 using System.Runtime.InteropServices;
@@ -70,7 +74,7 @@ public static class SirkDesktopBenchmarkWindow {
                 [SirkDesktopBenchmarkWindow]::MoveWindow(
                     $process.MainWindowHandle, $x, $y, 900, 600, $true) | Out-Null
                 $index++
-                $nextFrameMilliseconds += 1000.0 / 60.0
+                $nextFrameMilliseconds += 1000.0 / $MotionFps
                 while (($remaining = $nextFrameMilliseconds - $motionClock.Elapsed.TotalMilliseconds) -gt 0) {
                     if ($remaining -gt 2) { Start-Sleep -Milliseconds 1 } else { [Threading.Thread]::SpinWait(250) }
                 }

@@ -304,8 +304,10 @@ internal static class Program
         var bitmap = captured.Bitmap;
         captureTimer.Stop();
         var now = DateTimeOffset.UtcNow;
-        var forceFull = requestedFull || !LastFullFrames.TryGetValue(monitorIndex, out var lastFull) ||
-                        now - lastFull >= TimeSpan.FromSeconds(30);
+        var forceFull = requestedFull || !LastFullFrames.ContainsKey(monitorIndex);
+        if (dirtyRectangles.Length == 0 && moveRectangles.Length > 0)
+            dirtyRectangles = moveRectangles.Select(value =>
+                new Rectangle(value.X, value.Y, value.Width, value.Height)).ToArray();
         var refinement = false;
         if (dirtyRectangles.Length > 0)
         {
@@ -324,7 +326,7 @@ internal static class Program
             LastDirtyFrameTimestamps.Remove(monitorIndex);
             refinement = true;
         }
-        if (dirtyRectangles.Length == 0 && accumulatedFrames == 0 && !forceFull)
+        if (dirtyRectangles.Length == 0 && !forceFull)
         {
             totalTimer.Stop();
             return new SessionVideoPayload(new SessionResponse(true, "DESKTOP_NO_CHANGE", null,

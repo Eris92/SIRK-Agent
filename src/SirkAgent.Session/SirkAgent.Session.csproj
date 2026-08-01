@@ -8,6 +8,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>SirkAgent.Session</AssemblyName>
     <Version>1.0.4</Version>
     <FileVersion>1.0.4.0</FileVersion>

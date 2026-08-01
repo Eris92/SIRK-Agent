@@ -247,8 +247,9 @@ internal static class Program
         double scale, bool forceFull, out bool fullFrame, out DesktopPatch[] patches)
     {
         var regions = MergeDirtyRectangles(dirtyRectangles, bounds);
+        if (regions.Count > 64) regions = CoalesceToGrid(regions, bounds, 8, 8);
         var dirtyArea = regions.Sum(value => (long)value.Width * value.Height);
-        fullFrame = forceFull || regions.Count == 0 || regions.Count > 64 ||
+        fullFrame = forceFull || regions.Count == 0 ||
                     dirtyArea >= (long)bounds.Width * bounds.Height * 7 / 10;
         if (fullFrame)
         {
@@ -299,17 +300,50 @@ internal static class Program
         }
         var atlasHeight = y + rowHeight;
         var bitmap = new Bitmap(Math.Max(1, atlasWidth), Math.Max(1, atlasHeight),
-            PixelFormat.Format24bppRgb);
-        using (var graphics = Graphics.FromImage(bitmap))
-        {
-            graphics.CompositingMode = CompositingMode.SourceCopy;
-            foreach (var placement in placements)
-                graphics.DrawImage(source, placement.Atlas, placement.Source, GraphicsUnit.Pixel);
-        }
+            PixelFormat.Format32bppArgb);
+        foreach (var placement in placements)
+            CopyBitmapRegion(source, placement.Source, bitmap, placement.Atlas);
         patches = placements.Select(value => new DesktopPatch(
             value.Atlas.X, value.Atlas.Y, value.Atlas.Width, value.Atlas.Height,
             value.Destination.X, value.Destination.Y, value.Destination.Width, value.Destination.Height)).ToArray();
         return bitmap;
+    }
+
+    private static unsafe void CopyBitmapRegion(Bitmap source, Rectangle sourceRegion,
+        Bitmap destination, Rectangle destinationRegion)
+    {
+        var sourceData = source.LockBits(sourceRegion, ImageLockMode.ReadOnly,
+            PixelFormat.Format32bppArgb);
+        try
+        {
+            var destinationData = destination.LockBits(destinationRegion, ImageLockMode.WriteOnly,
+                PixelFormat.Format32bppArgb);
+            try
+            {
+                if (sourceRegion.Size == destinationRegion.Size)
+                {
+                    var bytes = sourceRegion.Width * 4;
+                    for (var row = 0; row < sourceRegion.Height; row++)
+                        CopyMemory(IntPtr.Add(destinationData.Scan0, row * destinationData.Stride),
+                            IntPtr.Add(sourceData.Scan0, row * sourceData.Stride), (nuint)bytes);
+                }
+                else
+                {
+                    for (var y = 0; y < destinationRegion.Height; y++)
+                    {
+                        var sourceY = y * sourceRegion.Height / destinationRegion.Height;
+                        var sourceRow = (uint*)IntPtr.Add(sourceData.Scan0,
+                            sourceY * sourceData.Stride).ToPointer();
+                        var destinationRow = (uint*)IntPtr.Add(destinationData.Scan0,
+                            y * destinationData.Stride).ToPointer();
+                        for (var x = 0; x < destinationRegion.Width; x++)
+                            destinationRow[x] = sourceRow[x * sourceRegion.Width / destinationRegion.Width];
+                    }
+                }
+            }
+            finally { destination.UnlockBits(destinationData); }
+        }
+        finally { source.UnlockBits(sourceData); }
     }
 
     private static List<Rectangle> MergeDirtyRectangles(IEnumerable<Rectangle> values, Rectangle bounds)
@@ -333,6 +367,24 @@ internal static class Program
             regions.Add(candidate);
         }
         return regions;
+    }
+
+    private static List<Rectangle> CoalesceToGrid(IEnumerable<Rectangle> values, Rectangle bounds,
+        int columns, int rows)
+    {
+        var cells = new Dictionary<(int X, int Y), Rectangle>();
+        foreach (var value in values)
+        {
+            var centerX = Math.Clamp(value.Left + value.Width / 2, 0, Math.Max(0, bounds.Width - 1));
+            var centerY = Math.Clamp(value.Top + value.Height / 2, 0, Math.Max(0, bounds.Height - 1));
+            var key = (
+                Math.Min(columns - 1, centerX * columns / Math.Max(1, bounds.Width)),
+                Math.Min(rows - 1, centerY * rows / Math.Max(1, bounds.Height)));
+            cells[key] = cells.TryGetValue(key, out var existing)
+                ? Rectangle.Union(existing, value)
+                : value;
+        }
+        return cells.Values.ToList();
     }
 
     private static Bitmap CaptureDesktopBitmap(int monitorIndex, Rectangle bounds,
@@ -696,6 +748,9 @@ internal static class Program
 
     [DllImport("gdi32.dll")]
     private static extern int SetStretchBltMode(IntPtr deviceContext, int mode);
+
+    [DllImport("kernel32.dll", EntryPoint = "RtlMoveMemory")]
+    private static extern void CopyMemory(IntPtr destination, IntPtr source, nuint length);
 }
 
 internal sealed record SessionRequest(string Type, string? Action, int? X, int? Y, int? Delta, int? MonitorIndex,

@@ -17,7 +17,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
         new BoundedChannelOptions(1)
         {
             FullMode = BoundedChannelFullMode.Wait,
-            SingleReader = false,
+            SingleReader = true,
             SingleWriter = true
         });
     private int _viewers;
@@ -95,15 +95,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                     data.TryGetProperty("moves", out var moves) ? moves.GetRawText() : "[]",
                     Number(data, "cursorX"), Number(data, "cursorY"),
                     DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-                if (!_frames.Writer.TryWrite(frame))
-                {
-                    if (_frames.Reader.TryRead(out _))
-                    {
-                        Interlocked.Exchange(ref _forceFullFrame, 1);
-                        continue;
-                    }
-                    await _frames.Writer.WriteAsync(frame, token);
-                }
+                await _frames.Writer.WriteAsync(frame, token);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
             catch (Exception error)

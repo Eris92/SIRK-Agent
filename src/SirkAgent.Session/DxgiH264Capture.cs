@@ -30,12 +30,14 @@ internal sealed class DxgiH264Capture : IDisposable
     public int Width { get; }
     public int Height { get; }
     public int TargetKbps { get; }
+    public int TargetFps { get; }
     public int SourceWidth { get; }
     public int SourceHeight { get; }
 
-    public DxgiH264Capture(int outputIndex, int maxWidth, int targetKbps)
+    public DxgiH264Capture(int outputIndex, int maxWidth, int targetKbps, int targetFps)
     {
         TargetKbps = targetKbps;
+        TargetFps = targetFps;
         D3D11CreateDevice(null!, DriverType.Hardware,
             DeviceCreationFlags.BgraSupport | DeviceCreationFlags.VideoSupport,
             Array.Empty<FeatureLevel>(), out _device, out _context).CheckError();
@@ -81,7 +83,7 @@ internal sealed class DxgiH264Capture : IDisposable
             new Vortice.RawRect(0, 0, SourceWidth, SourceHeight));
         _videoContext.VideoProcessorSetStreamDestRect(_processor, 0, true,
             new Vortice.RawRect(0, 0, Width, Height));
-        _encoder = new DirectHardwareH264Encoder(Width, Height, 60, targetKbps * 1000, _device);
+        _encoder = new DirectHardwareH264Encoder(Width, Height, targetFps, targetKbps * 1000, _device);
     }
 
     public DxgiH264Frame Capture(uint timeoutMilliseconds)
@@ -151,7 +153,8 @@ internal sealed class DxgiH264Capture : IDisposable
         return false;
     }
 
-    public bool Matches(int maxWidth, int targetKbps) => TargetKbps == targetKbps && Width <= maxWidth &&
+    public bool Matches(int maxWidth, int targetKbps, int targetFps) => TargetKbps == targetKbps &&
+        TargetFps == targetFps && Width <= maxWidth &&
         Width > maxWidth - 32;
 
     public bool RequestKeyFrame() => _encoder.RequestKeyFrame();

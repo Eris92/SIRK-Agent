@@ -72,15 +72,16 @@ Portal credential is part of the ephemeral desktop data plane.
 
 | Profile | Active FPS | Resolution | Quality | Intended use |
 | --- | ---: | ---: | ---: | --- |
-| Auto | 15–40 | dynamic | dynamic | continuous link adaptation |
-| Smooth | 30, burst 40 | native/1920 | 70–80 | normal GUI work |
-| Sharp text | 20–30 | native/1920 | 80–90, 4:4:4/lossless regions | administration and text |
-| Weak link | 15 | 1280 or 0.7 scale | 50–65 | constrained WAN |
-| Minimum transfer | 5–10 | 960 or lower | 30–45 | emergency access |
+| Auto | 8–60 | dynamic, at least 1600 | dynamic | continuous link adaptation |
+| Smooth | 60 | native/1920 | 70–80 | normal GUI work |
+| Sharp text | 30 | native/1920 | 80–90, 4:4:4/lossless regions | administration and text |
+| Weak link | 20 | 1600 | 60–70 | constrained WAN |
+| Minimum transfer | 8 | 1920 | 65–70 | readable emergency access below 1 Mbit/s |
 
 Auto uses rolling RTT, frame p50/p95, bitrate, dropped frames, decode/render
-time and congestion feedback. It lowers scale before sacrificing interactive
-continuity and sends a sharp refresh when the screen becomes static.
+time and congestion feedback. Text readability takes priority over animation:
+the constrained profiles reduce encoded FPS and bitrate before aggressively
+reducing spatial resolution, then send a sharp refresh when the screen becomes static.
 
 ## Acceptance gates
 

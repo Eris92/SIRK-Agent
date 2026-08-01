@@ -17,6 +17,7 @@ internal sealed class SessionH264Encoder : IDisposable
     private byte[] _nv12;
     private long _timestamp;
     private readonly int _bitrate;
+    private readonly int _fps;
     public int Width { get; }
     public int Height { get; }
     public bool LastWasKeyFrame { get; private set; }
@@ -24,10 +25,10 @@ internal sealed class SessionH264Encoder : IDisposable
     public int InputFrames { get; private set; }
     public int OutputFrames => _encoder.OutputFrames;
 
-    public SessionH264Encoder(int width, int height, int bitrate)
+    public SessionH264Encoder(int width, int height, int bitrate, int fps)
     {
-        Width = width; Height = height; _bitrate = bitrate;
-        _encoder = new DirectHardwareH264Encoder(width, height, 60, bitrate);
+        Width = width; Height = height; _bitrate = bitrate; _fps = fps;
+        _encoder = new DirectHardwareH264Encoder(width, height, fps, bitrate);
         _converter = new MfColorConverter(PInvoke.MFVideoFormat_RGB24, PInvoke.MFVideoFormat_NV12,
             (uint)width, (uint)height);
         _converter.Initialize();
@@ -35,8 +36,8 @@ internal sealed class SessionH264Encoder : IDisposable
         _nv12 = new byte[_converter.OutputSize];
     }
 
-    public bool Matches(int width, int height, int bitrate) =>
-        Width == width && Height == height && _bitrate == bitrate;
+    public bool Matches(int width, int height, int bitrate, int fps) =>
+        Width == width && Height == height && _bitrate == bitrate && _fps == fps;
 
     public byte[] Encode(Bitmap bitmap)
     {
@@ -45,7 +46,7 @@ internal sealed class SessionH264Encoder : IDisposable
         if (!_converter.ProcessOutput(ref _nv12, out _)) throw new InvalidOperationException("RGB24 converter produced no NV12 output.");
         var bytes = _encoder.Encode(_nv12, _timestamp);
         InputFrames++;
-        _timestamp += 10_000_000L / 60;
+        _timestamp += 10_000_000L / _fps;
         HasProducedFrame |= bytes.Length > 0;
         LastWasKeyFrame = ContainsIdr(bytes);
         return bytes;

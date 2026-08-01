@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Globalization;
 using System.Net.Http.Headers;
 using System.Net.WebSockets;
@@ -35,6 +36,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
     private int _monitorIndex;
     private int _sessionId = -1;
     private int _targetKbps = 1000;
+    private int _targetFps = 60;
     private int _h264Available = 1;
     private int _profileQuality = 72;
     private long _lastStreamStatusWrite;
@@ -64,6 +66,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
             }
             try
             {
+                var frameStarted = Stopwatch.GetTimestamp();
                 var selectedSessionId = Volatile.Read(ref _sessionId);
                 var sessionId = InteractiveSessionPipe.Resolve(selectedSessionId >= 0 ? selectedSessionId : null);
                 if (!InteractiveSessionPipe.IsAvailable(sessionId))
@@ -78,6 +81,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                     maxWidth = Volatile.Read(ref _maxWidth),
                     quality = Volatile.Read(ref _quality),
                     targetKbps = Volatile.Read(ref _targetKbps),
+                    targetFps = Volatile.Read(ref _targetFps),
                     forceFull
                 }, Json);
                 string responseJson;
@@ -152,7 +156,13 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                     DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     encoding.StartsWith("H264", StringComparison.Ordinal) ? "video/h264" : "image/jpeg",
                     encoding, Bool(data, "keyFrame"), Bool(data, "cursorOnly"));
-                if (_frames.Writer.TryWrite(frame)) Interlocked.Increment(ref _capturedFrames);
+                if (_frames.Writer.TryWrite(frame))
+                {
+                    Interlocked.Increment(ref _capturedFrames);
+                    var frameInterval = TimeSpan.FromSeconds(1d / Volatile.Read(ref _targetFps));
+                    var remaining = frameInterval - Stopwatch.GetElapsedTime(frameStarted);
+                    if (remaining > TimeSpan.Zero) await Task.Delay(remaining, token);
+                }
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
             catch (Exception error)
@@ -228,8 +238,12 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
             var requestedSession = Integer(input, "sessionId");
             var requestedSessionId = requestedSession is >= 0 and <= 65535 ? requestedSession : -1;
             var previousWidth = Volatile.Read(ref _maxWidth);
+            var requestedFpsValue = Integer(input, "targetFps");
+            var requestedFps = requestedFpsValue == 0 ? 60 : Math.Clamp(requestedFpsValue, 5, 60);
+            var previousFps = Volatile.Read(ref _targetFps);
             var previousSessionId = Volatile.Read(ref _sessionId);
-            if (requestedWidth != previousWidth || requestedSessionId != previousSessionId)
+            if (requestedWidth != previousWidth || requestedFps != previousFps ||
+                requestedSessionId != previousSessionId)
             {
                 var recycleSessionId = InteractiveSessionPipe.Resolve(
                     previousSessionId >= 0 ? previousSessionId : requestedSessionId >= 0 ? requestedSessionId : null);
@@ -242,6 +256,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
             Volatile.Write(ref _quality, Math.Clamp(Integer(input, "quality"), 25, 80));
             Volatile.Write(ref _profileQuality, Volatile.Read(ref _quality));
             Volatile.Write(ref _targetKbps, Math.Clamp(Integer(input, "targetKbps"), 300, 8000));
+            Volatile.Write(ref _targetFps, requestedFps);
             Volatile.Write(ref _monitorIndex, Math.Clamp(Integer(input, "monitorIndex"), 0, 15));
             Volatile.Write(ref _sessionId, requestedSessionId);
             Interlocked.Exchange(ref _forceFullFrame, 1);
@@ -372,6 +387,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                         maxWidth = Volatile.Read(ref _maxWidth),
                         quality = Volatile.Read(ref _quality),
                         targetKbps = Volatile.Read(ref _targetKbps),
+                        targetFps = Volatile.Read(ref _targetFps),
                         bitrateKbps
                     }, Json);
                 }

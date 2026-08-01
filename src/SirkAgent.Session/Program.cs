@@ -110,7 +110,7 @@ internal static class Program
                 {
                     payload = request?.Type == "video-frame"
                         ? VideoFramePayload(request.MonitorIndex ?? -1, request.MaxWidth ?? 1280,
-                            request.TargetKbps ?? 1000, request.ForceFull == true)
+                            request.TargetKbps ?? 1000, request.TargetFps ?? 60, request.ForceFull == true)
                         : new SessionVideoPayload(new SessionResponse(false, "SESSION_REQUEST_INVALID",
                             null, null, null), []);
                 }
@@ -167,7 +167,7 @@ internal static class Program
                             "snapshot" => Snapshot(request.MonitorIndex ?? -1, request.MaxWidth ?? 1280,
                                 request.Quality ?? 40, request.ForceFull == true),
                             "video-frame" => VideoFrame(request.MonitorIndex ?? -1, request.MaxWidth ?? 1280,
-                                request.TargetKbps ?? 1000, request.ForceFull == true),
+                                request.TargetKbps ?? 1000, request.TargetFps ?? 60, request.ForceFull == true),
                             "stream-stop" => MarkStreamStopped(),
                             "mouse" or "input" => Input(request),
                             "activity" => Activity(),
@@ -327,21 +327,23 @@ internal static class Program
             }, Json));
     }
 
-    private static SessionResponse VideoFrame(int monitorIndex, int maxWidth, int targetKbps, bool forceKeyFrame)
+    private static SessionResponse VideoFrame(int monitorIndex, int maxWidth, int targetKbps, int targetFps,
+        bool forceKeyFrame)
     {
-        var payload = VideoFramePayload(monitorIndex, maxWidth, targetKbps, forceKeyFrame);
+        var payload = VideoFramePayload(monitorIndex, maxWidth, targetKbps, targetFps, forceKeyFrame);
         return payload.Bytes.Length == 0 ? payload.Response :
             payload.Response with { ImageBase64 = Convert.ToBase64String(payload.Bytes) };
     }
 
     private static SessionVideoPayload VideoFramePayload(int monitorIndex, int maxWidth, int targetKbps,
-        bool forceKeyFrame)
+        int targetFps, bool forceKeyFrame)
     {
         Volatile.Write(ref _lastVideoRequestTimestamp, Stopwatch.GetTimestamp());
         var totalTimer = Stopwatch.StartNew();
         var bounds = CaptureBounds(monitorIndex);
         maxWidth = Math.Clamp(maxWidth, 640, 1920);
         targetKbps = Math.Clamp(targetKbps, 300, 8000);
+        targetFps = Math.Clamp(targetFps, 5, 60);
         try
         {
             var outputIndex = monitorIndex < 0
@@ -352,12 +354,12 @@ internal static class Program
             lock (CaptureSync)
             {
                 H264Captures.TryGetValue(outputIndex, out var existingCapture);
-                if (existingCapture is null || !existingCapture.Matches(maxWidth, targetKbps))
+                if (existingCapture is null || !existingCapture.Matches(maxWidth, targetKbps, targetFps))
                 {
                     H264Captures.Remove(outputIndex);
                     try { existingCapture?.Dispose(); } catch (Exception disposeError) { LogError(disposeError); }
                     CollectReleasedNativeResources();
-                    existingCapture = new DxgiH264Capture(outputIndex, maxWidth, targetKbps);
+                    existingCapture = new DxgiH264Capture(outputIndex, maxWidth, targetKbps, targetFps);
                     H264Captures[outputIndex] = existingCapture;
                 }
                 else if (forceKeyFrame && !existingCapture.RequestKeyFrame())
@@ -365,7 +367,7 @@ internal static class Program
                     H264Captures.Remove(outputIndex);
                     try { existingCapture.Dispose(); } catch (Exception disposeError) { LogError(disposeError); }
                     CollectReleasedNativeResources();
-                    existingCapture = new DxgiH264Capture(outputIndex, maxWidth, targetKbps);
+                    existingCapture = new DxgiH264Capture(outputIndex, maxWidth, targetKbps, targetFps);
                     H264Captures[outputIndex] = existingCapture;
                 }
                 gpuFrame = existingCapture.Capture(16);
@@ -431,15 +433,15 @@ internal static class Program
             graphics.DrawImage(bitmap, new Rectangle(0, 0, width, height));
         }
         var encodeTimer = Stopwatch.StartNew();
-        if (_h264Encoder is null || !_h264Encoder.Matches(width, height, targetKbps * 1000))
+        if (_h264Encoder is null || !_h264Encoder.Matches(width, height, targetKbps * 1000, targetFps))
         {
             _h264Encoder?.Dispose();
-            _h264Encoder = new SessionH264Encoder(width, height, targetKbps * 1000);
+            _h264Encoder = new SessionH264Encoder(width, height, targetKbps * 1000, targetFps);
         }
         else if (forceKeyFrame && !_h264Encoder.RequestKeyFrame())
         {
             _h264Encoder.Dispose();
-            _h264Encoder = new SessionH264Encoder(width, height, targetKbps * 1000);
+            _h264Encoder = new SessionH264Encoder(width, height, targetKbps * 1000, targetFps);
         }
         var bytes = _h264Encoder.Encode(scaled);
         encodeTimer.Stop();
@@ -1022,7 +1024,7 @@ internal static class Program
 }
 
 internal sealed record SessionRequest(string Type, string? Action, int? X, int? Y, int? Delta, int? MonitorIndex,
-    int? MaxWidth, int? Quality, int? TargetKbps, string? Text, string? Key, string? Modifiers,
+    int? MaxWidth, int? Quality, int? TargetKbps, int? TargetFps, string? Text, string? Key, string? Modifiers,
     string? FileName, string? FileBase64, bool? ForceFull);
 internal sealed record SessionResponse(bool Ok, string Code, string? ImageBase64, int? Width, int? Height,
     JsonElement? Data = null, string? Error = null);

@@ -22,6 +22,7 @@ internal sealed class DxgiH264Capture : IDisposable
     private readonly DirectHardwareH264Encoder _encoder;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private bool _hasEncodedInput;
+    private bool _hasProducedOutput;
 
     public int Width { get; }
     public int Height { get; }
@@ -86,7 +87,7 @@ internal sealed class DxgiH264Capture : IDisposable
         var result = _duplication.AcquireNextFrame(timeoutMilliseconds, out var info, out var resource);
         if (result == Vortice.DXGI.ResultCode.WaitTimeout)
         {
-            if (!_hasEncodedInput) return EncodeLast(captureTimer.Elapsed.TotalMilliseconds, 0, 0, 0, 0);
+            if (!_hasProducedOutput) return EncodeLast(captureTimer.Elapsed.TotalMilliseconds, 0, 0, 0, 0);
             return new([], Width, Height, 0, 0, 0, 0, 0, false);
         }
         result.CheckError();
@@ -119,6 +120,7 @@ internal sealed class DxgiH264Capture : IDisposable
         var timer = Stopwatch.StartNew();
         var timestamp = (long)(_clock.Elapsed.TotalSeconds * 10_000_000);
         var bytes = _encoder.Encode(_outputTexture, timestamp);
+        _hasProducedOutput |= bytes.Length > 0;
         timer.Stop();
         return new(bytes, Width, Height, captureMs, timer.Elapsed.TotalMilliseconds,
             cursorX, cursorY, dirtyCount, ContainsIdr(bytes), accumulatedFrames);

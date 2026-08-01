@@ -2,7 +2,7 @@
 #requires -RunAsAdministrator
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [string]$InstallPath = "$env:ProgramFiles\SIRK Agent",
+    [string]$InstallPath = "$env:ProgramFiles\SIRK\Agent",
     [string]$ServiceName = "SirkAgent",
     [string]$WatchdogServiceName = "SirkAgentWatchdog",
     [switch]$RemoveAgentData

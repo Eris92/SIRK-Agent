@@ -56,4 +56,4 @@ kmjplemahkjpfoephgcalhmipelkaion
 ```
 
 Rozszerzenie należy wdrożyć polityką przedsiębiorstwa albo załadować z katalogu
-`C:\Program Files\SIRK Agent\BrowserExtension` na stanowisku testowym.
+`C:\Program Files\SIRK\Agent\BrowserExtension` na stanowisku testowym.

@@ -99,10 +99,10 @@ Rejestracja urządzenia w SIRK Portal (PowerShell uruchomiony jako Administrator
 ```powershell
 $TokenFile = 'C:\Temp\sirk-enrollment-token.txt'
 Set-Content -LiteralPath $TokenFile -Value '<TOKEN_BOOTSTRAP_Z_PORTALU>' -Encoding UTF8
-& 'C:\Program Files\SIRK Agent\sirkctl.exe' enroll `
+& 'C:\Program Files\SIRK\Agent\sirkctl.exe' enroll `
   --endpoint 'https://portal.example/api/agent/v1/enroll' `
   --bootstrap-token-file $TokenFile
-& 'C:\Program Files\SIRK Agent\sirkctl.exe' sync
+& 'C:\Program Files\SIRK\Agent\sirkctl.exe' sync
 Remove-Item -LiteralPath $TokenFile -Force
 ```
 
@@ -116,11 +116,11 @@ HTTP jest akceptowany wyłącznie dla testów na adresie loopback.
 Podpisana aktualizacja offline (PowerShell jako Administrator):
 
 ```powershell
-& 'C:\Program Files\SIRK Agent\sirkctl.exe' verify-update `
+& 'C:\Program Files\SIRK\Agent\sirkctl.exe' verify-update `
   --package 'C:\ProgramData\SIRK\Agent\Updates\Download\1.0.15'
-& 'C:\Program Files\SIRK Agent\sirkctl.exe' stage-update `
+& 'C:\Program Files\SIRK\Agent\sirkctl.exe' stage-update `
   --package 'C:\ProgramData\SIRK\Agent\Updates\Download\1.0.15'
-& 'C:\Program Files\SIRK Agent\Apply-SirkAgentUpdate.ps1' `
+& 'C:\Program Files\SIRK\Agent\Apply-SirkAgentUpdate.ps1' `
   -StagedPath 'C:\ProgramData\SIRK\Agent\Updates\Staged\1.0.15'
 ```
 

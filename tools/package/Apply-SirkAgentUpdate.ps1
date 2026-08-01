@@ -4,7 +4,7 @@
 param(
     [Parameter(Mandatory)]
     [string]$StagedPath,
-    [string]$InstallPath = "$env:ProgramFiles\SIRK Agent",
+    [string]$InstallPath = "$env:ProgramFiles\SIRK\Agent",
     [string]$ServiceName = "SirkAgent",
     [string]$VerifierPath
 )

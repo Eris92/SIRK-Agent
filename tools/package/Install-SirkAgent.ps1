@@ -68,7 +68,11 @@ $sessionTarget = Join-Path $InstallPath 'Session'
 if (Test-Path -LiteralPath $sessionSource) {
     New-Item -ItemType Directory -Path $sessionTarget -Force | Out-Null
     foreach ($sessionFile in Get-ChildItem -LiteralPath $sessionSource -File -Recurse) {
-        $relative = [IO.Path]::GetRelativePath($sessionSource, $sessionFile.FullName)
+        # Windows PowerShell 5.1 runs on .NET Framework, where Path.GetRelativePath
+        # is unavailable even though it exists in the .NET 8 runtime used by the
+        # agent. The source path is already absolute and every enumerated file is
+        # below it, so a bounded prefix removal is sufficient and PS 5.1-safe.
+        $relative = $sessionFile.FullName.Substring($sessionSource.TrimEnd('\').Length).TrimStart('\')
         $destination = Join-Path $sessionTarget $relative
         New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
         for ($attempt = 1; $attempt -le 10; $attempt++) {

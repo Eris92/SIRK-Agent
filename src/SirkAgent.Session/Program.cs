@@ -358,8 +358,26 @@ internal static class Program
                 gpuFrame = existingCapture.Capture(16);
             }
             if (gpuFrame.Bytes.Length == 0)
+            {
+                if (gpuFrame.CursorChanged)
+                {
+                    var pointer = Cursor.Position;
+                    return new SessionVideoPayload(new SessionResponse(true, "DESKTOP_CURSOR", null,
+                        bounds.Width, bounds.Height, JsonSerializer.SerializeToElement(new
+                        {
+                            sessionId = SessionId, monitorIndex, encodedWidth = gpuFrame.Width,
+                            encodedHeight = gpuFrame.Height, fullFrame = false, keyFrame = false,
+                            cursorOnly = true,
+                            cursorX = Math.Clamp(pointer.X - bounds.Left, 0, Math.Max(0, bounds.Width - 1)),
+                            cursorY = Math.Clamp(pointer.Y - bounds.Top, 0, Math.Max(0, bounds.Height - 1)),
+                            captureMilliseconds = Math.Round(gpuFrame.CaptureMilliseconds, 2),
+                            encodeMilliseconds = 0, encodedBytes = 0,
+                            captureBackend = "DXGI_D3D11_CURSOR", encoding = "CURSOR_METADATA"
+                        }, Json)), []);
+                }
                 return new SessionVideoPayload(new SessionResponse(true, "DESKTOP_NO_CHANGE", null,
                     bounds.Width, bounds.Height), []);
+            }
             var gpuCursor = Cursor.Position;
             totalTimer.Stop();
             return new SessionVideoPayload(new SessionResponse(true, "DESKTOP_VIDEO_FRAME_OK",

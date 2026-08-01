@@ -23,6 +23,9 @@ internal sealed class DxgiH264Capture : IDisposable
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private bool _hasEncodedInput;
     private bool _hasProducedOutput;
+    private bool _hasCursor;
+    private int _lastCursorX;
+    private int _lastCursorY;
 
     public int Width { get; }
     public int Height { get; }
@@ -87,17 +90,21 @@ internal sealed class DxgiH264Capture : IDisposable
         var result = _duplication.AcquireNextFrame(timeoutMilliseconds, out var info, out var resource);
         if (result == Vortice.DXGI.ResultCode.WaitTimeout)
         {
-            if (!_hasProducedOutput) return EncodeLast(captureTimer.Elapsed.TotalMilliseconds, 0, 0, 0, 0);
-            return new([], Width, Height, 0, 0, 0, 0, 0, false);
+            if (!_hasProducedOutput) return EncodeLast(captureTimer.Elapsed.TotalMilliseconds, 0, 0, 0, false, 0);
+            return new([], Width, Height, 0, 0, 0, 0, 0, false, false);
         }
         result.CheckError();
         try
         {
             using var texture = resource.QueryInterface<ID3D11Texture2D>();
             var dirtyCount = DirtyRectangleCount(info.TotalMetadataBufferSize);
+            var cursorX = info.PointerPosition.Position.X;
+            var cursorY = info.PointerPosition.Position.Y;
+            var cursorChanged = !_hasCursor || cursorX != _lastCursorX || cursorY != _lastCursorY;
+            _hasCursor = true; _lastCursorX = cursorX; _lastCursorY = cursorY;
             if (dirtyCount == 0 && info.AccumulatedFrames == 0 && _hasEncodedInput)
                 return new([], Width, Height, captureTimer.Elapsed.TotalMilliseconds, 0,
-                    info.PointerPosition.Position.X, info.PointerPosition.Position.Y, 0, false);
+                    cursorX, cursorY, 0, false, cursorChanged);
             using var inputView = _videoDevice.CreateVideoProcessorInputView(texture, _enumerator,
                 new VideoProcessorInputViewDescription
                 {
@@ -109,13 +116,13 @@ internal sealed class DxgiH264Capture : IDisposable
             _context.Flush();
             _hasEncodedInput = true;
             return EncodeLast(captureTimer.Elapsed.TotalMilliseconds, dirtyCount,
-                info.PointerPosition.Position.X, info.PointerPosition.Position.Y, info.AccumulatedFrames);
+                cursorX, cursorY, cursorChanged, info.AccumulatedFrames);
         }
         finally { resource.Dispose(); _duplication.ReleaseFrame(); }
     }
 
     private DxgiH264Frame EncodeLast(double captureMs, int dirtyCount, int cursorX, int cursorY,
-        uint accumulatedFrames)
+        bool cursorChanged, uint accumulatedFrames)
     {
         var timer = Stopwatch.StartNew();
         var timestamp = (long)(_clock.Elapsed.TotalSeconds * 10_000_000);
@@ -123,7 +130,7 @@ internal sealed class DxgiH264Capture : IDisposable
         _hasProducedOutput |= bytes.Length > 0;
         timer.Stop();
         return new(bytes, Width, Height, captureMs, timer.Elapsed.TotalMilliseconds,
-            cursorX, cursorY, dirtyCount, ContainsIdr(bytes), accumulatedFrames);
+            cursorX, cursorY, dirtyCount, ContainsIdr(bytes), cursorChanged, accumulatedFrames);
     }
 
     private int DirtyRectangleCount(uint metadataBytes)
@@ -157,4 +164,4 @@ internal sealed class DxgiH264Capture : IDisposable
 
 internal sealed record DxgiH264Frame(byte[] Bytes, int Width, int Height, double CaptureMilliseconds,
     double EncodeMilliseconds, int CursorX, int CursorY, int DirtyRectangleCount, bool KeyFrame,
-    uint AccumulatedFrames = 0);
+    bool CursorChanged, uint AccumulatedFrames = 0);

@@ -151,7 +151,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                     Number(data, "cursorX"), Number(data, "cursorY"),
                     DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     encoding.StartsWith("H264", StringComparison.Ordinal) ? "video/h264" : "image/jpeg",
-                    encoding, Bool(data, "keyFrame"));
+                    encoding, Bool(data, "keyFrame"), Bool(data, "cursorOnly"));
                 if (_frames.Writer.TryWrite(frame)) Interlocked.Increment(ref _capturedFrames);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
@@ -310,7 +310,8 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                     cursorY = int.Parse(frame.CursorY, CultureInfo.InvariantCulture),
                     capturedAtUnixMilliseconds = frame.CapturedAtUnixMilliseconds,
                     encodedBytes = frame.Bytes.Length, contentType = frame.ContentType,
-                    encoding = frame.Encoding, keyFrame = frame.KeyFrame
+                    encoding = frame.Encoding, keyFrame = frame.KeyFrame,
+                    cursorOnly = frame.CursorOnly
                 }, Json);
                 var packet = new byte[4 + metadata.Length + frame.Bytes.Length];
                 BinaryPrimitives.WriteInt32BigEndian(packet, metadata.Length);
@@ -495,4 +496,4 @@ internal sealed record DesktopFrame(byte[] Bytes, string Width, string Height,
     string SourceWidth, string SourceHeight,
     string CaptureMilliseconds, string EncodeMilliseconds, string SessionMilliseconds, string CaptureBackend,
     bool FullFrame, string Patches, string Moves, string CursorX, string CursorY,
-    long CapturedAtUnixMilliseconds, string ContentType, string Encoding, bool KeyFrame);
+    long CapturedAtUnixMilliseconds, string ContentType, string Encoding, bool KeyFrame, bool CursorOnly);

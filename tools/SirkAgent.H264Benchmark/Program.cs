@@ -2,6 +2,17 @@ using System.Diagnostics;
 using SharpMediaFoundationInterop.Input;
 using SharpMediaFoundationInterop.Transforms.Colors;
 using SharpMediaFoundationInterop.Transforms.H264;
+using Vortice.MediaFoundation;
+
+MediaFactory.MFStartup().CheckError();
+var input = new RegisterTypeInfo { GuidMajorType = MediaTypeGuids.Video, GuidSubtype = VideoFormatGuids.NV12 };
+var output = new RegisterTypeInfo { GuidMajorType = MediaTypeGuids.Video, GuidSubtype = VideoFormatGuids.H264 };
+using (var transforms = MediaFactory.MFTEnumEx(TransformCategoryGuids.VideoEncoder,
+    (uint)(EnumFlag.EnumFlagHardware | EnumFlag.EnumFlagSortandfilter), input, output))
+{
+    foreach (var transform in transforms)
+        Console.WriteLine("hardware_mft=" + transform.GetString(TransformAttributeKeys.MftFriendlyNameAttribute));
+}
 
 var seconds = args.Length > 0 ? Math.Clamp(int.Parse(args[0]), 2, 60) : 10;
 const uint fps = 60;

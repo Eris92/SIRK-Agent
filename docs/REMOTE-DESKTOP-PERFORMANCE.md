@@ -14,6 +14,26 @@ Frames are requested sequentially. This prevents a stale-frame queue, but also
 limits throughput to one frame per complete control-plane round trip. Pointer
 movement was additionally limited to one update per 100 ms.
 
+## Current measured state (1.0.4 development)
+
+The compatibility data plane now bypasses the command/result broker. It uses
+DXGI Desktop Duplication, dirty-region atlases, a one-frame channel and a
+direct signed binary upload to Portal. A local moving-window benchmark at
+3440x1440 measured 24.25 FPS, frame age p50 13 ms/p95 25 ms and capture p50
+6.35 ms. JPEG still consumed 5.864 Mbit/s, so this is not the final codec.
+
+Hardware probing on the same Intel UHD host found the Intel Quick Sync H.264
+MFT. Independent D3D11 zero-copy tests using the Windows Media Foundation
+`display_remoting` scenario measured approximately 51 FPS at native
+3440x1440. A synthetic 1920x1080/60 Quick Sync test encoded at approximately
+178 FPS. These measurements prove hardware capacity, but the Intel driver did
+not hold a 1 Mbit/s ceiling for high-motion content. The production path must
+therefore combine GPU scale/colour conversion, hardware H.264 and congestion
+feedback; merely replacing JPEG with full-screen H.264 is insufficient.
+
+Reproduce the hardware probe with `tools/Test-HardwareDesktopPipeline.ps1`.
+FFmpeg is a test oracle only and is not shipped as an Agent runtime dependency.
+
 MeshCentral is faster because it uses a persistent binary relay, tile updates,
 local cursor commands and optional WebRTC. It is a useful baseline, but not the
 target architecture.
@@ -56,7 +76,13 @@ continuity and sends a sharp refresh when the screen becomes static.
 
 ## Acceptance gates
 
-- 1920x1080 at 25 FPS while dragging a window on the local LAN;
+- compatibility fallback: at least 1920x1080 at 25 FPS while dragging a window
+  on the local LAN;
+- production smooth profile: 1920x1080 at 60 FPS on the local LAN for normal
+  administrative desktop workloads;
+- production constrained profile: rolling transfer at or below 1 Mbit/s while
+  preserving interactive continuity; unrestricted full-screen video is not
+  evaluated as an administrative desktop workload;
 - frame latency p50 below 40 ms and p95 below 80 ms;
 - mouse-to-photon and keyboard-to-screen p95 below 70 ms;
 - pending frame queue never above one;

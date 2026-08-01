@@ -37,6 +37,8 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
     private int _sessionId = -1;
     private int _targetKbps = 1000;
     private int _targetFps = 60;
+    private int _profileTargetFps = 60;
+    private int _dirtyRegionMode;
     private int _h264Available = 1;
     private int _profileQuality = 72;
     private long _lastStreamStatusWrite;
@@ -77,7 +79,8 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                 var forceFull = Interlocked.Exchange(ref _forceFullFrame, 0) != 0;
                 var request = JsonSerializer.Serialize(new
                 {
-                    type = Volatile.Read(ref _h264Available) != 0 ? "video-frame" : "snapshot",
+                    type = Volatile.Read(ref _dirtyRegionMode) != 0 ||
+                           Volatile.Read(ref _h264Available) == 0 ? "snapshot" : "video-frame",
                     maxWidth = Volatile.Read(ref _maxWidth),
                     quality = Volatile.Read(ref _quality),
                     targetKbps = Volatile.Read(ref _targetKbps),
@@ -239,11 +242,14 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
             var requestedSessionId = requestedSession is >= 0 and <= 65535 ? requestedSession : -1;
             var previousWidth = Volatile.Read(ref _maxWidth);
             var requestedFpsValue = Integer(input, "targetFps");
-            var requestedFps = requestedFpsValue == 0 ? 60 : Math.Clamp(requestedFpsValue, 5, 60);
+            var requestedFps = requestedFpsValue == 0 ? 60 : Math.Clamp(requestedFpsValue, 5, 120);
             var previousFps = Volatile.Read(ref _targetFps);
+            var requestedDirtyRegionMode = string.Equals(Text(input, "frameMode"), "tiles",
+                StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+            var previousDirtyRegionMode = Volatile.Read(ref _dirtyRegionMode);
             var previousSessionId = Volatile.Read(ref _sessionId);
             if (requestedWidth != previousWidth || requestedFps != previousFps ||
-                requestedSessionId != previousSessionId)
+                requestedDirtyRegionMode != previousDirtyRegionMode || requestedSessionId != previousSessionId)
             {
                 var recycleSessionId = InteractiveSessionPipe.Resolve(
                     previousSessionId >= 0 ? previousSessionId : requestedSessionId >= 0 ? requestedSessionId : null);
@@ -257,6 +263,8 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
             Volatile.Write(ref _profileQuality, Volatile.Read(ref _quality));
             Volatile.Write(ref _targetKbps, Math.Clamp(Integer(input, "targetKbps"), 300, 8000));
             Volatile.Write(ref _targetFps, requestedFps);
+            Volatile.Write(ref _profileTargetFps, requestedFps);
+            Volatile.Write(ref _dirtyRegionMode, requestedDirtyRegionMode);
             Volatile.Write(ref _monitorIndex, Math.Clamp(Integer(input, "monitorIndex"), 0, 15));
             Volatile.Write(ref _sessionId, requestedSessionId);
             Interlocked.Exchange(ref _forceFullFrame, 1);
@@ -388,6 +396,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                         quality = Volatile.Read(ref _quality),
                         targetKbps = Volatile.Read(ref _targetKbps),
                         targetFps = Volatile.Read(ref _targetFps),
+                        frameMode = Volatile.Read(ref _dirtyRegionMode) != 0 ? "tiles" : "h264",
                         bitrateKbps
                     }, Json);
                 }
@@ -459,15 +468,21 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
             return bitrateKbps;
         var target = Volatile.Read(ref _targetKbps);
         var quality = Volatile.Read(ref _quality);
+        var targetFps = Volatile.Read(ref _targetFps);
         if (bitrateKbps > target * 1.1)
         {
             if (quality > 30) Volatile.Write(ref _quality, Math.Max(25, quality - 3));
+            else if (Volatile.Read(ref _dirtyRegionMode) != 0 && targetFps > 5)
+                Volatile.Write(ref _targetFps, Math.Max(5, targetFps - 5));
             _lastAdaptiveChange = now;
         }
         else if (bitrateKbps < target * 0.55)
         {
             var requestedQuality = Volatile.Read(ref _profileQuality);
+            var requestedFps = Volatile.Read(ref _profileTargetFps);
             if (quality < requestedQuality) Volatile.Write(ref _quality, Math.Min(requestedQuality, quality + 1));
+            else if (Volatile.Read(ref _dirtyRegionMode) != 0 && targetFps < requestedFps)
+                Volatile.Write(ref _targetFps, Math.Min(requestedFps, targetFps + 5));
             _lastAdaptiveChange = now;
         }
         return bitrateKbps;

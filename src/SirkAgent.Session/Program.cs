@@ -108,11 +108,16 @@ internal static class Program
                 SessionVideoPayload payload;
                 try
                 {
-                    payload = request?.Type == "video-frame"
-                        ? VideoFramePayload(request.MonitorIndex ?? -1, request.MaxWidth ?? 1280,
-                            request.TargetKbps ?? 1000, request.TargetFps ?? 60, request.ForceFull == true)
-                        : new SessionVideoPayload(new SessionResponse(false, "SESSION_REQUEST_INVALID",
-                            null, null, null), []);
+                    payload = request?.Type switch
+                    {
+                        "video-frame" => VideoFramePayload(request.MonitorIndex ?? -1,
+                            request.MaxWidth ?? 1280, request.TargetKbps ?? 1000,
+                            request.TargetFps ?? 60, request.ForceFull == true),
+                        "snapshot" => SnapshotPayload(request.MonitorIndex ?? -1,
+                            request.MaxWidth ?? 1280, request.Quality ?? 40, request.ForceFull == true),
+                        _ => new SessionVideoPayload(new SessionResponse(false, "SESSION_REQUEST_INVALID",
+                            null, null, null), [])
+                    };
                 }
                 catch (Exception error)
                 {
@@ -256,6 +261,15 @@ internal static class Program
 
     private static SessionResponse Snapshot(int monitorIndex, int maxWidth, int quality, bool requestedFull)
     {
+        var payload = SnapshotPayload(monitorIndex, maxWidth, quality, requestedFull);
+        return payload.Bytes.Length == 0 ? payload.Response :
+            payload.Response with { ImageBase64 = Convert.ToBase64String(payload.Bytes) };
+    }
+
+    private static SessionVideoPayload SnapshotPayload(int monitorIndex, int maxWidth, int quality,
+        bool requestedFull)
+    {
+        Volatile.Write(ref _lastVideoRequestTimestamp, Stopwatch.GetTimestamp());
         var totalTimer = Stopwatch.StartNew();
         var bounds = CaptureBounds(monitorIndex);
         if (bounds.Width <= 0 || bounds.Height <= 0)
@@ -269,11 +283,12 @@ internal static class Program
         captureTimer.Stop();
         var now = DateTimeOffset.UtcNow;
         var forceFull = requestedFull || !LastFullFrames.TryGetValue(monitorIndex, out var lastFull) ||
-                        now - lastFull >= TimeSpan.FromSeconds(5);
+                        now - lastFull >= TimeSpan.FromSeconds(30);
         if (dirtyRectangles.Length == 0 && accumulatedFrames == 0 && !forceFull)
         {
             totalTimer.Stop();
-            return new SessionResponse(true, "DESKTOP_NO_CHANGE", null, bounds.Width, bounds.Height,
+            return new SessionVideoPayload(new SessionResponse(true, "DESKTOP_NO_CHANGE", null,
+                bounds.Width, bounds.Height,
                 JsonSerializer.SerializeToElement(new
                 {
                     sessionId = SessionId,
@@ -285,7 +300,7 @@ internal static class Program
                     dirtyPixelRatio = 0,
                     accumulatedFrames = 0,
                     encoding = "NONE"
-                }, Json));
+                }, Json)), []);
         }
         var encodeTimer = Stopwatch.StartNew();
         using var output = new MemoryStream();
@@ -300,7 +315,7 @@ internal static class Program
         var bytes = output.ToArray();
         totalTimer.Stop();
         var cursor = Cursor.Position;
-        return new SessionResponse(true, "DESKTOP_SNAPSHOT_OK", Convert.ToBase64String(bytes),
+        return new SessionVideoPayload(new SessionResponse(true, "DESKTOP_SNAPSHOT_OK", null,
             bounds.Width, bounds.Height, JsonSerializer.SerializeToElement(new
             {
                 sessionId = SessionId,
@@ -324,7 +339,7 @@ internal static class Program
                 dirtyPixelRatio = Math.Round(DirtyPixelRatio(dirtyRectangles, bounds.Width, bounds.Height), 6),
                 accumulatedFrames,
                 encoding = "JPEG"
-            }, Json));
+            }, Json)), bytes);
     }
 
     private static SessionResponse VideoFrame(int monitorIndex, int maxWidth, int targetKbps, int targetFps,

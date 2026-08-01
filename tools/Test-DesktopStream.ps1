@@ -12,6 +12,7 @@ param(
     [ValidateRange(640, 1920)][int]$MaxWidth = 1920,
     [ValidateRange(25, 80)][int]$Quality = 72,
     [ValidateRange(300, 8000)][int]$TargetKbps = 1000,
+    [ValidateRange(5, 60)][int]$TargetFps = 60,
     [switch]$GenerateWindowMotion
 )
 
@@ -34,6 +35,7 @@ $profileBody = @{
         maxWidth = $MaxWidth
         quality = $Quality
         targetKbps = $TargetKbps
+        targetFps = $TargetFps
     }
 } | ConvertTo-Json -Depth 4
 Invoke-WebRequest -Uri "$portal/api/agent-desktop/input" -Method Post `

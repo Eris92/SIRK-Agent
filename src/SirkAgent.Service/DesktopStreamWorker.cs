@@ -1,4 +1,6 @@
+using System.Buffers.Binary;
 using System.Net.Http.Headers;
+using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -224,8 +226,9 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
 
     private async Task UploadLoopAsync(CancellationToken token)
     {
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         var paths = ManagementPaths.CreateDefault();
+        ClientWebSocket? socket = null;
+        long sequence = 0;
         await foreach (var frame in _frames.Reader.ReadAllAsync(token))
         {
             try
@@ -233,41 +236,35 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                 var credential = new PortalCredentialStore(paths.PortalCredentialPath,
                     new DpapiMachineStateProtector()).Load();
                 if (credential is null) continue;
-                using var upload = new HttpRequestMessage(HttpMethod.Post, FrameEndpoint(credential.Endpoint))
+                if (socket is null || socket.State != WebSocketState.Open)
                 {
-                    Content = new ByteArrayContent(frame.Bytes)
-                };
-                upload.Content.Headers.ContentType = new MediaTypeHeaderValue(frame.ContentType);
-                upload.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential.DeviceToken);
-                upload.Headers.Add("X-SIRK-Tenant", credential.TenantId);
-                upload.Headers.Add("X-SIRK-Device", credential.DeviceId);
-                upload.Headers.Add("X-SIRK-Width", frame.Width);
-                upload.Headers.Add("X-SIRK-Height", frame.Height);
-                upload.Headers.Add("X-SIRK-Capture-Ms", frame.CaptureMilliseconds);
-                upload.Headers.Add("X-SIRK-Encode-Ms", frame.EncodeMilliseconds);
-                upload.Headers.Add("X-SIRK-Capture-Backend", frame.CaptureBackend);
-                upload.Headers.Add("X-SIRK-Full-Frame", frame.FullFrame ? "1" : "0");
-                upload.Headers.Add("X-SIRK-Patches",
-                    Convert.ToBase64String(Encoding.UTF8.GetBytes(frame.Patches)));
-                upload.Headers.Add("X-SIRK-Moves",
-                    Convert.ToBase64String(Encoding.UTF8.GetBytes(frame.Moves)));
-                upload.Headers.Add("X-SIRK-Cursor-X", frame.CursorX);
-                upload.Headers.Add("X-SIRK-Cursor-Y", frame.CursorY);
-                upload.Headers.Add("X-SIRK-Captured-At", frame.CapturedAtUnixMilliseconds.ToString());
-                upload.Headers.Add("X-SIRK-Codec", frame.Encoding);
-                upload.Headers.Add("X-SIRK-Key-Frame", frame.KeyFrame ? "1" : "0");
-                Sign(upload, frame.Bytes, credential);
-                using var uploaded = await client.SendAsync(upload, token);
-                uploaded.EnsureSuccessStatusCode();
-                using var published = JsonDocument.Parse(await uploaded.Content.ReadAsByteArrayAsync(token));
-                var viewers = published.RootElement.TryGetProperty("viewers", out var count) ? count.GetInt32() : 0;
-                Volatile.Write(ref _viewers, viewers);
+                    socket?.Dispose();
+                    socket = await ConnectDesktopSocketAsync(credential, token);
+                }
+                var metadata = JsonSerializer.SerializeToUtf8Bytes(new
+                {
+                    width = int.Parse(frame.Width), height = int.Parse(frame.Height),
+                    captureMilliseconds = double.Parse(frame.CaptureMilliseconds),
+                    encodeMilliseconds = double.Parse(frame.EncodeMilliseconds),
+                    captureBackend = frame.CaptureBackend, fullFrame = frame.FullFrame,
+                    patches = JsonSerializer.Deserialize<JsonElement>(frame.Patches),
+                    moves = JsonSerializer.Deserialize<JsonElement>(frame.Moves),
+                    cursorX = int.Parse(frame.CursorX), cursorY = int.Parse(frame.CursorY),
+                    capturedAtUnixMilliseconds = frame.CapturedAtUnixMilliseconds,
+                    encodedBytes = frame.Bytes.Length, contentType = frame.ContentType,
+                    encoding = frame.Encoding, keyFrame = frame.KeyFrame
+                }, Json);
+                var packet = new byte[4 + metadata.Length + frame.Bytes.Length];
+                BinaryPrimitives.WriteInt32BigEndian(packet, metadata.Length);
+                Buffer.BlockCopy(metadata, 0, packet, 4, metadata.Length);
+                Buffer.BlockCopy(frame.Bytes, 0, packet, 4 + metadata.Length, frame.Bytes.Length);
+                await socket.SendAsync(packet, WebSocketMessageType.Binary, true, token);
+                sequence++;
                 var bitrateKbps = AdaptToBandwidth(frame.Bytes.Length);
                 AtomicFile.WriteJson(Path.Combine(paths.Root, "desktop-stream-status.json"), new
                 {
-                    ok = true, timestampUtc = DateTimeOffset.UtcNow, frameBytes = frame.Bytes.Length, viewers,
-                    sequence = published.RootElement.TryGetProperty("sequence", out var sequence)
-                        ? sequence.GetInt64() : 0,
+                    ok = true, timestampUtc = DateTimeOffset.UtcNow, frameBytes = frame.Bytes.Length,
+                    viewers = Volatile.Read(ref _viewers), sequence,
                     queueCapacity = 1, latestFrameWins = true,
                     inputCommands = Interlocked.Read(ref _inputCommands),
                     maxWidth = Volatile.Read(ref _maxWidth),
@@ -279,11 +276,29 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
             catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
             catch (Exception error)
             {
-                Volatile.Write(ref _viewers, 0);
+                socket?.Dispose();
+                socket = null;
                 WriteStatus(false, error.Message);
                 logger.LogDebug(error, "Direct desktop upload failed.");
             }
         }
+        socket?.Dispose();
+    }
+
+    private static async Task<ClientWebSocket> ConnectDesktopSocketAsync(
+        PortalCredential credential, CancellationToken token)
+    {
+        var socket = new ClientWebSocket();
+        socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(10);
+        socket.Options.SetRequestHeader("Authorization", "Bearer " + credential.DeviceToken);
+        socket.Options.SetRequestHeader("X-SIRK-Tenant", credential.TenantId);
+        socket.Options.SetRequestHeader("X-SIRK-Device", credential.DeviceId);
+        using var request = new HttpRequestMessage(HttpMethod.Get, DesktopSocketEndpoint(credential.Endpoint));
+        Sign(request, [], credential);
+        foreach (var name in new[] { "X-SIRK-Timestamp", "X-SIRK-Nonce", "X-SIRK-Signature" })
+            socket.Options.SetRequestHeader(name, request.Headers.GetValues(name).Single());
+        await socket.ConnectAsync(DesktopSocketEndpoint(credential.Endpoint), token);
+        return socket;
     }
 
     private int AdaptToBandwidth(int bytes)
@@ -332,6 +347,16 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
     {
         var source = new Uri(endpoint);
         return new UriBuilder(source) { Path = "/api/agent/v1/desktop/frame", Query = "" }.Uri;
+    }
+
+    private static Uri DesktopSocketEndpoint(string endpoint)
+    {
+        var source = new Uri(endpoint);
+        return new UriBuilder(source)
+        {
+            Scheme = source.Scheme == Uri.UriSchemeHttps ? "wss" : "ws",
+            Path = "/api/agent/v1/desktop/stream", Query = ""
+        }.Uri;
     }
 
     private static Uri ControlEndpoint(string endpoint)

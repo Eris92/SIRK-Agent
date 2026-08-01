@@ -51,6 +51,8 @@ internal sealed class SessionH264Encoder : IDisposable
         return bytes;
     }
 
+    public bool RequestKeyFrame() => _encoder.RequestKeyFrame();
+
     private unsafe void CopyRgb(Bitmap bitmap)
     {
         var data = bitmap.LockBits(new Rectangle(0, 0, Width, Height), ImageLockMode.ReadOnly,
@@ -85,40 +87,75 @@ internal sealed class DirectHardwareH264Encoder : IDisposable
     private readonly long _duration;
     private bool _needInput;
     private readonly IMFDXGIDeviceManager? _deviceManager;
+    private bool _mediaFoundationStarted;
+    private bool _disposed;
     public int OutputFrames { get; private set; }
 
     public DirectHardwareH264Encoder(int width, int height, int fps, int bitrate, ID3D11Device? device = null)
     {
         MediaFactory.MFStartup().CheckError();
-        _frameBytes = width * height * 3 / 2;
-        _duration = 10_000_000L / fps;
-        var outputInfo = new RegisterTypeInfo { GuidMajorType = MediaTypeGuids.Video, GuidSubtype = VideoFormatGuids.H264 };
-        using var activations = MediaFactory.MFTEnumEx(TransformCategoryGuids.VideoEncoder,
-            (uint)(EnumFlag.EnumFlagHardware | EnumFlag.EnumFlagSortandfilter), null, outputInfo);
-        var activation = activations.FirstOrDefault() ?? throw new NotSupportedException("Brak sprzętowego kodera H.264 Media Foundation.");
-        _transform = activation.ActivateObject<IMFTransform>();
-        _transform.Attributes.Set(TransformAttributeKeys.TransformAsyncUnlock, 1u).CheckError();
-        if (device is not null)
+        _mediaFoundationStarted = true;
+        try
         {
-            _deviceManager = MediaFactory.MFCreateDXGIDeviceManager();
-            _deviceManager.ResetDevice(device).CheckError();
-            _transform.ProcessMessage(TMessageType.MessageSetD3DManager,
-                unchecked((UIntPtr)_deviceManager.NativePointer.ToInt64()));
+            _frameBytes = width * height * 3 / 2;
+            _duration = 10_000_000L / fps;
+            var outputInfo = new RegisterTypeInfo { GuidMajorType = MediaTypeGuids.Video, GuidSubtype = VideoFormatGuids.H264 };
+            using var activations = MediaFactory.MFTEnumEx(TransformCategoryGuids.VideoEncoder,
+                (uint)(EnumFlag.EnumFlagHardware | EnumFlag.EnumFlagSortandfilter), null, outputInfo);
+            var activation = activations.FirstOrDefault() ?? throw new NotSupportedException("Brak sprzętowego kodera H.264 Media Foundation.");
+            _transform = activation.ActivateObject<IMFTransform>();
+            _transform.Attributes.Set(TransformAttributeKeys.TransformAsyncUnlock, 1u).CheckError();
+            if (device is not null)
+            {
+                _deviceManager = MediaFactory.MFCreateDXGIDeviceManager();
+                _deviceManager.ResetDevice(device).CheckError();
+                _transform.ProcessMessage(TMessageType.MessageSetD3DManager,
+                    unchecked((UIntPtr)_deviceManager.NativePointer.ToInt64()));
+            }
+            ConfigureCodec(_transform, bitrate, fps);
+            using var outputType = _transform.GetOutputAvailableType(0, 0);
+            Configure(outputType, width, height, fps);
+            outputType.Set(MediaTypeAttributeKeys.AvgBitrate, (uint)bitrate).CheckError();
+            outputType.Set(MediaTypeAttributeKeys.Mpeg2Profile, 66u).CheckError();
+            _transform.SetOutputType(0, outputType, 0);
+            using var inputType = InputType(_transform);
+            Configure(inputType, width, height, fps);
+            _transform.SetInputType(0, inputType, 0);
+            _events = _transform.QueryInterface<IMFMediaEventGenerator>();
+            _transform.ProcessMessage(TMessageType.MessageNotifyBeginStreaming, UIntPtr.Zero);
+            _transform.ProcessMessage(TMessageType.MessageNotifyStartOfStream, UIntPtr.Zero);
+            using var sink = new MemoryStream();
+            WaitForInput(sink);
         }
-        ConfigureCodec(_transform, bitrate, fps);
-        using var outputType = _transform.GetOutputAvailableType(0, 0);
-        Configure(outputType, width, height, fps);
-        outputType.Set(MediaTypeAttributeKeys.AvgBitrate, (uint)bitrate).CheckError();
-        outputType.Set(MediaTypeAttributeKeys.Mpeg2Profile, 66u).CheckError();
-        _transform.SetOutputType(0, outputType, 0);
-        using var inputType = InputType(_transform);
-        Configure(inputType, width, height, fps);
-        _transform.SetInputType(0, inputType, 0);
-        _events = _transform.QueryInterface<IMFMediaEventGenerator>();
-        _transform.ProcessMessage(TMessageType.MessageNotifyBeginStreaming, UIntPtr.Zero);
-        _transform.ProcessMessage(TMessageType.MessageNotifyStartOfStream, UIntPtr.Zero);
-        using var sink = new MemoryStream();
-        WaitForInput(sink);
+        catch
+        {
+            MediaFactory.MFShutdown();
+            _mediaFoundationStarted = false;
+            throw;
+        }
+    }
+
+    public bool RequestKeyFrame()
+    {
+        object? codecObject = null;
+        try
+        {
+            _transform.QueryInterface(typeof(ICodecApiNative).GUID, out var pointer).CheckError();
+            try
+            {
+                codecObject = Marshal.GetObjectForIUnknown(pointer);
+                var codec = (ICodecApiNative)codecObject;
+                Set(codec, "398C1B98-8353-475A-9EF2-8F265D260345", 1u);
+                return true;
+            }
+            finally
+            {
+                if (codecObject is not null && Marshal.IsComObject(codecObject))
+                    Marshal.FinalReleaseComObject(codecObject);
+                Marshal.Release(pointer);
+            }
+        }
+        catch { return false; }
     }
 
     public byte[] Encode(byte[] nv12, long timestamp)
@@ -195,9 +232,11 @@ internal sealed class DirectHardwareH264Encoder : IDisposable
     private static void ConfigureCodec(IMFTransform transform, int bitrate, int fps)
     {
         transform.QueryInterface(typeof(ICodecApiNative).GUID, out var pointer).CheckError();
+        object? codecObject = null;
         try
         {
-            var codec = (ICodecApiNative)Marshal.GetObjectForIUnknown(pointer);
+            codecObject = Marshal.GetObjectForIUnknown(pointer);
+            var codec = (ICodecApiNative)codecObject;
             Set(codec, "F7222374-2144-4815-B550-A37F8E12EE52", (uint)bitrate);
             Set(codec, "1C0608E9-370C-4710-8A58-CB6181C42423", 0u);
             Set(codec, "8D390AAC-DC5C-4200-B57F-814D04BABAB2", 0u);
@@ -205,7 +244,12 @@ internal sealed class DirectHardwareH264Encoder : IDisposable
             Set(codec, "B28A6E64-3FF9-446A-8A4B-0D7A53413236", 1u);
             Set(codec, "9C27891A-ED7A-40E1-88E8-B22727A024EE", 1u);
         }
-        finally { Marshal.Release(pointer); }
+        finally
+        {
+            if (codecObject is not null && Marshal.IsComObject(codecObject))
+                Marshal.FinalReleaseComObject(codecObject);
+            Marshal.Release(pointer);
+        }
     }
     private static void Set(ICodecApiNative codec, string keyValue, object value)
     {
@@ -214,11 +258,18 @@ internal sealed class DirectHardwareH264Encoder : IDisposable
     }
     public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
         try { _transform?.ProcessMessage(TMessageType.MessageNotifyEndOfStream, UIntPtr.Zero); } catch { }
         try { _transform?.ProcessMessage(TMessageType.MessageNotifyEndStreaming, UIntPtr.Zero); } catch { }
         try { _events?.Dispose(); } catch { }
         try { _transform?.Dispose(); } catch { }
         try { _deviceManager?.Dispose(); } catch { }
+        if (_mediaFoundationStarted)
+        {
+            try { MediaFactory.MFShutdown(); } catch { }
+            _mediaFoundationStarted = false;
+        }
     }
 }
 

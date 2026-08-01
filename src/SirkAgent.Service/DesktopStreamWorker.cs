@@ -36,7 +36,6 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
     private int _sessionId = -1;
     private int _targetKbps = 1000;
     private int _h264Available = 1;
-    private int _profileMaxWidth = 1920;
     private int _profileQuality = 72;
     private long _lastStreamStatusWrite;
     private readonly Queue<(DateTimeOffset At, int Bytes)> _bandwidthWindow = new();
@@ -225,14 +224,26 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
     {
         if (string.Equals(Text(input, "action"), "streamProfile", StringComparison.Ordinal))
         {
-            Volatile.Write(ref _maxWidth, Math.Clamp(Integer(input, "maxWidth"), 640, 1920));
+            var requestedWidth = Math.Clamp(Integer(input, "maxWidth"), 640, 1920);
+            var requestedSession = Integer(input, "sessionId");
+            var requestedSessionId = requestedSession is >= 0 and <= 65535 ? requestedSession : -1;
+            var previousWidth = Volatile.Read(ref _maxWidth);
+            var previousSessionId = Volatile.Read(ref _sessionId);
+            if (requestedWidth != previousWidth || requestedSessionId != previousSessionId)
+            {
+                var recycleSessionId = InteractiveSessionPipe.Resolve(
+                    previousSessionId >= 0 ? previousSessionId : requestedSessionId >= 0 ? requestedSessionId : null);
+                InteractiveSessionClient.Invalidate(recycleSessionId);
+                InteractiveSessionPipe.Terminate(recycleSessionId);
+                InteractiveSessionPipe.EnsureAvailable(
+                    requestedSessionId >= 0 ? requestedSessionId : recycleSessionId);
+            }
+            Volatile.Write(ref _maxWidth, requestedWidth);
             Volatile.Write(ref _quality, Math.Clamp(Integer(input, "quality"), 25, 80));
-            Volatile.Write(ref _profileMaxWidth, Volatile.Read(ref _maxWidth));
             Volatile.Write(ref _profileQuality, Volatile.Read(ref _quality));
             Volatile.Write(ref _targetKbps, Math.Clamp(Integer(input, "targetKbps"), 300, 8000));
             Volatile.Write(ref _monitorIndex, Math.Clamp(Integer(input, "monitorIndex"), 0, 15));
-            var requestedSession = Integer(input, "sessionId");
-            Volatile.Write(ref _sessionId, requestedSession is >= 0 and <= 65535 ? requestedSession : -1);
+            Volatile.Write(ref _sessionId, requestedSessionId);
             Interlocked.Exchange(ref _forceFullFrame, 1);
             Volatile.Write(ref _h264Available, 1);
             Interlocked.Increment(ref _inputCommands);
@@ -247,6 +258,22 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
         if (string.Equals(Text(input, "action"), "streamStop", StringComparison.Ordinal))
         {
             Volatile.Write(ref _viewers, 0);
+            Interlocked.Exchange(ref _forceFullFrame, 1);
+            var selectedSessionId = Volatile.Read(ref _sessionId);
+            var streamSessionId = InteractiveSessionPipe.Resolve(selectedSessionId >= 0 ? selectedSessionId : null);
+            if (InteractiveSessionPipe.IsAvailable(streamSessionId))
+            {
+                try
+                {
+                    await InteractiveSessionClient.SendInputAsync(streamSessionId,
+                        JsonSerializer.Serialize(new { type = "stream-stop" }, Json), token);
+                }
+                catch (Exception error) when (error is IOException or OperationCanceledException)
+                {
+                    logger.LogDebug(error, "Interactive session stream cleanup failed.");
+                    InteractiveSessionClient.Invalidate(streamSessionId);
+                }
+            }
             Interlocked.Increment(ref _inputCommands);
             return;
         }
@@ -416,19 +443,15 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
             return bitrateKbps;
         var target = Volatile.Read(ref _targetKbps);
         var quality = Volatile.Read(ref _quality);
-        var width = Volatile.Read(ref _maxWidth);
         if (bitrateKbps > target * 1.1)
         {
             if (quality > 30) Volatile.Write(ref _quality, Math.Max(25, quality - 3));
-            else if (width > 640) Volatile.Write(ref _maxWidth, Math.Max(640, width - 160));
             _lastAdaptiveChange = now;
         }
         else if (bitrateKbps < target * 0.55)
         {
-            var requestedWidth = Volatile.Read(ref _profileMaxWidth);
             var requestedQuality = Volatile.Read(ref _profileQuality);
-            if (width < requestedWidth) Volatile.Write(ref _maxWidth, Math.Min(requestedWidth, width + 160));
-            else if (quality < requestedQuality) Volatile.Write(ref _quality, Math.Min(requestedQuality, quality + 1));
+            if (quality < requestedQuality) Volatile.Write(ref _quality, Math.Min(requestedQuality, quality + 1));
             _lastAdaptiveChange = now;
         }
         return bitrateKbps;

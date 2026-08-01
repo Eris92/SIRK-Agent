@@ -64,6 +64,8 @@ internal sealed class RuntimeHealthWorker : BackgroundService
 
             RotateEventLog(eventLogPath);
 
+            var sessionMetrics = SessionMetrics();
+
             AtomicFile.WriteJson(runtimePath, new
             {
                 timestampUtc = now,
@@ -78,6 +80,9 @@ internal sealed class RuntimeHealthWorker : BackgroundService
                 managedMemoryBytes = GC.GetTotalMemory(false),
                 threadCount = process.Threads.Count,
                 handleCount = process.HandleCount,
+                sessionBrokerCount = sessionMetrics.Count,
+                sessionWorkingSetBytes = sessionMetrics.WorkingSetBytes,
+                sessionPrivateMemoryBytes = sessionMetrics.PrivateMemoryBytes,
                 heartbeatUtc,
                 heartbeatAgeSeconds = heartbeatAge?.TotalSeconds,
                 heartbeatFresh,
@@ -99,6 +104,28 @@ internal sealed class RuntimeHealthWorker : BackgroundService
                 break;
             }
         }
+    }
+
+    private static (int Count, long WorkingSetBytes, long PrivateMemoryBytes) SessionMetrics()
+    {
+        var count = 0;
+        var workingSet = 0L;
+        var privateMemory = 0L;
+        foreach (var session in Process.GetProcessesByName("SirkAgent.Session"))
+        {
+            using (session)
+            {
+                try
+                {
+                    session.Refresh();
+                    count++;
+                    workingSet += session.WorkingSet64;
+                    privateMemory += session.PrivateMemorySize64;
+                }
+                catch (InvalidOperationException) { }
+            }
+        }
+        return (count, workingSet, privateMemory);
     }
 
     private void RotateEventLog(string path)

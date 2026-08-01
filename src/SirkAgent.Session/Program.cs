@@ -36,6 +36,7 @@ internal static class Program
     private static readonly Dictionary<int, DateTimeOffset> LastFullFrames = [];
     private static readonly Dictionary<int, DxgiH264Capture> H264Captures = [];
     private static SessionH264Encoder? _h264Encoder;
+    private static long _lastVideoRequestTimestamp;
 
     [STAThread]
     private static async Task Main()
@@ -44,6 +45,7 @@ internal static class Program
             out var ownsMutex);
         if (!ownsMutex) return;
         _ = BinaryCaptureServerLoopAsync();
+        _ = StreamResourceCleanupLoopAsync();
         while (true)
         {
             NamedPipeServerStream? pipe = null;
@@ -166,6 +168,7 @@ internal static class Program
                                 request.Quality ?? 40, request.ForceFull == true),
                             "video-frame" => VideoFrame(request.MonitorIndex ?? -1, request.MaxWidth ?? 1280,
                                 request.TargetKbps ?? 1000, request.ForceFull == true),
+                            "stream-stop" => MarkStreamStopped(),
                             "mouse" or "input" => Input(request),
                             "activity" => Activity(),
                             _ => new SessionResponse(false, "SESSION_REQUEST_INVALID", null, null, null)
@@ -334,6 +337,7 @@ internal static class Program
     private static SessionVideoPayload VideoFramePayload(int monitorIndex, int maxWidth, int targetKbps,
         bool forceKeyFrame)
     {
+        Volatile.Write(ref _lastVideoRequestTimestamp, Stopwatch.GetTimestamp());
         var totalTimer = Stopwatch.StartNew();
         var bounds = CaptureBounds(monitorIndex);
         maxWidth = Math.Clamp(maxWidth, 640, 1920);
@@ -348,10 +352,19 @@ internal static class Program
             lock (CaptureSync)
             {
                 H264Captures.TryGetValue(outputIndex, out var existingCapture);
-                if (forceKeyFrame || existingCapture is null || !existingCapture.Matches(maxWidth, targetKbps))
+                if (existingCapture is null || !existingCapture.Matches(maxWidth, targetKbps))
                 {
                     H264Captures.Remove(outputIndex);
                     try { existingCapture?.Dispose(); } catch (Exception disposeError) { LogError(disposeError); }
+                    CollectReleasedNativeResources();
+                    existingCapture = new DxgiH264Capture(outputIndex, maxWidth, targetKbps);
+                    H264Captures[outputIndex] = existingCapture;
+                }
+                else if (forceKeyFrame && !existingCapture.RequestKeyFrame())
+                {
+                    H264Captures.Remove(outputIndex);
+                    try { existingCapture.Dispose(); } catch (Exception disposeError) { LogError(disposeError); }
+                    CollectReleasedNativeResources();
                     existingCapture = new DxgiH264Capture(outputIndex, maxWidth, targetKbps);
                     H264Captures[outputIndex] = existingCapture;
                 }
@@ -418,9 +431,14 @@ internal static class Program
             graphics.DrawImage(bitmap, new Rectangle(0, 0, width, height));
         }
         var encodeTimer = Stopwatch.StartNew();
-        if (_h264Encoder is null || !_h264Encoder.Matches(width, height, targetKbps * 1000) || forceKeyFrame)
+        if (_h264Encoder is null || !_h264Encoder.Matches(width, height, targetKbps * 1000))
         {
             _h264Encoder?.Dispose();
+            _h264Encoder = new SessionH264Encoder(width, height, targetKbps * 1000);
+        }
+        else if (forceKeyFrame && !_h264Encoder.RequestKeyFrame())
+        {
+            _h264Encoder.Dispose();
             _h264Encoder = new SessionH264Encoder(width, height, targetKbps * 1000);
         }
         var bytes = _h264Encoder.Encode(scaled);
@@ -443,6 +461,54 @@ internal static class Program
                 encodedBytes = bytes.Length, captureBackend = backend,
                 dirtyRectangleCount = dirty.Length, accumulatedFrames, encoding = "H264_ANNEX_B"
             }, Json)), bytes);
+    }
+
+    private static async Task StreamResourceCleanupLoopAsync()
+    {
+        while (true)
+        {
+            await Task.Delay(2000);
+            var last = Volatile.Read(ref _lastVideoRequestTimestamp);
+            if (last != 0 && Stopwatch.GetElapsedTime(last) >= TimeSpan.FromSeconds(30))
+            {
+                ReleaseStreamResources();
+                Environment.Exit(0);
+            }
+        }
+    }
+
+    private static SessionResponse MarkStreamStopped()
+    {
+        Volatile.Write(ref _lastVideoRequestTimestamp, Stopwatch.GetTimestamp());
+        return new SessionResponse(true, "DESKTOP_STREAM_STOPPED", null, null, null,
+            JsonSerializer.SerializeToElement(new { sessionId = SessionId }, Json));
+    }
+
+    private static SessionResponse ReleaseStreamResources()
+    {
+        lock (CaptureSync)
+        {
+            foreach (var capture in H264Captures.Values)
+                try { capture.Dispose(); } catch (Exception error) { LogError(error); }
+            H264Captures.Clear();
+            foreach (var capture in DxgiCaptures.Values)
+                try { capture.Dispose(); } catch (Exception error) { LogError(error); }
+            DxgiCaptures.Clear();
+            try { _h264Encoder?.Dispose(); } catch (Exception error) { LogError(error); }
+            _h264Encoder = null;
+            LastFullFrames.Clear();
+            Volatile.Write(ref _lastVideoRequestTimestamp, 0);
+        }
+        CollectReleasedNativeResources();
+        return new SessionResponse(true, "DESKTOP_STREAM_RELEASED", null, null, null,
+            JsonSerializer.SerializeToElement(new { sessionId = SessionId }, Json));
+    }
+
+    private static void CollectReleasedNativeResources()
+    {
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, true, true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, true, true);
     }
 
     private static Bitmap BuildEncodedBitmap(Bitmap source, Rectangle bounds, Rectangle[] dirtyRectangles,

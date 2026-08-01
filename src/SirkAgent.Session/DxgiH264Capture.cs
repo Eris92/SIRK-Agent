@@ -154,6 +154,8 @@ internal sealed class DxgiH264Capture : IDisposable
     public bool Matches(int maxWidth, int targetKbps) => TargetKbps == targetKbps && Width <= maxWidth &&
         Width > maxWidth - 32;
 
+    public bool RequestKeyFrame() => _encoder.RequestKeyFrame();
+
     public void Dispose()
     {
         _encoder.Dispose(); _outputView.Dispose(); _outputTexture.Dispose(); _processor.Dispose();

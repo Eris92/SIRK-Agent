@@ -56,6 +56,23 @@ internal static class InteractiveSessionPipe
             finally { process.Dispose(); }
         });
 
+    internal static void Terminate(int sessionId)
+    {
+        foreach (var process in Process.GetProcessesByName("SirkAgent.Session"))
+        {
+            using (process)
+            {
+                try
+                {
+                    if (process.SessionId != sessionId) continue;
+                    process.Kill(true);
+                    process.WaitForExit(2000);
+                }
+                catch (InvalidOperationException) { }
+            }
+        }
+    }
+
     internal static bool EnsureAvailable(int sessionId)
     {
         if (IsAvailable(sessionId)) return false;

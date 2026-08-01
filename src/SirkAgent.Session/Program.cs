@@ -253,13 +253,14 @@ internal static class Program
         maxWidth = Math.Clamp(maxWidth, 640, 1920);
         targetKbps = Math.Clamp(targetKbps, 300, 8000);
         var scale = Math.Min(1d, Math.Min((double)maxWidth / bounds.Width, 1080d / bounds.Height));
-        var width = Math.Max(2, (int)Math.Round(bounds.Width * scale) & ~1);
-        var height = Math.Max(2, (int)Math.Round(bounds.Height * scale) & ~1);
+        var width = Math.Max(16, (int)Math.Round(bounds.Width * scale) & ~15);
+        var height = Math.Max(16, (int)Math.Round(bounds.Height * scale) & ~15);
         var captureTimer = Stopwatch.StartNew();
         using var bitmap = CaptureDesktopBitmap(monitorIndex, bounds, out var backend,
             out var dirty, out _, out var accumulatedFrames);
         captureTimer.Stop();
-        if (dirty.Length == 0 && accumulatedFrames == 0 && !forceKeyFrame)
+        if (dirty.Length == 0 && accumulatedFrames == 0 && !forceKeyFrame &&
+            _h264Encoder?.HasProducedFrame == true)
             return new SessionResponse(true, "DESKTOP_NO_CHANGE", null, width, height);
         using var scaled = new Bitmap(width, height, PixelFormat.Format24bppRgb);
         using (var graphics = Graphics.FromImage(scaled))
@@ -269,14 +270,16 @@ internal static class Program
             graphics.DrawImage(bitmap, new Rectangle(0, 0, width, height));
         }
         var encodeTimer = Stopwatch.StartNew();
-        if (_h264Encoder is null || !_h264Encoder.Matches(width, height, targetKbps) || forceKeyFrame)
+        if (_h264Encoder is null || !_h264Encoder.Matches(width, height, targetKbps * 1000) || forceKeyFrame)
         {
             _h264Encoder?.Dispose();
             _h264Encoder = new SessionH264Encoder(width, height, targetKbps * 1000);
         }
         var bytes = _h264Encoder.Encode(scaled);
         encodeTimer.Stop();
-        if (bytes.Length == 0) return new SessionResponse(true, "DESKTOP_NO_CHANGE", null, width, height);
+        if (bytes.Length == 0) return new SessionResponse(true, "DESKTOP_NO_CHANGE", null, width, height,
+            JsonSerializer.SerializeToElement(new { encoderInputs = _h264Encoder.InputFrames,
+                encoderOutputs = _h264Encoder.OutputFrames }, Json));
         var cursor = Cursor.Position;
         return new SessionResponse(true, "DESKTOP_VIDEO_FRAME_OK", Convert.ToBase64String(bytes), width, height,
             JsonSerializer.SerializeToElement(new

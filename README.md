@@ -8,7 +8,7 @@ Aktualnym dokumentem przekazania do nowego czatu jest:
 
 - [Kontynuacja projektu w nowym czacie](docs/CONTINUE-IN-NEW-CHAT.md)
 
-Dokument zawiera aktualny stan `main`, potwierdzone testy na Windows, stan wydania `1.0.1`, pliki runtime, zasady bezpieczenstwa oraz gotowe polecenie do wznowienia pracy.
+Dokument zawiera aktualny stan `main`, potwierdzone testy na Windows, stan wydania `1.0.15`, pliki runtime, zasady bezpieczenstwa oraz gotowe polecenie do wznowienia pracy.
 
 Glowny branch:
 
@@ -19,13 +19,13 @@ main
 Aktualny etap:
 
 ```text
-1.0.1 — zdalny pulpit live, narzedzia administracyjne SYSTEM i bezpieczne zarzadzanie przez niezalezny SIRK Portal
+1.0.15 — binarny pulpit dirty-region 120 Hz, narzedzia administracyjne SYSTEM i bezpieczne zarzadzanie przez niezalezny SIRK Portal
 ```
 
 Ostatni potwierdzony stabilny pakiet testowy na komputerze `DELL_K`:
 
 ```text
-1.0.1 — Windows x64, framework-dependent .NET 8
+1.0.15 — Windows x64, framework-dependent .NET 8
 ```
 
 ## Zasady architektoniczne
@@ -117,11 +117,11 @@ Podpisana aktualizacja offline (PowerShell jako Administrator):
 
 ```powershell
 & 'C:\Program Files\SIRK Agent\sirkctl.exe' verify-update `
-  --package 'C:\ProgramData\SIRK\Agent\Updates\Download\1.0.1'
+  --package 'C:\ProgramData\SIRK\Agent\Updates\Download\1.0.15'
 & 'C:\Program Files\SIRK Agent\sirkctl.exe' stage-update `
-  --package 'C:\ProgramData\SIRK\Agent\Updates\Download\1.0.1'
+  --package 'C:\ProgramData\SIRK\Agent\Updates\Download\1.0.15'
 & 'C:\Program Files\SIRK Agent\Apply-SirkAgentUpdate.ps1' `
-  -StagedPath 'C:\ProgramData\SIRK\Agent\Updates\Staged\1.0.1'
+  -StagedPath 'C:\ProgramData\SIRK\Agent\Updates\Staged\1.0.15'
 ```
 
 Manifest `update-manifest.json` jest podpisany ES256 i obejmuje SHA-256 każdego
@@ -198,7 +198,7 @@ C:\ProgramData\SIRK\Agent\endurance-report.html
   przesyłane podczas check-in do zakładki Security > SIRK Agent,
 - grupowe pakiety enrollment dla instalacji cichej i trybu run-only.
 
-## Aktualny etap 1.0.1
+## Aktualny etap 1.0.15
 
 Kod wydania jest na `main`. Pakiet przechodzi:
 

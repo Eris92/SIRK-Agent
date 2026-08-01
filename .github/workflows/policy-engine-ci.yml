@@ -1,5 +1,8 @@
 name: SIRK Agent CI
 
+env:
+  SIRK_VERSION: 1.0.15
+
 on:
   push:
     branches:
@@ -33,7 +36,7 @@ jobs:
         run: ./artifacts/SIRK-Agent-Policy-Test/SirkAgent.Policy.TestHarness.exe
 
       - name: Publish agent runtime
-        run: dotnet publish src/SirkAgent.Service/SirkAgent.Service.csproj --configuration Release --runtime win-x64 --self-contained false -p:PublishSingleFile=false -p:PublishTrimmed=false -p:InformationalVersion=1.0.1+${{ github.sha }} --output artifacts/SIRK-Agent-Runtime
+        run: dotnet publish src/SirkAgent.Service/SirkAgent.Service.csproj --configuration Release --runtime win-x64 --self-contained false -p:PublishSingleFile=false -p:PublishTrimmed=false -p:InformationalVersion=${{ env.SIRK_VERSION }}+${{ github.sha }} --output artifacts/SIRK-Agent-Runtime
 
       - name: Publish diagnostics reporter
         run: dotnet publish src/SirkAgent.Report/SirkAgent.Report.csproj --configuration Release --runtime win-x64 --self-contained false -p:PublishSingleFile=false -p:PublishTrimmed=false --output artifacts/SIRK-Agent-Runtime
@@ -58,7 +61,7 @@ jobs:
           @{ files = $files } | ConvertTo-Json -Depth 5 | Set-Content artifacts/SIRK-Agent-Runtime/integrity-manifest.json -Encoding UTF8
           @{
             product = 'SIRK Agent'
-            version = '1.0.1'
+            version = '${{ env.SIRK_VERSION }}'
             commit = '${{ github.sha }}'
             buildUtc = (Get-Date).ToUniversalTime().ToString('o')
             runtime = 'win-x64'
@@ -206,13 +209,13 @@ jobs:
 
       - name: Create distributable ZIP
         shell: pwsh
-        run: Compress-Archive -Path artifacts/SIRK-Agent-Runtime/* -DestinationPath artifacts/SIRK-Agent-1.0.1-win-x64.zip -CompressionLevel Optimal -Force
+        run: Compress-Archive -Path artifacts/SIRK-Agent-Runtime/* -DestinationPath artifacts/SIRK-Agent-${{ env.SIRK_VERSION }}-win-x64.zip -CompressionLevel Optimal -Force
 
       - uses: actions/upload-artifact@v4
         with:
-          name: SIRK-Agent-1.0.1-win-x64
+          name: SIRK-Agent-${{ env.SIRK_VERSION }}-win-x64
           path: |
-            artifacts/SIRK-Agent-1.0.1-win-x64.zip
+            artifacts/SIRK-Agent-${{ env.SIRK_VERSION }}-win-x64.zip
             artifacts/SIRK-Agent-Runtime/**
           if-no-files-found: error
 

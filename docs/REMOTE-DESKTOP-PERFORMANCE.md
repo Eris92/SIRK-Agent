@@ -2,8 +2,8 @@
 
 ## Measured baseline
 
-The 1.0.1 implementation is a compatibility transport, not the final realtime
-transport. Every frame performs a complete `desktop.snapshot` command cycle:
+The 1.0.15 implementation uses the realtime binary dirty-region transport. The legacy
+compatibility fallback performs a complete `desktop.snapshot` command cycle for every frame:
 
 ```text
 browser POST -> Portal broker -> Agent long-poll -> session pipe ->
@@ -14,13 +14,15 @@ Frames are requested sequentially. This prevents a stale-frame queue, but also
 limits throughput to one frame per complete control-plane round trip. Pointer
 movement was additionally limited to one update per 100 ms.
 
-## Current measured state (1.0.4 development)
+## Current measured state (1.0.15)
 
-The compatibility data plane now bypasses the command/result broker. It uses
-DXGI Desktop Duplication, dirty-region atlases, a one-frame channel and a
-direct signed binary upload to Portal. A local moving-window benchmark at
-3440x1440 measured 24.25 FPS, frame age p50 13 ms/p95 25 ms and capture p50
-6.35 ms. JPEG still consumed 5.864 Mbit/s, so this is not the final codec.
+The production data plane bypasses the command/result broker. It uses DXGI
+Desktop Duplication, dirty/move metadata, scaled JPEG atlases, sharp idle
+refinement, a safe one-frame channel and a direct signed binary upload to
+Portal. A local recursive Portal benchmark at 3440x1440 on a physical 59 Hz
+display reached 56.4 changed frames/s at 0.72 Mbit/s with p50/p95 frame age
+5/17 ms. A static surface produces no image payload; a visibly blinking
+console cursor produced only an 11x15 delta at approximately 0.11 Mbit/s.
 
 Hardware probing on the same Intel UHD host found the Intel Quick Sync H.264
 MFT. Independent D3D11 zero-copy tests using the Windows Media Foundation

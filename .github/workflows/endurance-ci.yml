@@ -1,5 +1,8 @@
 name: SIRK Agent Runtime Endurance CI
 
+env:
+  SIRK_VERSION: 1.0.15
+
 on:
   push:
     branches: [ main ]
@@ -25,7 +28,7 @@ jobs:
       - name: Publish runtime
         shell: pwsh
         run: |
-          dotnet publish src/SirkAgent.Service/SirkAgent.Service.csproj -c Release -r win-x64 --self-contained false -p:InformationalVersion=1.0.1+${{ github.sha }} -o artifacts/SIRK-Agent-Runtime
+          dotnet publish src/SirkAgent.Service/SirkAgent.Service.csproj -c Release -r win-x64 --self-contained false -p:InformationalVersion=${{ env.SIRK_VERSION }}+${{ github.sha }} -o artifacts/SIRK-Agent-Runtime
           dotnet publish src/SirkAgent.Report/SirkAgent.Report.csproj -c Release -r win-x64 --self-contained false -o artifacts/SIRK-Agent-Runtime
           dotnet publish src/SirkAgent.Cli/SirkAgent.Cli.csproj -c Release -r win-x64 --self-contained false -o artifacts/SIRK-Agent-Runtime
           dotnet publish src/SirkAgent.Session/SirkAgent.Session.csproj -c Release -r win-x64 --self-contained false -o artifacts/SIRK-Agent-Runtime/Session
@@ -40,7 +43,7 @@ jobs:
             @{ path = $name; sha256 = (Get-FileHash $path -Algorithm SHA256).Hash }
           }
           @{ files = $files } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $runtime 'integrity-manifest.json') -Encoding UTF8
-          @{ product='SIRK Agent'; version='1.0.1'; commit='${{ github.sha }}'; runtime='win-x64'; requiredRuntime='.NET 8 x64'; selfContained=$false } | ConvertTo-Json | Set-Content (Join-Path $runtime 'build-manifest.json') -Encoding UTF8
+          @{ product='SIRK Agent'; version='${{ env.SIRK_VERSION }}'; commit='${{ github.sha }}'; runtime='win-x64'; requiredRuntime='.NET 8 x64'; selfContained=$false } | ConvertTo-Json | Set-Content (Join-Path $runtime 'build-manifest.json') -Encoding UTF8
 
       - name: Prepare oversized event log and install
         shell: pwsh
@@ -109,13 +112,13 @@ jobs:
         shell: pwsh
         run: |
           ./artifacts/SIRK-Agent-Runtime/Uninstall-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent Endurance CI" -Confirm:$false
-          Compress-Archive -Path artifacts/SIRK-Agent-Runtime/* -DestinationPath artifacts/SIRK-Agent-1.0.1-win-x64.zip -CompressionLevel Optimal -Force
+          Compress-Archive -Path artifacts/SIRK-Agent-Runtime/* -DestinationPath artifacts/SIRK-Agent-${{ env.SIRK_VERSION }}-win-x64.zip -CompressionLevel Optimal -Force
 
       - uses: actions/upload-artifact@v4
         with:
-          name: SIRK-Agent-1.0.1-win-x64
+          name: SIRK-Agent-${{ env.SIRK_VERSION }}-win-x64
           path: |
-            artifacts/SIRK-Agent-1.0.1-win-x64.zip
+            artifacts/SIRK-Agent-${{ env.SIRK_VERSION }}-win-x64.zip
             artifacts/SIRK-Agent-Runtime/**
             artifacts/runtime-health-initial.json
             artifacts/restart-results.json

@@ -2,6 +2,7 @@ using System.Drawing.Imaging;
 using System.Drawing.Drawing2D;
 using System.ComponentModel;
 using System.Collections.Specialized;
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
@@ -19,6 +20,7 @@ internal static class Program
 {
     private static readonly int SessionId = Process.GetCurrentProcess().SessionId;
     private static readonly string PipeName = "SIRK-Agent-Interactive-Session-" + SessionId;
+    private static readonly string BinaryCapturePipeName = PipeName + "-Video";
     private const uint MouseEventLeftDown = 0x0002;
     private const uint MouseEventLeftUp = 0x0004;
     private const uint MouseEventRightDown = 0x0008;
@@ -41,6 +43,7 @@ internal static class Program
         using var singleInstance = new Mutex(true, "Local\\SIRK-Agent-Interactive-Session-" + SessionId,
             out var ownsMutex);
         if (!ownsMutex) return;
+        _ = BinaryCaptureServerLoopAsync();
         while (true)
         {
             NamedPipeServerStream? pipe = null;
@@ -63,6 +66,80 @@ internal static class Program
                 await Task.Delay(1000);
             }
         }
+    }
+
+    private static async Task BinaryCaptureServerLoopAsync()
+    {
+        while (true)
+        {
+            NamedPipeServerStream? pipe = null;
+            try
+            {
+                pipe = CreatePipe(BinaryCapturePipeName);
+                await pipe.WaitForConnectionAsync();
+                if (!Authorized(pipe)) { await pipe.DisposeAsync(); continue; }
+                _ = HandleBinaryCapturePipeAsync(pipe);
+                pipe = null;
+            }
+            catch (Exception error)
+            {
+                if (pipe is not null) await pipe.DisposeAsync();
+                LogError(error);
+                await Task.Delay(250);
+            }
+        }
+    }
+
+    private static async Task HandleBinaryCapturePipeAsync(NamedPipeServerStream pipe)
+    {
+        await using (pipe)
+        {
+            var size = new byte[4];
+            while (pipe.IsConnected)
+            {
+                if (!await ReadExactlyOrEndAsync(pipe, size)) break;
+                var requestLength = BinaryPrimitives.ReadInt32LittleEndian(size);
+                if (requestLength is < 2 or > 64 * 1024) throw new InvalidDataException("Invalid video request.");
+                var requestBytes = new byte[requestLength];
+                await pipe.ReadExactlyAsync(requestBytes);
+                var request = JsonSerializer.Deserialize<SessionRequest>(requestBytes, Json);
+                SessionVideoPayload payload;
+                try
+                {
+                    payload = request?.Type == "video-frame"
+                        ? VideoFramePayload(request.MonitorIndex ?? -1, request.MaxWidth ?? 1280,
+                            request.TargetKbps ?? 1000, request.ForceFull == true)
+                        : new SessionVideoPayload(new SessionResponse(false, "SESSION_REQUEST_INVALID",
+                            null, null, null), []);
+                }
+                catch (Exception error)
+                {
+                    LogError(error);
+                    payload = new SessionVideoPayload(new SessionResponse(false,
+                        "SESSION_OPERATION_FAILED", null, null, null, Error: error.Message), []);
+                }
+                var header = JsonSerializer.SerializeToUtf8Bytes(payload.Response, Json);
+                BinaryPrimitives.WriteInt32LittleEndian(size, header.Length);
+                await pipe.WriteAsync(size);
+                BinaryPrimitives.WriteInt32LittleEndian(size, payload.Bytes.Length);
+                await pipe.WriteAsync(size);
+                await pipe.WriteAsync(header);
+                if (payload.Bytes.Length > 0) await pipe.WriteAsync(payload.Bytes);
+                await pipe.FlushAsync();
+            }
+        }
+    }
+
+    private static async Task<bool> ReadExactlyOrEndAsync(Stream stream, byte[] buffer)
+    {
+        var offset = 0;
+        while (offset < buffer.Length)
+        {
+            var read = await stream.ReadAsync(buffer.AsMemory(offset));
+            if (read == 0) return offset == 0 ? false : throw new EndOfStreamException();
+            offset += read;
+        }
+        return true;
     }
 
     private static async Task HandlePipeAsync(NamedPipeServerStream pipe)
@@ -123,7 +200,7 @@ internal static class Program
         catch { }
     }
 
-    private static NamedPipeServerStream CreatePipe()
+    private static NamedPipeServerStream CreatePipe(string? name = null)
     {
         using var identity = WindowsIdentity.GetCurrent(TokenAccessLevels.Query);
         var security = new PipeSecurity();
@@ -134,7 +211,7 @@ internal static class Program
             PipeAccessRights.FullControl, AccessControlType.Allow));
         if (identity.User is not null)
             security.AddAccessRule(new PipeAccessRule(identity.User, PipeAccessRights.FullControl, AccessControlType.Allow));
-        return NamedPipeServerStreamAcl.Create(PipeName, PipeDirection.InOut, 4, PipeTransmissionMode.Byte,
+        return NamedPipeServerStreamAcl.Create(name ?? PipeName, PipeDirection.InOut, 4, PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous, 1024 * 1024, 1024 * 1024, security);
     }
 
@@ -249,6 +326,14 @@ internal static class Program
 
     private static SessionResponse VideoFrame(int monitorIndex, int maxWidth, int targetKbps, bool forceKeyFrame)
     {
+        var payload = VideoFramePayload(monitorIndex, maxWidth, targetKbps, forceKeyFrame);
+        return payload.Bytes.Length == 0 ? payload.Response :
+            payload.Response with { ImageBase64 = Convert.ToBase64String(payload.Bytes) };
+    }
+
+    private static SessionVideoPayload VideoFramePayload(int monitorIndex, int maxWidth, int targetKbps,
+        bool forceKeyFrame)
+    {
         var totalTimer = Stopwatch.StartNew();
         var bounds = CaptureBounds(monitorIndex);
         maxWidth = Math.Clamp(maxWidth, 640, 1920);
@@ -273,11 +358,12 @@ internal static class Program
                 gpuFrame = existingCapture.Capture(16);
             }
             if (gpuFrame.Bytes.Length == 0)
-                return new SessionResponse(true, "DESKTOP_NO_CHANGE", null, bounds.Width, bounds.Height);
+                return new SessionVideoPayload(new SessionResponse(true, "DESKTOP_NO_CHANGE", null,
+                    bounds.Width, bounds.Height), []);
             var gpuCursor = Cursor.Position;
             totalTimer.Stop();
-            return new SessionResponse(true, "DESKTOP_VIDEO_FRAME_OK",
-                Convert.ToBase64String(gpuFrame.Bytes), bounds.Width, bounds.Height,
+            return new SessionVideoPayload(new SessionResponse(true, "DESKTOP_VIDEO_FRAME_OK",
+                null, bounds.Width, bounds.Height,
                 JsonSerializer.SerializeToElement(new
                 {
                     sessionId = SessionId, monitorIndex, encodedWidth = gpuFrame.Width,
@@ -290,7 +376,7 @@ internal static class Program
                     encodedBytes = gpuFrame.Bytes.Length, captureBackend = "DXGI_D3D11_MF_ZERO_COPY",
                     dirtyRectangleCount = gpuFrame.DirtyRectangleCount,
                     accumulatedFrames = gpuFrame.AccumulatedFrames, encoding = "H264_ANNEX_B"
-                }, Json));
+                }, Json)), gpuFrame.Bytes);
         }
         catch (Exception error)
         {
@@ -305,7 +391,7 @@ internal static class Program
         captureTimer.Stop();
         if (dirty.Length == 0 && accumulatedFrames == 0 && !forceKeyFrame &&
             _h264Encoder?.HasProducedFrame == true)
-            return new SessionResponse(true, "DESKTOP_NO_CHANGE", null, width, height);
+            return new SessionVideoPayload(new SessionResponse(true, "DESKTOP_NO_CHANGE", null, width, height), []);
         using var scaled = new Bitmap(width, height, PixelFormat.Format24bppRgb);
         using (var graphics = Graphics.FromImage(scaled))
         {
@@ -321,11 +407,12 @@ internal static class Program
         }
         var bytes = _h264Encoder.Encode(scaled);
         encodeTimer.Stop();
-        if (bytes.Length == 0) return new SessionResponse(true, "DESKTOP_NO_CHANGE", null, bounds.Width, bounds.Height,
-            JsonSerializer.SerializeToElement(new { encoderInputs = _h264Encoder.InputFrames,
-                encoderOutputs = _h264Encoder.OutputFrames }, Json));
+        if (bytes.Length == 0) return new SessionVideoPayload(new SessionResponse(true, "DESKTOP_NO_CHANGE", null,
+            bounds.Width, bounds.Height, JsonSerializer.SerializeToElement(new {
+                encoderInputs = _h264Encoder.InputFrames, encoderOutputs = _h264Encoder.OutputFrames }, Json)), []);
         var cursor = Cursor.Position;
-        return new SessionResponse(true, "DESKTOP_VIDEO_FRAME_OK", Convert.ToBase64String(bytes), bounds.Width, bounds.Height,
+        return new SessionVideoPayload(new SessionResponse(true, "DESKTOP_VIDEO_FRAME_OK", null,
+            bounds.Width, bounds.Height,
             JsonSerializer.SerializeToElement(new
             {
                 sessionId = SessionId, monitorIndex, encodedWidth = width, encodedHeight = height,
@@ -337,7 +424,7 @@ internal static class Program
                 agentFrameMilliseconds = Math.Round(totalTimer.Elapsed.TotalMilliseconds, 2),
                 encodedBytes = bytes.Length, captureBackend = backend,
                 dirtyRectangleCount = dirty.Length, accumulatedFrames, encoding = "H264_ANNEX_B"
-            }, Json));
+            }, Json)), bytes);
     }
 
     private static Bitmap BuildEncodedBitmap(Bitmap source, Rectangle bounds, Rectangle[] dirtyRectangles,
@@ -855,6 +942,7 @@ internal sealed record SessionRequest(string Type, string? Action, int? X, int? 
     string? FileName, string? FileBase64, bool? ForceFull);
 internal sealed record SessionResponse(bool Ok, string Code, string? ImageBase64, int? Width, int? Height,
     JsonElement? Data = null, string? Error = null);
+internal sealed record SessionVideoPayload(SessionResponse Response, byte[] Bytes);
 internal sealed record DesktopPatch(int AtlasX, int AtlasY, int AtlasWidth, int AtlasHeight,
     int X, int Y, int Width, int Height);
 

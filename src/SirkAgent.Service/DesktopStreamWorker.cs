@@ -27,6 +27,8 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
     private long _inputCommands;
     private long _capturedFrames;
     private long _uploadedFrames;
+    private long _binaryCaptures;
+    private long _legacyCaptures;
     private int _maxWidth = 1920;
     private int _quality = 45;
     private int _forceFullFrame = 1;
@@ -78,9 +80,42 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                     targetKbps = Volatile.Read(ref _targetKbps),
                     forceFull
                 }, Json);
-                var responseLine = await InteractiveSessionClient.SendCaptureAsync(sessionId, request, token);
-                if (string.IsNullOrWhiteSpace(responseLine)) throw new IOException("Session broker returned no frame.");
-                using var responseDocument = JsonDocument.Parse(responseLine);
+                string responseJson;
+                byte[] frameBytes;
+                var sessionTimer = System.Diagnostics.Stopwatch.StartNew();
+                try
+                {
+                    var binary = await InteractiveSessionClient.SendBinaryCaptureAsync(sessionId, request, token);
+                    responseJson = binary.HeaderJson;
+                    frameBytes = binary.Payload;
+                    Interlocked.Increment(ref _binaryCaptures);
+                }
+                catch (IOException)
+                {
+                    var responseLine = await InteractiveSessionClient.SendCaptureAsync(sessionId, request, token);
+                    if (string.IsNullOrWhiteSpace(responseLine))
+                        throw new IOException("Session broker returned no frame.");
+                    responseJson = responseLine;
+                    using var fallback = JsonDocument.Parse(responseJson);
+                    frameBytes = fallback.RootElement.TryGetProperty("imageBase64", out var image) &&
+                                 image.ValueKind == JsonValueKind.String
+                        ? Convert.FromBase64String(image.GetString() ?? "") : [];
+                    Interlocked.Increment(ref _legacyCaptures);
+                }
+                catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                {
+                    var responseLine = await InteractiveSessionClient.SendCaptureAsync(sessionId, request, token);
+                    if (string.IsNullOrWhiteSpace(responseLine))
+                        throw new IOException("Session broker returned no frame.");
+                    responseJson = responseLine;
+                    using var fallback = JsonDocument.Parse(responseJson);
+                    frameBytes = fallback.RootElement.TryGetProperty("imageBase64", out var image) &&
+                                 image.ValueKind == JsonValueKind.String
+                        ? Convert.FromBase64String(image.GetString() ?? "") : [];
+                    Interlocked.Increment(ref _legacyCaptures);
+                }
+                using var responseDocument = JsonDocument.Parse(responseJson);
+                sessionTimer.Stop();
                 var root = responseDocument.RootElement;
                 if (!root.TryGetProperty("ok", out var ok) || !ok.GetBoolean())
                 {
@@ -103,11 +138,12 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                 var encodedWidth = Number(data, "encodedWidth");
                 var encodedHeight = Number(data, "encodedHeight");
                 var frame = new DesktopFrame(
-                    Convert.FromBase64String(root.GetProperty("imageBase64").GetString() ?? ""),
+                    frameBytes,
                     encodedWidth == "0" ? sourceWidth : encodedWidth,
                     encodedHeight == "0" ? sourceHeight : encodedHeight,
                     sourceWidth, sourceHeight,
                     Number(data, "captureMilliseconds"), Number(data, "encodeMilliseconds"),
+                    sessionTimer.Elapsed.TotalMilliseconds.ToString(CultureInfo.InvariantCulture),
                     data.TryGetProperty("captureBackend", out var backend) ? backend.GetString() ?? "" : "",
                     Bool(data, "fullFrame"),
                     data.TryGetProperty("patches", out var patches) ? patches.GetRawText() : "[]",
@@ -266,6 +302,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                     sourceHeight = int.Parse(frame.SourceHeight, CultureInfo.InvariantCulture),
                     captureMilliseconds = double.Parse(frame.CaptureMilliseconds, CultureInfo.InvariantCulture),
                     encodeMilliseconds = double.Parse(frame.EncodeMilliseconds, CultureInfo.InvariantCulture),
+                    sessionMilliseconds = double.Parse(frame.SessionMilliseconds, CultureInfo.InvariantCulture),
                     captureBackend = frame.CaptureBackend, fullFrame = frame.FullFrame,
                     patches = JsonSerializer.Deserialize<JsonElement>(frame.Patches),
                     moves = JsonSerializer.Deserialize<JsonElement>(frame.Moves),
@@ -296,6 +333,9 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                         Interlocked.Read(ref _uploadedFrames) - 1),
                     sendMilliseconds = Math.Round(sendTimer.Elapsed.TotalMilliseconds, 2),
                     inputCommands = Interlocked.Read(ref _inputCommands),
+                    sessionTransport = Interlocked.Read(ref _binaryCaptures) > 0 ? "BINARY_PIPE" : "JSON_BASE64",
+                    binaryCaptures = Interlocked.Read(ref _binaryCaptures),
+                    legacyCaptures = Interlocked.Read(ref _legacyCaptures),
                     maxWidth = Volatile.Read(ref _maxWidth),
                     quality = Volatile.Read(ref _quality),
                     targetKbps = Volatile.Read(ref _targetKbps),
@@ -453,6 +493,6 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
 
 internal sealed record DesktopFrame(byte[] Bytes, string Width, string Height,
     string SourceWidth, string SourceHeight,
-    string CaptureMilliseconds, string EncodeMilliseconds, string CaptureBackend,
+    string CaptureMilliseconds, string EncodeMilliseconds, string SessionMilliseconds, string CaptureBackend,
     bool FullFrame, string Patches, string Moves, string CursorX, string CursorY,
     long CapturedAtUnixMilliseconds, string ContentType, string Encoding, bool KeyFrame);

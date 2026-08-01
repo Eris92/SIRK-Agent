@@ -231,6 +231,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
     {
         var paths = ManagementPaths.CreateDefault();
         ClientWebSocket? socket = null;
+        Task? receive = null;
         long sequence = 0;
         await foreach (var frame in _frames.Reader.ReadAllAsync(token))
         {
@@ -243,6 +244,13 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                 {
                     socket?.Dispose();
                     socket = await ConnectDesktopSocketAsync(credential, token);
+                    var connectedSocket = socket;
+                    receive = ReceiveControlsAsync(connectedSocket, token);
+                    _ = receive.ContinueWith(_ =>
+                    {
+                        try { connectedSocket.Abort(); } catch { }
+                    }, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted,
+                        TaskScheduler.Default);
                 }
                 var metadata = JsonSerializer.SerializeToUtf8Bytes(new
                 {
@@ -296,6 +304,31 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
             }
         }
         socket?.Dispose();
+        if (receive is not null) try { await receive; } catch { }
+    }
+
+    private async Task ReceiveControlsAsync(ClientWebSocket socket, CancellationToken token)
+    {
+        var buffer = new byte[64 * 1024];
+        while (!token.IsCancellationRequested && socket.State == WebSocketState.Open)
+        {
+            using var payload = new MemoryStream();
+            WebSocketReceiveResult result;
+            do
+            {
+                result = await socket.ReceiveAsync(buffer, token);
+                if (result.MessageType == WebSocketMessageType.Close) return;
+                if (result.MessageType != WebSocketMessageType.Text)
+                    throw new InvalidDataException("Unexpected desktop control message type.");
+                payload.Write(buffer, 0, result.Count);
+                if (payload.Length > 256 * 1024) throw new InvalidDataException("Desktop control message too large.");
+            } while (!result.EndOfMessage);
+            using var document = JsonDocument.Parse(payload.ToArray());
+            var root = document.RootElement;
+            if (root.TryGetProperty("type", out var type) && type.GetString() == "input" &&
+                root.TryGetProperty("input", out var input) && input.ValueKind == JsonValueKind.Object)
+                await ExecuteInputAsync(input, token);
+        }
     }
 
     private static async Task<ClientWebSocket> ConnectDesktopSocketAsync(

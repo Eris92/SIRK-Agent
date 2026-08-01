@@ -34,6 +34,8 @@ internal static class Program
     private static readonly object CaptureSync = new();
     private static readonly Dictionary<int, DxgiDesktopCapture> DxgiCaptures = [];
     private static readonly Dictionary<int, DateTimeOffset> LastFullFrames = [];
+    private static readonly Dictionary<int, List<Rectangle>> PendingRefinementRegions = [];
+    private static readonly Dictionary<int, long> LastDirtyFrameTimestamps = [];
     private static readonly Dictionary<int, DxgiH264Capture> H264Captures = [];
     private static SessionH264Encoder? _h264Encoder;
     private static long _lastVideoRequestTimestamp;
@@ -114,7 +116,9 @@ internal static class Program
                             request.MaxWidth ?? 1280, request.TargetKbps ?? 1000,
                             request.TargetFps ?? 60, request.ForceFull == true),
                         "snapshot" => SnapshotPayload(request.MonitorIndex ?? -1,
-                            request.MaxWidth ?? 1280, request.Quality ?? 40, request.ForceFull == true),
+                            request.MaxWidth ?? 1280, request.Quality ?? 40,
+                            request.TargetFps ?? 60, request.DeltaScalePercent ?? 100,
+                            request.ForceFull == true),
                         _ => new SessionVideoPayload(new SessionResponse(false, "SESSION_REQUEST_INVALID",
                             null, null, null), [])
                     };
@@ -170,7 +174,8 @@ internal static class Program
                         {
                             "monitors" => Monitors(),
                             "snapshot" => Snapshot(request.MonitorIndex ?? -1, request.MaxWidth ?? 1280,
-                                request.Quality ?? 40, request.ForceFull == true),
+                                request.Quality ?? 40, request.TargetFps ?? 60,
+                                request.DeltaScalePercent ?? 100, request.ForceFull == true),
                             "video-frame" => VideoFrame(request.MonitorIndex ?? -1, request.MaxWidth ?? 1280,
                                 request.TargetKbps ?? 1000, request.TargetFps ?? 60, request.ForceFull == true),
                             "stream-stop" => MarkStreamStopped(),
@@ -259,15 +264,16 @@ internal static class Program
         return screens[monitorIndex].Bounds;
     }
 
-    private static SessionResponse Snapshot(int monitorIndex, int maxWidth, int quality, bool requestedFull)
+    private static SessionResponse Snapshot(int monitorIndex, int maxWidth, int quality, int targetFps,
+        int deltaScalePercent, bool requestedFull)
     {
-        var payload = SnapshotPayload(monitorIndex, maxWidth, quality, requestedFull);
+        var payload = SnapshotPayload(monitorIndex, maxWidth, quality, targetFps, deltaScalePercent, requestedFull);
         return payload.Bytes.Length == 0 ? payload.Response :
             payload.Response with { ImageBase64 = Convert.ToBase64String(payload.Bytes) };
     }
 
     private static SessionVideoPayload SnapshotPayload(int monitorIndex, int maxWidth, int quality,
-        bool requestedFull)
+        int targetFps, int deltaScalePercent, bool requestedFull)
     {
         Volatile.Write(ref _lastVideoRequestTimestamp, Stopwatch.GetTimestamp());
         var totalTimer = Stopwatch.StartNew();
@@ -276,14 +282,36 @@ internal static class Program
             throw new InvalidOperationException("Aktywna sesja nie udostępnia ekranu.");
         maxWidth = Math.Clamp(maxWidth, 640, 1920);
         quality = Math.Clamp(quality, 25, 80);
-        var scale = Math.Min(1d, Math.Min((double)maxWidth / bounds.Width, 1080d / bounds.Height));
+        targetFps = Math.Clamp(targetFps, 1, 120);
+        deltaScalePercent = Math.Clamp(deltaScalePercent, 10, 100);
+        var fullScale = Math.Min(1d, Math.Min((double)maxWidth / bounds.Width, 1080d / bounds.Height));
         var captureTimer = Stopwatch.StartNew();
-        using var bitmap = CaptureDesktopBitmap(monitorIndex, bounds, out var captureBackend,
+        var captureTimeoutMilliseconds = Math.Clamp(1000 / targetFps, 1, 16);
+        using var bitmap = CaptureDesktopBitmap(monitorIndex, bounds, captureTimeoutMilliseconds,
+            out var captureBackend,
             out var dirtyRectangles, out var moveRectangles, out var accumulatedFrames);
         captureTimer.Stop();
         var now = DateTimeOffset.UtcNow;
         var forceFull = requestedFull || !LastFullFrames.TryGetValue(monitorIndex, out var lastFull) ||
                         now - lastFull >= TimeSpan.FromSeconds(30);
+        var refinement = false;
+        if (dirtyRectangles.Length > 0)
+        {
+            if (!PendingRefinementRegions.TryGetValue(monitorIndex, out var pending))
+                PendingRefinementRegions[monitorIndex] = pending = [];
+            pending.AddRange(dirtyRectangles);
+            PendingRefinementRegions[monitorIndex] = MergeDirtyRectangles(pending, bounds);
+            LastDirtyFrameTimestamps[monitorIndex] = Stopwatch.GetTimestamp();
+        }
+        else if (!forceFull && PendingRefinementRegions.TryGetValue(monitorIndex, out var pending) &&
+                 pending.Count > 0 && LastDirtyFrameTimestamps.TryGetValue(monitorIndex, out var lastDirty) &&
+                 Stopwatch.GetElapsedTime(lastDirty) >= TimeSpan.FromMilliseconds(75))
+        {
+            dirtyRectangles = pending.ToArray();
+            PendingRefinementRegions.Remove(monitorIndex);
+            LastDirtyFrameTimestamps.Remove(monitorIndex);
+            refinement = true;
+        }
         if (dirtyRectangles.Length == 0 && accumulatedFrames == 0 && !forceFull)
         {
             totalTimer.Stop();
@@ -304,9 +332,15 @@ internal static class Program
         }
         var encodeTimer = Stopwatch.StartNew();
         using var output = new MemoryStream();
-        using var encodedBitmap = BuildEncodedBitmap(bitmap, bounds, dirtyRectangles, scale, forceFull,
+        var encodeScale = forceFull || refinement ? fullScale : fullScale * deltaScalePercent / 100d;
+        using var encodedBitmap = BuildEncodedBitmap(bitmap, bounds, dirtyRectangles, encodeScale, forceFull,
             out var fullFrame, out var patches);
-        if (fullFrame) LastFullFrames[monitorIndex] = now;
+        if (fullFrame)
+        {
+            LastFullFrames[monitorIndex] = now;
+            PendingRefinementRegions.Remove(monitorIndex);
+            LastDirtyFrameTimestamps.Remove(monitorIndex);
+        }
         var encoder = ImageCodecInfo.GetImageEncoders().First(value => value.FormatID == ImageFormat.Jpeg.Guid);
         using var parameters = new EncoderParameters(1);
         parameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, (long)quality);
@@ -337,6 +371,8 @@ internal static class Program
                 dirtyRectangleCount = dirtyRectangles.Length,
                 moveRectangleCount = moveRectangles.Length,
                 dirtyPixelRatio = Math.Round(DirtyPixelRatio(dirtyRectangles, bounds.Width, bounds.Height), 6),
+                deltaScalePercent = refinement || fullFrame ? 100 : deltaScalePercent,
+                refinement,
                 accumulatedFrames,
                 encoding = "JPEG"
             }, Json)), bytes);
@@ -434,7 +470,7 @@ internal static class Program
         var width = Math.Max(16, (int)Math.Round(bounds.Width * scale) & ~15);
         var height = Math.Max(16, (int)Math.Round(bounds.Height * scale) & ~15);
         var captureTimer = Stopwatch.StartNew();
-        using var bitmap = CaptureDesktopBitmap(monitorIndex, bounds, out var backend,
+        using var bitmap = CaptureDesktopBitmap(monitorIndex, bounds, 16, out var backend,
             out var dirty, out _, out var accumulatedFrames);
         captureTimer.Stop();
         if (dirty.Length == 0 && accumulatedFrames == 0 && !forceKeyFrame &&
@@ -514,6 +550,8 @@ internal static class Program
             try { _h264Encoder?.Dispose(); } catch (Exception error) { LogError(error); }
             _h264Encoder = null;
             LastFullFrames.Clear();
+            PendingRefinementRegions.Clear();
+            LastDirtyFrameTimestamps.Clear();
             Volatile.Write(ref _lastVideoRequestTimestamp, 0);
         }
         CollectReleasedNativeResources();
@@ -672,7 +710,7 @@ internal static class Program
         return cells.Values.ToList();
     }
 
-    private static Bitmap CaptureDesktopBitmap(int monitorIndex, Rectangle bounds,
+    private static Bitmap CaptureDesktopBitmap(int monitorIndex, Rectangle bounds, int timeoutMilliseconds,
         out string backend, out Rectangle[] dirtyRectangles, out DesktopMove[] moveRectangles,
         out uint accumulatedFrames)
     {
@@ -690,7 +728,7 @@ internal static class Program
                     capture = new DxgiDesktopCapture(outputIndex);
                     DxgiCaptures[outputIndex] = capture;
                 }
-                frame = capture.Capture(16);
+                frame = capture.Capture((uint)Math.Clamp(timeoutMilliseconds, 1, 100));
             }
             backend = "DXGI_DESKTOP_DUPLICATION";
             dirtyRectangles = frame.DirtyRectangles;
@@ -1039,7 +1077,8 @@ internal static class Program
 }
 
 internal sealed record SessionRequest(string Type, string? Action, int? X, int? Y, int? Delta, int? MonitorIndex,
-    int? MaxWidth, int? Quality, int? TargetKbps, int? TargetFps, string? Text, string? Key, string? Modifiers,
+    int? MaxWidth, int? Quality, int? TargetKbps, int? TargetFps, int? DeltaScalePercent,
+    string? Text, string? Key, string? Modifiers,
     string? FileName, string? FileBase64, bool? ForceFull);
 internal sealed record SessionResponse(bool Ok, string Code, string? ImageBase64, int? Width, int? Height,
     JsonElement? Data = null, string? Error = null);

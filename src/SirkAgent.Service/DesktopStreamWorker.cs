@@ -20,7 +20,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
     private readonly Channel<DesktopFrame> _frames = Channel.CreateBounded<DesktopFrame>(
         new BoundedChannelOptions(1)
         {
-            FullMode = BoundedChannelFullMode.DropOldest,
+            FullMode = BoundedChannelFullMode.Wait,
             SingleReader = true,
             SingleWriter = true
         });
@@ -28,6 +28,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
     private long _inputCommands;
     private long _capturedFrames;
     private long _uploadedFrames;
+    private long _droppedFrames;
     private long _binaryCaptures;
     private long _legacyCaptures;
     private int _maxWidth = 1920;
@@ -39,6 +40,8 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
     private int _targetFps = 60;
     private int _profileTargetFps = 60;
     private int _dirtyRegionMode;
+    private int _deltaScalePercent = 100;
+    private int _profileDeltaScalePercent = 100;
     private int _h264Available = 1;
     private int _profileQuality = 72;
     private long _lastStreamStatusWrite;
@@ -85,6 +88,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                     quality = Volatile.Read(ref _quality),
                     targetKbps = Volatile.Read(ref _targetKbps),
                     targetFps = Volatile.Read(ref _targetFps),
+                    deltaScalePercent = Volatile.Read(ref _deltaScalePercent),
                     forceFull
                 }, Json);
                 string responseJson;
@@ -155,17 +159,29 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                     Bool(data, "fullFrame"),
                     data.TryGetProperty("patches", out var patches) ? patches.GetRawText() : "[]",
                     data.TryGetProperty("moves", out var moves) ? moves.GetRawText() : "[]",
+                    Number(data, "dirtyRectangleCount"), Number(data, "dirtyPixelRatio"),
+                    Number(data, "deltaScalePercent"), Bool(data, "refinement"),
+                    Number(data, "accumulatedFrames"),
                     Number(data, "cursorX"), Number(data, "cursorY"),
                     DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     encoding.StartsWith("H264", StringComparison.Ordinal) ? "video/h264" : "image/jpeg",
                     encoding, Bool(data, "keyFrame"), Bool(data, "cursorOnly"));
-                if (_frames.Writer.TryWrite(frame))
+                var enqueued = false;
+                if (Volatile.Read(ref _dirtyRegionMode) != 0)
                 {
-                    Interlocked.Increment(ref _capturedFrames);
-                    var frameInterval = TimeSpan.FromSeconds(1d / Volatile.Read(ref _targetFps));
-                    var remaining = frameInterval - Stopwatch.GetElapsedTime(frameStarted);
-                    if (remaining > TimeSpan.Zero) await Task.Delay(remaining, token);
+                    await _frames.Writer.WriteAsync(frame, token);
+                    enqueued = true;
                 }
+                else if (_frames.Writer.TryWrite(frame)) enqueued = true;
+                else
+                {
+                    Interlocked.Increment(ref _droppedFrames);
+                    Interlocked.Exchange(ref _forceFullFrame, 1);
+                }
+                if (enqueued) Interlocked.Increment(ref _capturedFrames);
+                var frameInterval = TimeSpan.FromSeconds(1d / Volatile.Read(ref _targetFps));
+                var remaining = frameInterval - Stopwatch.GetElapsedTime(frameStarted);
+                if (remaining > TimeSpan.Zero) await Task.Delay(remaining, token);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
             catch (Exception error)
@@ -246,6 +262,9 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
             var previousFps = Volatile.Read(ref _targetFps);
             var requestedDirtyRegionMode = string.Equals(Text(input, "frameMode"), "tiles",
                 StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+            var requestedDeltaScaleValue = Integer(input, "deltaScalePercent");
+            var requestedDeltaScale = requestedDeltaScaleValue == 0 ? 100 :
+                Math.Clamp(requestedDeltaScaleValue, 10, 100);
             var previousDirtyRegionMode = Volatile.Read(ref _dirtyRegionMode);
             var previousSessionId = Volatile.Read(ref _sessionId);
             if (requestedWidth != previousWidth || requestedFps != previousFps ||
@@ -265,6 +284,8 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
             Volatile.Write(ref _targetFps, requestedFps);
             Volatile.Write(ref _profileTargetFps, requestedFps);
             Volatile.Write(ref _dirtyRegionMode, requestedDirtyRegionMode);
+            Volatile.Write(ref _deltaScalePercent, requestedDeltaScale);
+            Volatile.Write(ref _profileDeltaScalePercent, requestedDeltaScale);
             Volatile.Write(ref _monitorIndex, Math.Clamp(Integer(input, "monitorIndex"), 0, 15));
             Volatile.Write(ref _sessionId, requestedSessionId);
             Interlocked.Exchange(ref _forceFullFrame, 1);
@@ -357,12 +378,19 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                     captureBackend = frame.CaptureBackend, fullFrame = frame.FullFrame,
                     patches = JsonSerializer.Deserialize<JsonElement>(frame.Patches),
                     moves = JsonSerializer.Deserialize<JsonElement>(frame.Moves),
+                    dirtyRectangleCount = int.Parse(frame.DirtyRectangleCount, CultureInfo.InvariantCulture),
+                    dirtyPixelRatio = double.Parse(frame.DirtyPixelRatio, CultureInfo.InvariantCulture),
+                    deltaScalePercent = int.Parse(frame.DeltaScalePercent, CultureInfo.InvariantCulture),
+                    refinement = frame.Refinement,
+                    accumulatedFrames = int.Parse(frame.AccumulatedFrames, CultureInfo.InvariantCulture),
                     cursorX = int.Parse(frame.CursorX, CultureInfo.InvariantCulture),
                     cursorY = int.Parse(frame.CursorY, CultureInfo.InvariantCulture),
                     capturedAtUnixMilliseconds = frame.CapturedAtUnixMilliseconds,
                     encodedBytes = frame.Bytes.Length, contentType = frame.ContentType,
                     encoding = frame.Encoding, keyFrame = frame.KeyFrame,
-                    cursorOnly = frame.CursorOnly
+                    cursorOnly = frame.CursorOnly,
+                    targetFps = Volatile.Read(ref _targetFps),
+                    targetKbps = Volatile.Read(ref _targetKbps)
                 }, Json);
                 var packet = new byte[4 + metadata.Length + frame.Bytes.Length];
                 BinaryPrimitives.WriteInt32BigEndian(packet, metadata.Length);
@@ -385,8 +413,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                         queueCapacity = 1, latestFrameWins = true,
                         capturedFrames = Interlocked.Read(ref _capturedFrames),
                         uploadedFrames = Interlocked.Read(ref _uploadedFrames),
-                        droppedFrames = Math.Max(0, Interlocked.Read(ref _capturedFrames) -
-                            Interlocked.Read(ref _uploadedFrames) - 1),
+                        droppedFrames = Interlocked.Read(ref _droppedFrames),
                         sendMilliseconds = Math.Round(sendTimer.Elapsed.TotalMilliseconds, 2),
                         inputCommands = Interlocked.Read(ref _inputCommands),
                         sessionTransport = Interlocked.Read(ref _binaryCaptures) > 0 ? "BINARY_PIPE" : "JSON_BASE64",
@@ -397,6 +424,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                         targetKbps = Volatile.Read(ref _targetKbps),
                         targetFps = Volatile.Read(ref _targetFps),
                         frameMode = Volatile.Read(ref _dirtyRegionMode) != 0 ? "tiles" : "h264",
+                        deltaScalePercent = Volatile.Read(ref _deltaScalePercent),
                         bitrateKbps
                     }, Json);
                 }
@@ -469,9 +497,12 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
         var target = Volatile.Read(ref _targetKbps);
         var quality = Volatile.Read(ref _quality);
         var targetFps = Volatile.Read(ref _targetFps);
+        var deltaScale = Volatile.Read(ref _deltaScalePercent);
         if (bitrateKbps > target * 1.1)
         {
-            if (quality > 30) Volatile.Write(ref _quality, Math.Max(25, quality - 3));
+            if (Volatile.Read(ref _dirtyRegionMode) != 0 && deltaScale > 10)
+                Volatile.Write(ref _deltaScalePercent, Math.Max(10, deltaScale - 5));
+            else if (quality > 30) Volatile.Write(ref _quality, Math.Max(25, quality - 3));
             else if (Volatile.Read(ref _dirtyRegionMode) != 0 && targetFps > 5)
                 Volatile.Write(ref _targetFps, Math.Max(5, targetFps - 5));
             _lastAdaptiveChange = now;
@@ -480,9 +511,12 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
         {
             var requestedQuality = Volatile.Read(ref _profileQuality);
             var requestedFps = Volatile.Read(ref _profileTargetFps);
-            if (quality < requestedQuality) Volatile.Write(ref _quality, Math.Min(requestedQuality, quality + 1));
-            else if (Volatile.Read(ref _dirtyRegionMode) != 0 && targetFps < requestedFps)
+            var requestedDeltaScale = Volatile.Read(ref _profileDeltaScalePercent);
+            if (Volatile.Read(ref _dirtyRegionMode) != 0 && targetFps < requestedFps)
                 Volatile.Write(ref _targetFps, Math.Min(requestedFps, targetFps + 5));
+            else if (Volatile.Read(ref _dirtyRegionMode) != 0 && deltaScale < requestedDeltaScale)
+                Volatile.Write(ref _deltaScalePercent, Math.Min(requestedDeltaScale, deltaScale + 5));
+            else if (quality < requestedQuality) Volatile.Write(ref _quality, Math.Min(requestedQuality, quality + 1));
             _lastAdaptiveChange = now;
         }
         return bitrateKbps;
@@ -555,5 +589,6 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
 internal sealed record DesktopFrame(byte[] Bytes, string Width, string Height,
     string SourceWidth, string SourceHeight,
     string CaptureMilliseconds, string EncodeMilliseconds, string SessionMilliseconds, string CaptureBackend,
-    bool FullFrame, string Patches, string Moves, string CursorX, string CursorY,
+    bool FullFrame, string Patches, string Moves, string DirtyRectangleCount, string DirtyPixelRatio,
+    string DeltaScalePercent, bool Refinement, string AccumulatedFrames, string CursorX, string CursorY,
     long CapturedAtUnixMilliseconds, string ContentType, string Encoding, bool KeyFrame, bool CursorOnly);

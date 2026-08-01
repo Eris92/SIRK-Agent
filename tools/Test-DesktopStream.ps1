@@ -52,18 +52,26 @@ public static class SirkDesktopBenchmarkWindow {
     public static extern bool MoveWindow(IntPtr handle, int x, int y, int width, int height, bool repaint);
 }
 '@
-        $process = Start-Process notepad -PassThru
+        $process = Start-Process mspaint -PassThru
         try {
             for ($attempt = 0; $attempt -lt 50 -and $process.MainWindowHandle -eq 0; $attempt++) {
                 Start-Sleep -Milliseconds 100
                 $process.Refresh()
             }
-            for ($index = 0; $index -lt ($MotionSeconds * 63); $index++) {
+            if ($process.MainWindowHandle -eq 0) { throw 'Nie udało się utworzyć widocznego okna testowego.' }
+            $motionClock = [Diagnostics.Stopwatch]::StartNew()
+            $index = 0
+            $nextFrameMilliseconds = 0.0
+            while ($motionClock.Elapsed.TotalSeconds -lt $MotionSeconds) {
                 $x = 80 + [int](420 * (0.5 + 0.5 * [Math]::Sin($index / 18.0)))
                 $y = 80 + [int](220 * (0.5 + 0.5 * [Math]::Cos($index / 23.0)))
                 [SirkDesktopBenchmarkWindow]::MoveWindow(
                     $process.MainWindowHandle, $x, $y, 900, 600, $true) | Out-Null
-                Start-Sleep -Milliseconds 16
+                $index++
+                $nextFrameMilliseconds += 1000.0 / 60.0
+                while (($remaining = $nextFrameMilliseconds - $motionClock.Elapsed.TotalMilliseconds) -gt 0) {
+                    if ($remaining -gt 2) { Start-Sleep -Milliseconds 1 } else { [Threading.Thread]::SpinWait(250) }
+                }
             }
         } finally {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue

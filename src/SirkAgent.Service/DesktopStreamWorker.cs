@@ -25,6 +25,8 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
         });
     private int _viewers;
     private long _inputCommands;
+    private long _capturedFrames;
+    private long _uploadedFrames;
     private int _maxWidth = 1920;
     private int _quality = 45;
     private int _forceFullFrame = 1;
@@ -108,7 +110,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                     DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     encoding.StartsWith("H264", StringComparison.Ordinal) ? "video/h264" : "image/jpeg",
                     encoding, Bool(data, "keyFrame"));
-                _frames.Writer.TryWrite(frame);
+                if (_frames.Writer.TryWrite(frame)) Interlocked.Increment(ref _capturedFrames);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
             catch (Exception error)
@@ -261,14 +263,22 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                 BinaryPrimitives.WriteInt32BigEndian(packet, metadata.Length);
                 Buffer.BlockCopy(metadata, 0, packet, 4, metadata.Length);
                 Buffer.BlockCopy(frame.Bytes, 0, packet, 4 + metadata.Length, frame.Bytes.Length);
+                var sendTimer = System.Diagnostics.Stopwatch.StartNew();
                 await socket.SendAsync(packet, WebSocketMessageType.Binary, true, token);
+                sendTimer.Stop();
                 sequence++;
+                Interlocked.Increment(ref _uploadedFrames);
                 var bitrateKbps = AdaptToBandwidth(frame.Bytes.Length);
                 AtomicFile.WriteJson(Path.Combine(paths.Root, "desktop-stream-status.json"), new
                 {
                     ok = true, timestampUtc = DateTimeOffset.UtcNow, frameBytes = frame.Bytes.Length,
                     viewers = Volatile.Read(ref _viewers), sequence,
                     queueCapacity = 1, latestFrameWins = true,
+                    capturedFrames = Interlocked.Read(ref _capturedFrames),
+                    uploadedFrames = Interlocked.Read(ref _uploadedFrames),
+                    droppedFrames = Math.Max(0, Interlocked.Read(ref _capturedFrames) -
+                        Interlocked.Read(ref _uploadedFrames) - 1),
+                    sendMilliseconds = Math.Round(sendTimer.Elapsed.TotalMilliseconds, 2),
                     inputCommands = Interlocked.Read(ref _inputCommands),
                     maxWidth = Volatile.Read(ref _maxWidth),
                     quality = Volatile.Read(ref _quality),
@@ -281,7 +291,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
             {
                 socket?.Dispose();
                 socket = null;
-                WriteStatus(false, error.Message);
+                WriteStatus(false, "UPLOAD: " + error);
                 logger.LogDebug(error, "Direct desktop upload failed.");
             }
         }

@@ -148,8 +148,15 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                 using var response = await client.SendAsync(request, token);
                 response.EnsureSuccessStatusCode();
                 using var control = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(token));
-                Volatile.Write(ref _viewers,
-                    control.RootElement.TryGetProperty("viewerActive", out var active) && active.GetBoolean() ? 1 : 0);
+                var viewerActive = control.RootElement.TryGetProperty("viewerActive", out var active) && active.GetBoolean();
+                Volatile.Write(ref _viewers, viewerActive ? 1 : 0);
+                AtomicFile.WriteJson(Path.Combine(paths.Root, "desktop-control-status.json"), new
+                {
+                    ok = true, timestampUtc = DateTimeOffset.UtcNow, viewerActive,
+                    endpoint = ControlEndpoint(credential.Endpoint).GetLeftPart(UriPartial.Authority),
+                    queuedInputs = control.RootElement.TryGetProperty("inputs", out var queuedInputs) &&
+                                   queuedInputs.ValueKind == JsonValueKind.Array ? queuedInputs.GetArrayLength() : 0
+                }, Json);
                 if (control.RootElement.TryGetProperty("inputs", out var inputs) &&
                     inputs.ValueKind == JsonValueKind.Array)
                     foreach (var input in inputs.EnumerateArray())

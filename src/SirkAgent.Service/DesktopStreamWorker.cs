@@ -16,7 +16,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
     private readonly Channel<DesktopFrame> _frames = Channel.CreateBounded<DesktopFrame>(
         new BoundedChannelOptions(1)
         {
-            FullMode = BoundedChannelFullMode.Wait,
+            FullMode = BoundedChannelFullMode.DropOldest,
             SingleReader = true,
             SingleWriter = true
         });
@@ -28,6 +28,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
     private int _monitorIndex;
     private int _sessionId = -1;
     private int _targetKbps = 1000;
+    private int _h264Available = 1;
     private int _profileMaxWidth = 1920;
     private int _profileQuality = 72;
     private readonly Queue<(DateTimeOffset At, int Bytes)> _bandwidthWindow = new();
@@ -66,9 +67,10 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                 var forceFull = Interlocked.Exchange(ref _forceFullFrame, 0) != 0;
                 var request = JsonSerializer.Serialize(new
                 {
-                    type = "snapshot", monitorIndex = Volatile.Read(ref _monitorIndex),
+                    type = Volatile.Read(ref _h264Available) != 0 ? "video-frame" : "snapshot",
                     maxWidth = Volatile.Read(ref _maxWidth),
                     quality = Volatile.Read(ref _quality),
+                    targetKbps = Volatile.Read(ref _targetKbps),
                     forceFull
                 }, Json);
                 var responseLine = await InteractiveSessionClient.SendCaptureAsync(sessionId, request, token);
@@ -76,15 +78,21 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                 using var responseDocument = JsonDocument.Parse(responseLine);
                 var root = responseDocument.RootElement;
                 if (!root.TryGetProperty("ok", out var ok) || !ok.GetBoolean())
+                {
+                    if (Volatile.Read(ref _h264Available) != 0)
+                        Volatile.Write(ref _h264Available, 0);
                     throw new InvalidDataException(root.TryGetProperty("error", out var captureError)
                         ? captureError.GetString() ?? "Session broker rejected desktop capture."
                         : "Session broker rejected desktop capture.");
+                }
                 if (root.TryGetProperty("code", out var code) &&
                     string.Equals(code.GetString(), "DESKTOP_NO_CHANGE", StringComparison.Ordinal))
                 {
                     continue;
                 }
                 var data = root.GetProperty("data");
+                var encoding = data.TryGetProperty("encoding", out var encodingValue)
+                    ? encodingValue.GetString() ?? "JPEG" : "JPEG";
                 var frame = new DesktopFrame(
                     Convert.FromBase64String(root.GetProperty("imageBase64").GetString() ?? ""),
                     Number(root, "width"), Number(root, "height"),
@@ -94,8 +102,10 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                     data.TryGetProperty("patches", out var patches) ? patches.GetRawText() : "[]",
                     data.TryGetProperty("moves", out var moves) ? moves.GetRawText() : "[]",
                     Number(data, "cursorX"), Number(data, "cursorY"),
-                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-                await _frames.Writer.WriteAsync(frame, token);
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    encoding.StartsWith("H264", StringComparison.Ordinal) ? "video/h264" : "image/jpeg",
+                    encoding, Bool(data, "keyFrame"));
+                _frames.Writer.TryWrite(frame);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
             catch (Exception error)
@@ -169,6 +179,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
             var requestedSession = Integer(input, "sessionId");
             Volatile.Write(ref _sessionId, requestedSession is >= 0 and <= 65535 ? requestedSession : -1);
             Interlocked.Exchange(ref _forceFullFrame, 1);
+            Volatile.Write(ref _h264Available, 1);
             Interlocked.Increment(ref _inputCommands);
             return;
         }
@@ -219,7 +230,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                 {
                     Content = new ByteArrayContent(frame.Bytes)
                 };
-                upload.Content.Headers.ContentType = new MediaTypeHeaderValue("image/jpeg");
+                upload.Content.Headers.ContentType = new MediaTypeHeaderValue(frame.ContentType);
                 upload.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential.DeviceToken);
                 upload.Headers.Add("X-SIRK-Tenant", credential.TenantId);
                 upload.Headers.Add("X-SIRK-Device", credential.DeviceId);
@@ -236,6 +247,8 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                 upload.Headers.Add("X-SIRK-Cursor-X", frame.CursorX);
                 upload.Headers.Add("X-SIRK-Cursor-Y", frame.CursorY);
                 upload.Headers.Add("X-SIRK-Captured-At", frame.CapturedAtUnixMilliseconds.ToString());
+                upload.Headers.Add("X-SIRK-Codec", frame.Encoding);
+                upload.Headers.Add("X-SIRK-Key-Frame", frame.KeyFrame ? "1" : "0");
                 Sign(upload, frame.Bytes, credential);
                 using var uploaded = await client.SendAsync(upload, token);
                 uploaded.EnsureSuccessStatusCode();
@@ -355,4 +368,4 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
 internal sealed record DesktopFrame(byte[] Bytes, string Width, string Height,
     string CaptureMilliseconds, string EncodeMilliseconds, string CaptureBackend,
     bool FullFrame, string Patches, string Moves, string CursorX, string CursorY,
-    long CapturedAtUnixMilliseconds);
+    long CapturedAtUnixMilliseconds, string ContentType, string Encoding, bool KeyFrame);

@@ -32,6 +32,7 @@ internal static class Program
     private static readonly object CaptureSync = new();
     private static readonly Dictionary<int, DxgiDesktopCapture> DxgiCaptures = [];
     private static readonly Dictionary<int, DateTimeOffset> LastFullFrames = [];
+    private static SessionH264Encoder? _h264Encoder;
 
     [STAThread]
     private static async Task Main()
@@ -85,6 +86,8 @@ internal static class Program
                             "monitors" => Monitors(),
                             "snapshot" => Snapshot(request.MonitorIndex ?? -1, request.MaxWidth ?? 1280,
                                 request.Quality ?? 40, request.ForceFull == true),
+                            "video-frame" => VideoFrame(request.MonitorIndex ?? -1, request.MaxWidth ?? 1280,
+                                request.TargetKbps ?? 1000, request.ForceFull == true),
                             "mouse" or "input" => Input(request),
                             "activity" => Activity(),
                             _ => new SessionResponse(false, "SESSION_REQUEST_INVALID", null, null, null)
@@ -240,6 +243,53 @@ internal static class Program
                 dirtyPixelRatio = Math.Round(DirtyPixelRatio(dirtyRectangles, bounds.Width, bounds.Height), 6),
                 accumulatedFrames,
                 encoding = "JPEG"
+            }, Json));
+    }
+
+    private static SessionResponse VideoFrame(int monitorIndex, int maxWidth, int targetKbps, bool forceKeyFrame)
+    {
+        var totalTimer = Stopwatch.StartNew();
+        var bounds = CaptureBounds(monitorIndex);
+        maxWidth = Math.Clamp(maxWidth, 640, 1920);
+        targetKbps = Math.Clamp(targetKbps, 300, 8000);
+        var scale = Math.Min(1d, Math.Min((double)maxWidth / bounds.Width, 1080d / bounds.Height));
+        var width = Math.Max(2, (int)Math.Round(bounds.Width * scale) & ~1);
+        var height = Math.Max(2, (int)Math.Round(bounds.Height * scale) & ~1);
+        var captureTimer = Stopwatch.StartNew();
+        using var bitmap = CaptureDesktopBitmap(monitorIndex, bounds, out var backend,
+            out var dirty, out _, out var accumulatedFrames);
+        captureTimer.Stop();
+        if (dirty.Length == 0 && accumulatedFrames == 0 && !forceKeyFrame)
+            return new SessionResponse(true, "DESKTOP_NO_CHANGE", null, width, height);
+        using var scaled = new Bitmap(width, height, PixelFormat.Format24bppRgb);
+        using (var graphics = Graphics.FromImage(scaled))
+        {
+            graphics.CompositingMode = CompositingMode.SourceCopy;
+            graphics.InterpolationMode = InterpolationMode.Bilinear;
+            graphics.DrawImage(bitmap, new Rectangle(0, 0, width, height));
+        }
+        var encodeTimer = Stopwatch.StartNew();
+        if (_h264Encoder is null || !_h264Encoder.Matches(width, height, targetKbps) || forceKeyFrame)
+        {
+            _h264Encoder?.Dispose();
+            _h264Encoder = new SessionH264Encoder(width, height, targetKbps * 1000);
+        }
+        var bytes = _h264Encoder.Encode(scaled);
+        encodeTimer.Stop();
+        if (bytes.Length == 0) return new SessionResponse(true, "DESKTOP_NO_CHANGE", null, width, height);
+        var cursor = Cursor.Position;
+        return new SessionResponse(true, "DESKTOP_VIDEO_FRAME_OK", Convert.ToBase64String(bytes), width, height,
+            JsonSerializer.SerializeToElement(new
+            {
+                sessionId = SessionId, monitorIndex, encodedWidth = width, encodedHeight = height,
+                fullFrame = true, keyFrame = _h264Encoder.LastWasKeyFrame,
+                cursorX = Math.Clamp(cursor.X - bounds.Left, 0, Math.Max(0, bounds.Width - 1)),
+                cursorY = Math.Clamp(cursor.Y - bounds.Top, 0, Math.Max(0, bounds.Height - 1)),
+                captureMilliseconds = Math.Round(captureTimer.Elapsed.TotalMilliseconds, 2),
+                encodeMilliseconds = Math.Round(encodeTimer.Elapsed.TotalMilliseconds, 2),
+                agentFrameMilliseconds = Math.Round(totalTimer.Elapsed.TotalMilliseconds, 2),
+                encodedBytes = bytes.Length, captureBackend = backend,
+                dirtyRectangleCount = dirty.Length, accumulatedFrames, encoding = "H264_ANNEX_B"
             }, Json));
     }
 
@@ -754,7 +804,7 @@ internal static class Program
 }
 
 internal sealed record SessionRequest(string Type, string? Action, int? X, int? Y, int? Delta, int? MonitorIndex,
-    int? MaxWidth, int? Quality, string? Text, string? Key, string? Modifiers,
+    int? MaxWidth, int? Quality, int? TargetKbps, string? Text, string? Key, string? Modifiers,
     string? FileName, string? FileBase64, bool? ForceFull);
 internal sealed record SessionResponse(bool Ok, string Code, string? ImageBase64, int? Width, int? Height,
     JsonElement? Data = null, string? Error = null);

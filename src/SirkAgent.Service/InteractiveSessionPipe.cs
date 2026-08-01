@@ -10,6 +10,7 @@ internal static class InteractiveSessionPipe
     private sealed record SessionDescriptor(int sessionId, bool active, bool helperAvailable, int processId);
 
     private const string Prefix = "SIRK-Agent-Interactive-Session-";
+    private static readonly object LaunchSync = new();
 
     internal static string Name(int sessionId) => Prefix + sessionId;
     internal static string ActiveName() => Name(Resolve(null));
@@ -26,7 +27,20 @@ internal static class InteractiveSessionPipe
     internal static object[] Sessions()
     {
         var active = WTSGetActiveConsoleSessionId();
-        return Process.GetProcessesByName("SirkAgent.Session")
+        var helperAvailable = false;
+        if (active != uint.MaxValue)
+        {
+            try
+            {
+                EnsureAvailable(checked((int)active));
+                helperAvailable = true;
+            }
+            catch
+            {
+                helperAvailable = IsAvailable(checked((int)active));
+            }
+        }
+        var sessions = Process.GetProcessesByName("SirkAgent.Session")
             .Select(process =>
             {
                 try
@@ -45,8 +59,10 @@ internal static class InteractiveSessionPipe
             .GroupBy(item => item.sessionId)
             .Select(group => group.First())
             .OrderBy(item => item.sessionId)
-            .Cast<object>()
-            .ToArray();
+            .ToList();
+        if (active != uint.MaxValue && sessions.All(item => item.sessionId != (int)active))
+            sessions.Add(new SessionDescriptor((int)active, true, helperAvailable, 0));
+        return sessions.OrderBy(item => item.sessionId).Cast<object>().ToArray();
     }
 
     internal static bool IsAvailable(int sessionId) =>
@@ -75,43 +91,46 @@ internal static class InteractiveSessionPipe
 
     internal static bool EnsureAvailable(int sessionId)
     {
-        if (IsAvailable(sessionId)) return false;
-        var executable = Path.Combine(AppContext.BaseDirectory, "Session", "SirkAgent.Session.exe");
-        if (!File.Exists(executable))
-            executable = Path.Combine(AppContext.BaseDirectory, "SirkAgent.Session.exe");
-        if (!File.Exists(executable)) throw new FileNotFoundException("Brak brokera sesji użytkownika.", executable);
-        if (!WTSQueryUserToken((uint)sessionId, out var token))
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "Nie można otworzyć aktywnej sesji użytkownika.");
-        var environment = IntPtr.Zero;
-        var process = new ProcessInformation();
-        try
+        lock (LaunchSync)
         {
-            if (!CreateEnvironmentBlock(out environment, token, false))
-                throw new Win32Exception(Marshal.GetLastWin32Error());
-            var startup = new StartupInfo
+            if (IsAvailable(sessionId)) return false;
+            var executable = Path.Combine(AppContext.BaseDirectory, "Session", "SirkAgent.Session.exe");
+            if (!File.Exists(executable))
+                executable = Path.Combine(AppContext.BaseDirectory, "SirkAgent.Session.exe");
+            if (!File.Exists(executable)) throw new FileNotFoundException("Brak brokera sesji użytkownika.", executable);
+            if (!WTSQueryUserToken((uint)sessionId, out var token))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Nie można otworzyć aktywnej sesji użytkownika.");
+            var environment = IntPtr.Zero;
+            var process = new ProcessInformation();
+            try
             {
-                Size = Marshal.SizeOf<StartupInfo>(),
-                Desktop = @"winsta0\default"
-            };
-            var command = new StringBuilder("\"" + executable + "\"");
-            if (!CreateProcessAsUser(token, executable, command, IntPtr.Zero, IntPtr.Zero, false,
-                    0x00000400, environment, AppContext.BaseDirectory, ref startup, out process))
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Nie można uruchomić brokera sesji użytkownika.");
+                if (!CreateEnvironmentBlock(out environment, token, false))
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                var startup = new StartupInfo
+                {
+                    Size = Marshal.SizeOf<StartupInfo>(),
+                    Desktop = @"winsta0\default"
+                };
+                var command = new StringBuilder("\"" + executable + "\"");
+                if (!CreateProcessAsUser(token, executable, command, IntPtr.Zero, IntPtr.Zero, false,
+                        0x00000400, environment, AppContext.BaseDirectory, ref startup, out process))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Nie można uruchomić brokera sesji użytkownika.");
+            }
+            finally
+            {
+                if (process.Thread != IntPtr.Zero) CloseHandle(process.Thread);
+                if (process.Process != IntPtr.Zero) CloseHandle(process.Process);
+                if (environment != IntPtr.Zero) DestroyEnvironmentBlock(environment);
+                if (token != IntPtr.Zero) CloseHandle(token);
+            }
+            var deadline = DateTime.UtcNow.AddSeconds(3);
+            while (DateTime.UtcNow < deadline)
+            {
+                if (IsAvailable(sessionId)) return true;
+                Thread.Sleep(25);
+            }
+            throw new InvalidOperationException("Broker sesji użytkownika nie uruchomił się.");
         }
-        finally
-        {
-            if (process.Thread != IntPtr.Zero) CloseHandle(process.Thread);
-            if (process.Process != IntPtr.Zero) CloseHandle(process.Process);
-            if (environment != IntPtr.Zero) DestroyEnvironmentBlock(environment);
-            if (token != IntPtr.Zero) CloseHandle(token);
-        }
-        var deadline = DateTime.UtcNow.AddSeconds(3);
-        while (DateTime.UtcNow < deadline)
-        {
-            if (IsAvailable(sessionId)) return true;
-            Thread.Sleep(25);
-        }
-        throw new InvalidOperationException("Broker sesji użytkownika nie uruchomił się.");
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]

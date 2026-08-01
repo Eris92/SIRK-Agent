@@ -25,7 +25,7 @@ if (-not ($certificate.EnhancedKeyUsageList.ObjectId -contains '1.3.6.1.5.5.7.3.
     throw 'Certificate is not valid for Code Signing.'
 }
 
-$files = Get-ChildItem -LiteralPath $root -File |
+$files = Get-ChildItem -LiteralPath $root -File -Recurse |
     Where-Object { $_.Extension -in '.exe', '.dll' } |
     Sort-Object FullName
 if (-not $files) { throw 'No executable files were found to sign.' }
@@ -45,7 +45,7 @@ $verification = foreach ($file in $files) {
         throw "Authenticode verification failed for $($file.Name)."
     }
     [pscustomobject]@{
-        path = $file.Name
+        path = [IO.Path]::GetRelativePath($root, $file.FullName)
         status = [string]$signature.Status
         signerThumbprint = $signature.SignerCertificate.Thumbprint
     }

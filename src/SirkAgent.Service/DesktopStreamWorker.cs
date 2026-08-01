@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
@@ -243,13 +244,15 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                 }
                 var metadata = JsonSerializer.SerializeToUtf8Bytes(new
                 {
-                    width = int.Parse(frame.Width), height = int.Parse(frame.Height),
-                    captureMilliseconds = double.Parse(frame.CaptureMilliseconds),
-                    encodeMilliseconds = double.Parse(frame.EncodeMilliseconds),
+                    width = int.Parse(frame.Width, CultureInfo.InvariantCulture),
+                    height = int.Parse(frame.Height, CultureInfo.InvariantCulture),
+                    captureMilliseconds = double.Parse(frame.CaptureMilliseconds, CultureInfo.InvariantCulture),
+                    encodeMilliseconds = double.Parse(frame.EncodeMilliseconds, CultureInfo.InvariantCulture),
                     captureBackend = frame.CaptureBackend, fullFrame = frame.FullFrame,
                     patches = JsonSerializer.Deserialize<JsonElement>(frame.Patches),
                     moves = JsonSerializer.Deserialize<JsonElement>(frame.Moves),
-                    cursorX = int.Parse(frame.CursorX), cursorY = int.Parse(frame.CursorY),
+                    cursorX = int.Parse(frame.CursorX, CultureInfo.InvariantCulture),
+                    cursorY = int.Parse(frame.CursorY, CultureInfo.InvariantCulture),
                     capturedAtUnixMilliseconds = frame.CapturedAtUnixMilliseconds,
                     encodedBytes = frame.Bytes.Length, contentType = frame.ContentType,
                     encoding = frame.Encoding, keyFrame = frame.KeyFrame

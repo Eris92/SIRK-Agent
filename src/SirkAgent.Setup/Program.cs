@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text.Json;
 
@@ -123,21 +124,61 @@ static void EnsureDotNet10Runtime()
     Console.WriteLine("[OK] Microsoft .NET 10 Runtime installed.");
 }
 
-static string ResolveRuntimeAsset(JsonElement releases)
+static (string Url, string HashUrl, string Name) ResolveRuntimeAsset(JsonElement releases)
 {
     foreach (var release in releases.EnumerateArray())
     {
         if (release.TryGetProperty("draft", out var draft) && draft.GetBoolean()) continue;
         if (!release.TryGetProperty("assets", out var assets) || assets.ValueKind != JsonValueKind.Array) continue;
-        foreach (var asset in assets.EnumerateArray())
+        var values = assets.EnumerateArray().ToArray();
+        foreach (var asset in values)
         {
             var name = asset.GetProperty("name").GetString() ?? "";
-            if (name.Contains("win-x64-framework-dependent", StringComparison.OrdinalIgnoreCase) &&
-                name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
-                return asset.GetProperty("browser_download_url").GetString() ?? "";
+            if (!name.Contains("net10", StringComparison.OrdinalIgnoreCase) ||
+                !name.Contains("win-x64-framework-dependent", StringComparison.OrdinalIgnoreCase) ||
+                !name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) continue;
+            var hash = values.FirstOrDefault(candidate =>
+                string.Equals(candidate.GetProperty("name").GetString(), name + ".sha256", StringComparison.OrdinalIgnoreCase));
+            if (hash.ValueKind == JsonValueKind.Undefined) continue;
+            return (
+                asset.GetProperty("browser_download_url").GetString() ?? "",
+                hash.GetProperty("browser_download_url").GetString() ?? "",
+                name);
         }
     }
-    return "";
+    return ("", "", "");
+}
+
+static async Task DownloadAsync(HttpClient client, string url, string destination)
+{
+    await using var output = File.Create(destination);
+    await using var input = await client.GetStreamAsync(url);
+    await input.CopyToAsync(output);
+}
+
+static void VerifySha256(string file, string hashFile)
+{
+    var expected = File.ReadAllText(hashFile).Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
+    if (expected.Length != 64 || expected.Any(character => !Uri.IsHexDigit(character)))
+        throw new InvalidOperationException("Agent SHA-256 manifest is invalid.");
+    using var stream = File.OpenRead(file);
+    var actual = Convert.ToHexString(SHA256.HashData(stream));
+    if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase))
+        throw new InvalidOperationException($"Agent SHA-256 mismatch. Expected={expected} Actual={actual}");
+}
+
+static void ValidateRuntimeManifest(string root)
+{
+    var path = Path.Combine(root, "runtime-manifest.json");
+    if (!File.Exists(path)) throw new InvalidOperationException("Agent runtime-manifest.json is missing.");
+    using var document = JsonDocument.Parse(File.ReadAllText(path));
+    var value = document.RootElement;
+    var target = value.GetProperty("targetFramework").GetString();
+    var runtime = value.GetProperty("requiredRuntime").GetString();
+    var compatibility = value.TryGetProperty("compatibilityMode", out var mode) && mode.GetBoolean();
+    if (!string.Equals(target, "net10.0-windows", StringComparison.Ordinal) ||
+        !string.Equals(runtime, "Microsoft.NETCore.App 10.0", StringComparison.Ordinal) || compatibility)
+        throw new InvalidOperationException("Agent runtime package is not a clean .NET 10-only package.");
 }
 
 if (!OperatingSystem.IsWindows()) return 2;
@@ -161,18 +202,20 @@ try
     {
         using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
         client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("SIRK-Agent-Setup", "1.0"));
-        using var releaseResponse = await client.GetAsync("https://api.github.com/repos/Eris92/SIRK-Agent/releases?per_page=20");
+        using var releaseResponse = await client.GetAsync("https://api.github.com/repos/Eris92/SIRK-Agent/releases?per_page=30");
         releaseResponse.EnsureSuccessStatusCode();
         using var releases = JsonDocument.Parse(await releaseResponse.Content.ReadAsStreamAsync());
-        var assetUrl = ResolveRuntimeAsset(releases.RootElement);
-        if (string.IsNullOrWhiteSpace(assetUrl))
-            throw new InvalidOperationException("No recent Agent release contains the Windows x64 runtime package.");
+        var asset = ResolveRuntimeAsset(releases.RootElement);
+        if (string.IsNullOrWhiteSpace(asset.Url) || string.IsNullOrWhiteSpace(asset.HashUrl))
+            throw new InvalidOperationException("No recent Agent release contains a verified .NET 10 Windows x64 runtime package.");
 
-        var zip = Path.Combine(work, "agent.zip");
-        await using (var output = File.Create(zip))
-        await using (var input = await client.GetStreamAsync(assetUrl))
-            await input.CopyToAsync(output);
+        var zip = Path.Combine(work, asset.Name);
+        var hashFile = zip + ".sha256";
+        await DownloadAsync(client, asset.Url, zip);
+        await DownloadAsync(client, asset.HashUrl, hashFile);
+        VerifySha256(zip, hashFile);
         ZipFile.ExtractToDirectory(zip, work, true);
+        ValidateRuntimeManifest(work);
 
         var installer = Directory.EnumerateFiles(work, "Install-SirkAgent-WithUpdater.ps1", SearchOption.AllDirectories).FirstOrDefault()
             ?? throw new FileNotFoundException("Canonical Agent installer is missing from the release package.");

@@ -1,0 +1,32 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="SIRK Agent" Manufacturer="SIRK" Version="1.0.0.0"
+           UpgradeCode="7D6EBD6B-2BB8-46D4-AC31-DF8A13A8EA10" Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer SIRK Agent installer is already present." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="PORTAL_URL" Secure="yes" />
+    <Property Id="ENROLLMENT_TOKEN" Hidden="yes" Secure="yes" />
+    <Property Id="SIRK_CHANNEL" Value="stable" Secure="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="SirkFolder" Name="SIRK">
+        <Directory Id="INSTALLFOLDER" Name="Agent Setup">
+          <Component Id="SetupComponent" Guid="D873F241-0C2B-47E5-9A06-F8F14555F489">
+            <File Id="SetupExe" Source="$(SetupExe)" KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="MainFeature" Title="SIRK Agent Setup" Level="1">
+      <ComponentRef Id="SetupComponent" />
+    </Feature>
+
+    <CustomAction Id="RunAgentSetup" FileRef="SetupExe"
+                  ExeCommand="--portal-url &quot;[PORTAL_URL]&quot; --enrollment-token &quot;[ENROLLMENT_TOKEN]&quot; --channel &quot;[SIRK_CHANNEL]&quot;"
+                  Execute="immediate" Return="check" Impersonate="no" />
+    <InstallExecuteSequence>
+      <Custom Action="RunAgentSetup" After="InstallFinalize" Condition="NOT Installed AND PORTAL_URL AND ENROLLMENT_TOKEN" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

@@ -45,21 +45,27 @@ if (-not $agentService) {
 }
 
 $watchdogService = Get-CimInstance Win32_Service -Filter "Name='$WatchdogServiceName'" -ErrorAction SilentlyContinue
+$signatureVerifier = Join-Path $InstallPath 'sirkctl.exe'
+if (-not (Test-Path -LiteralPath $signatureVerifier -PathType Leaf)) {
+    throw "SIRK Agent signature verifier is missing: $signatureVerifier"
+}
 
 $manifestPath = Join-Path $env:TEMP ('sirk-agent-updater-' + [guid]::NewGuid().ToString('N') + '.json')
 try {
     $manifest = [ordered]@{
-        schemaVersion       = 1
-        applicationId       = 'sirk-agent'
-        displayName         = 'SIRK Agent'
-        serviceName         = $agentService.Name
-        watchdogServiceName = if ($watchdogService) { $watchdogService.Name } else { $null }
-        installRoot         = $InstallPath
-        dataRoot            = $DataPath
-        healthUrl           = $null
-        channel             = $Channel
-        updateSource        = 'https://github.com/Eris92/SIRK-Agent'
-        signatureRequired   = $true
+        schemaVersion              = 1
+        applicationId              = 'sirk-agent'
+        displayName                = 'SIRK Agent'
+        serviceName                = $agentService.Name
+        watchdogServiceName        = if ($watchdogService) { $watchdogService.Name } else { $null }
+        installRoot                = $InstallPath
+        dataRoot                   = $DataPath
+        healthUrl                  = $null
+        channel                    = $Channel
+        updateSource               = 'https://github.com/Eris92/SIRK-Agent'
+        signatureRequired          = $true
+        signatureVerifierPath      = $signatureVerifier
+        signatureVerifierArguments = @('verify-update', '--package', '{payload}')
     }
 
     $manifest |

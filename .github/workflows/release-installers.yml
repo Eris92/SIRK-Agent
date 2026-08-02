@@ -8,6 +8,7 @@ on:
       - 'global.json'
       - 'src/SirkAgent.Setup/**'
       - 'installer/**'
+      - 'tools/package/**'
       - '.github/workflows/release-installers.yml'
 
 permissions:
@@ -29,18 +30,14 @@ jobs:
         shell: pwsh
         run: |
           dotnet --info
-          $legacy = Get-ChildItem src,tests -Recurse -File -Include *.csproj,*.props,*.targets |
-            Select-String -Pattern 'net[1-9]\.0'
-          if ($legacy) {
-            $legacy | ForEach-Object { Write-Error "$($_.Path):$($_.LineNumber): $($_.Line.Trim())" }
-            throw 'Legacy target framework detected.'
-          }
-          $projects = Get-ChildItem src,tests -Recurse -Filter *.csproj
-          foreach ($item in $projects) {
-            $text = Get-Content $item.FullName -Raw
-            if ($text -notmatch '<TargetFramework>net10\.0(?:-windows)?</TargetFramework>') {
-              throw "Project is not .NET 10-only: $($item.FullName)"
+          $projects = Get-ChildItem src,tests,tools -Recurse -File -Filter '*.csproj' -ErrorAction SilentlyContinue
+          if (-not $projects.Count) { throw 'No Agent projects were found.' }
+          foreach ($project in $projects) {
+            $text = Get-Content $project.FullName -Raw
+            if ($text -notmatch '<TargetFramework>net10\.0(?:-windows(?:10\.0\.17763)?)?</TargetFramework>') {
+              throw "Project is not .NET 10-only: $($project.FullName)"
             }
+            if ($text -match 'net(?:8|9)\.0') { throw "Legacy target framework: $($project.FullName)" }
           }
 
       - name: Build Native AOT setup EXE
@@ -57,9 +54,9 @@ jobs:
           if ($sizeMb -gt 25) { throw "Setup EXE exceeds 25 MB: $sizeMb MB" }
           Write-Host "Setup EXE: $sizeMb MB"
 
-      - name: Install WiX 7
+      - name: Install WiX 6
         shell: pwsh
-        run: dotnet tool install --global wix --version 7.0.0
+        run: dotnet tool install --global wix --version 6.0.2
 
       - name: Build MSI
         shell: pwsh
@@ -68,20 +65,31 @@ jobs:
             -arch x64 `
             -d SetupExe="$PWD/artifacts/setup/SIRK-Agent-Setup.exe" `
             -o artifacts/SIRK-Agent-$env:VERSION-win-x64.msi
+          if ($LASTEXITCODE -ne 0) { throw "MSI build failed. ExitCode=$LASTEXITCODE" }
           if (-not (Test-Path "artifacts/SIRK-Agent-$env:VERSION-win-x64.msi")) { throw 'MSI build failed.' }
 
-      - name: Resolve current Agent runtime package
+      - name: Resolve current .NET 10 Agent runtime package
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $releases = gh api 'repos/${{ github.repository }}/releases?per_page=20' | ConvertFrom-Json
+          $releases = gh api 'repos/${{ github.repository }}/releases?per_page=30' | ConvertFrom-Json
           $selected = $null
           foreach ($release in @($releases)) {
+            if ($release.draft) { continue }
+            $manifestAsset = @($release.assets | Where-Object name -eq 'runtime-manifest.json' | Select-Object -First 1)
             $candidate = @($release.assets | Where-Object name -match 'win-x64-framework-dependent.*\.zip$' | Select-Object -First 1)
-            if ($candidate.Count -eq 1) { $selected = $candidate[0]; break }
+            if ($candidate.Count -ne 1) { continue }
+            if ($manifestAsset.Count -eq 1) {
+              $manifestPath = Join-Path $env:TEMP 'runtime-manifest.json'
+              gh api $manifestAsset[0].url -H 'Accept: application/octet-stream' > $manifestPath
+              $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+              if ($manifest.targetFramework -ne 'net10.0-windows' -or $manifest.requiredRuntime -ne 'Microsoft.NETCore.App 10.0') { continue }
+            }
+            $selected = $candidate[0]
+            break
           }
-          if (-not $selected) { throw 'No release contains the canonical Agent runtime ZIP.' }
+          if (-not $selected) { throw 'No release contains the canonical .NET 10 Agent runtime ZIP.' }
           gh api $selected.url -H 'Accept: application/octet-stream' > "artifacts/$($selected.name)"
           "RUNTIME_ZIP=$($selected.name)" | Out-File $env:GITHUB_ENV -Append
 
@@ -99,9 +107,10 @@ jobs:
             "$hash  $([IO.Path]::GetFileName($file))" | Set-Content "$file.sha256" -Encoding ASCII
           }
           @{
-            schemaVersion = 1
+            schemaVersion = 2
             version = $env:VERSION
             targetFramework = 'net10.0-windows'
+            requiredRuntime = 'Microsoft.NETCore.App 10.0'
             compatibilityMode = $false
             setupExe = 'SIRK-Agent-Setup.exe'
             msi = "SIRK-Agent-$env:VERSION-win-x64.msi"

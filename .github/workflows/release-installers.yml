@@ -29,12 +29,18 @@ jobs:
         shell: pwsh
         run: |
           dotnet --info
-          $project = Get-Content 'src/SirkAgent.Setup/SirkAgent.Setup.csproj' -Raw
-          if ($project -notmatch '<TargetFramework>net10\.0-windows</TargetFramework>') {
-            throw 'SIRK Agent setup must target net10.0-windows only.'
+          $legacy = Get-ChildItem src,tests -Recurse -File -Include *.csproj,*.props,*.targets |
+            Select-String -Pattern 'net[1-9]\.0'
+          if ($legacy) {
+            $legacy | ForEach-Object { Write-Error "$($_.Path):$($_.LineNumber): $($_.Line.Trim())" }
+            throw 'Legacy target framework detected.'
           }
-          if ($project -match 'net8\.0|net9\.0') {
-            throw 'Legacy target framework detected in SIRK Agent setup.'
+          $projects = Get-ChildItem src,tests -Recurse -Filter *.csproj
+          foreach ($item in $projects) {
+            $text = Get-Content $item.FullName -Raw
+            if ($text -notmatch '<TargetFramework>net10\.0(?:-windows)?</TargetFramework>') {
+              throw "Project is not .NET 10-only: $($item.FullName)"
+            }
           }
 
       - name: Build Native AOT setup EXE
@@ -69,11 +75,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $release = gh api repos/${{ github.repository }}/releases/latest | ConvertFrom-Json
-          $asset = @($release.assets | Where-Object name -match 'win-x64-framework-dependent.*\.zip$' | Select-Object -First 1)
-          if ($asset.Count -ne 1) { throw 'Latest release does not contain the canonical Agent runtime ZIP.' }
-          gh api $asset[0].url -H 'Accept: application/octet-stream' > "artifacts/$($asset[0].name)"
-          "RUNTIME_ZIP=$($asset[0].name)" | Out-File $env:GITHUB_ENV -Append
+          $releases = gh api 'repos/${{ github.repository }}/releases?per_page=20' | ConvertFrom-Json
+          $selected = $null
+          foreach ($release in @($releases)) {
+            $candidate = @($release.assets | Where-Object name -match 'win-x64-framework-dependent.*\.zip$' | Select-Object -First 1)
+            if ($candidate.Count -eq 1) { $selected = $candidate[0]; break }
+          }
+          if (-not $selected) { throw 'No release contains the canonical Agent runtime ZIP.' }
+          gh api $selected.url -H 'Accept: application/octet-stream' > "artifacts/$($selected.name)"
+          "RUNTIME_ZIP=$($selected.name)" | Out-File $env:GITHUB_ENV -Append
 
       - name: Create checksums and contract report
         shell: pwsh
@@ -92,11 +102,12 @@ jobs:
             schemaVersion = 1
             version = $env:VERSION
             targetFramework = 'net10.0-windows'
+            compatibilityMode = $false
             setupExe = 'SIRK-Agent-Setup.exe'
             msi = "SIRK-Agent-$env:VERSION-win-x64.msi"
             runtimeZip = $env:RUNTIME_ZIP
             silentExe = 'SIRK-Agent-Setup.exe --portal-url https://portal.example --enrollment-token TOKEN --channel stable'
-            silentMsi = "msiexec /i SIRK-Agent-$env:VERSION-win-x64.msi /qn PORTAL_URL=https://portal.example ENROLLMENT_TOKEN=TOKEN SIRK_CHANNEL=stable"
+            silentMsi = "msiexec /i SIRK-Agent-$env:VERSION-win-x64.msi /qn /norestart PORTAL_URL=https://portal.example ENROLLMENT_TOKEN=TOKEN SIRK_CHANNEL=stable"
           } | ConvertTo-Json -Depth 5 | Set-Content artifacts/installer-manifest.json -Encoding UTF8
 
       - name: Publish GitHub Release

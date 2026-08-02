@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [string]$RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
-    [string]$Version = '1.0.15',
+    [string]$Version = '1.0.16',
     [Parameter(Mandatory)]
     [ValidatePattern('^[A-Fa-f0-9]{40}$')]
     [string]$SigningThumbprint
@@ -53,31 +53,34 @@ Copy-Item (Join-Path $RepositoryRoot 'browser-extension') `
 
 $files = Get-ChildItem $package -File -Recurse |
     Where-Object { $_.Extension -in '.exe', '.dll' } |
-    Sort-Object Name |
+    Sort-Object FullName |
     ForEach-Object {
         @{ path = [IO.Path]::GetRelativePath($package, $_.FullName); sha256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash }
     }
-@{ files = $files } | ConvertTo-Json -Depth 5 |
+@{ schemaVersion = 2; files = $files } | ConvertTo-Json -Depth 5 |
     Set-Content (Join-Path $package 'integrity-manifest.json') -Encoding UTF8
 @{
+    schemaVersion = 2
     product = 'SIRK Agent'
     version = $Version
     commit = $commit
     buildUtc = (Get-Date).ToUniversalTime().ToString('o')
     runtime = 'win-x64'
     deployment = 'framework-dependent'
-    requiredRuntime = '.NET 8 x64'
+    targetFramework = 'net10.0-windows'
+    requiredRuntime = 'Microsoft.NETCore.App 10.0'
+    compatibilityMode = $false
+    authenticodeSigned = $true
     authenticodeSigner = 'CN=Sir-K Mini RDP Signing'
-} | ConvertTo-Json | Set-Content (Join-Path $package 'build-manifest.json') -Encoding UTF8
+} | ConvertTo-Json | Set-Content (Join-Path $package 'runtime-manifest.json') -Encoding UTF8
 
 $forbidden = @('coreclr.dll', 'hostfxr.dll', 'hostpolicy.dll', 'System.Private.CoreLib.dll')
 $found = $forbidden | Where-Object { Test-Path (Join-Path $package $_) }
 if ($found) { throw "Package contains bundled .NET runtime files: $($found -join ', ')" }
 
-$zip = Join-Path $artifactsRoot "SIRK-Agent-$Version-win-x64-framework-dependent-signed.zip"
+$zip = Join-Path $artifactsRoot "SIRK-Agent-$Version-net10-win-x64-framework-dependent-signed.zip"
 if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
-Compress-Archive -Path (Join-Path $package '*') -DestinationPath $zip `
-    -CompressionLevel Optimal
+Compress-Archive -Path (Join-Path $package '*') -DestinationPath $zip -CompressionLevel Optimal
 
 [pscustomobject]@{
     package = $package
@@ -86,5 +89,6 @@ Compress-Archive -Path (Join-Path $package '*') -DestinationPath $zip `
     files = (Get-ChildItem $package -File -Recurse).Count
     signed = @($files).Count
     frameworkDependent = $true
+    targetFramework = 'net10.0-windows'
     commit = $commit
 }

@@ -1,0 +1,28 @@
+name: SIRK Agent Shared Updater Contract
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/package/Install-SirkAgent-WithUpdater.ps1'
+      - 'tools/package/Register-SirkUpdater.ps1'
+      - 'tests/shared-updater-installer-contract.ps1'
+      - '.github/workflows/shared-updater-contract.yml'
+  pull_request:
+    paths:
+      - 'tools/package/Install-SirkAgent-WithUpdater.ps1'
+      - 'tools/package/Register-SirkUpdater.ps1'
+      - 'tests/shared-updater-installer-contract.ps1'
+      - '.github/workflows/shared-updater-contract.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate PowerShell contracts
+        shell: powershell
+        run: .\tests\shared-updater-installer-contract.ps1

@@ -1,4 +1,4 @@
-name: SIRK Agent Installers
+name: SIRK Agent Complete Windows Release
 
 on:
   workflow_dispatch:
@@ -6,16 +6,17 @@ on:
     branches: [ main ]
     paths:
       - 'global.json'
-      - 'src/SirkAgent.Setup/**'
+      - 'src/**'
       - 'installer/**'
       - 'tools/package/**'
+      - 'browser-extension/**'
       - '.github/workflows/release-installers.yml'
 
 permissions:
   contents: write
 
 jobs:
-  build-installers:
+  build-release:
     runs-on: windows-latest
     env:
       VERSION: 1.0.16-dev.${{ github.run_number }}
@@ -40,60 +41,111 @@ jobs:
             if ($text -match 'net(?:8|9)\.0') { throw "Legacy target framework: $($project.FullName)" }
           }
 
+      - name: Build framework-dependent Agent runtime
+        shell: pwsh
+        run: |
+          $payload = Join-Path $PWD 'artifacts/runtime'
+          New-Item -ItemType Directory -Path $payload -Force | Out-Null
+          $projects = @(
+            'src/SirkAgent.Service/SirkAgent.Service.csproj',
+            'src/SirkAgent.Report/SirkAgent.Report.csproj',
+            'src/SirkAgent.Cli/SirkAgent.Cli.csproj',
+            'src/SirkAgent.Session/SirkAgent.Session.csproj',
+            'src/SirkAgent.BrowserHost/SirkAgent.BrowserHost.csproj',
+            'src/SirkAgent.Watchdog/SirkAgent.Watchdog.csproj'
+          )
+          foreach ($project in $projects) {
+            $output = if ($project -like '*SirkAgent.Session*') { Join-Path $payload 'Session' } else { $payload }
+            dotnet publish $project `
+              -c Release -r win-x64 --self-contained false `
+              -p:PublishSingleFile=false -p:PublishTrimmed=false `
+              "-p:InformationalVersion=$env:VERSION+${{ github.sha }}" `
+              -o $output
+            if ($LASTEXITCODE -ne 0) { throw "Runtime publish failed: $project" }
+          }
+
+          Copy-Item 'tools/package/*.ps1' $payload -Force
+          Copy-Item 'browser-extension' (Join-Path $payload 'BrowserExtension') -Recurse -Force
+
+          $files = Get-ChildItem $payload -Recurse -File |
+            Where-Object Extension -in '.exe','.dll' |
+            Sort-Object FullName |
+            ForEach-Object {
+              @{
+                path = [IO.Path]::GetRelativePath($payload, $_.FullName)
+                sha256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              }
+            }
+          @{
+            schemaVersion = 2
+            files = $files
+          } | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $payload 'integrity-manifest.json') -Encoding UTF8
+
+          @{
+            schemaVersion = 2
+            product = 'SIRK Agent'
+            version = $env:VERSION
+            commit = '${{ github.sha }}'
+            buildUtc = (Get-Date).ToUniversalTime().ToString('o')
+            architecture = 'win-x64'
+            deploymentMode = 'framework-dependent'
+            targetFramework = 'net10.0-windows'
+            requiredRuntime = 'Microsoft.NETCore.App 10.0'
+            compatibilityMode = $false
+            authenticodeSigned = $false
+            testRelease = $true
+          } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $payload 'runtime-manifest.json') -Encoding UTF8
+
+          foreach ($required in @(
+            'SirkAgent.Service.exe',
+            'SirkAgent.Watchdog.exe',
+            'sirkctl.exe',
+            'Install-SirkAgent.ps1',
+            'Install-SirkAgent-WithUpdater.ps1',
+            'Register-SirkUpdater.ps1',
+            'runtime-manifest.json',
+            'integrity-manifest.json'
+          )) {
+            if (-not (Test-Path (Join-Path $payload $required))) { throw "Runtime package is missing: $required" }
+          }
+          foreach ($forbidden in @('coreclr.dll','hostfxr.dll','hostpolicy.dll','clrjit.dll','System.Private.CoreLib.dll')) {
+            if (Test-Path (Join-Path $payload $forbidden)) { throw "Bundled .NET runtime is forbidden: $forbidden" }
+          }
+
+          $zipName = "SIRK-Agent-$env:VERSION-net10-win-x64-framework-dependent.zip"
+          $zipPath = Join-Path $PWD "artifacts/$zipName"
+          Compress-Archive -Path "$payload/*" -DestinationPath $zipPath -CompressionLevel Optimal
+          $sizeMb = [Math]::Round((Get-Item $zipPath).Length / 1MB, 2)
+          if ($sizeMb -gt 50) { throw "Agent runtime ZIP exceeds 50 MB: $sizeMb MB" }
+          Write-Host "Agent runtime ZIP: $sizeMb MB"
+          "RUNTIME_ZIP=$zipName" | Out-File $env:GITHUB_ENV -Append
+
       - name: Build Native AOT setup EXE
         shell: pwsh
         run: |
-          dotnet restore src/SirkAgent.Setup/SirkAgent.Setup.csproj -r win-x64
           dotnet publish src/SirkAgent.Setup/SirkAgent.Setup.csproj `
-            -c Release -r win-x64 --self-contained true --no-restore `
+            -c Release -r win-x64 --self-contained true `
             -p:PublishAot=true -p:StripSymbols=true `
             -o artifacts/setup
           $exe = 'artifacts/setup/SIRK-Agent-Setup.exe'
           if (-not (Test-Path $exe)) { throw 'Native AOT setup EXE is missing.' }
           $sizeMb = [Math]::Round((Get-Item $exe).Length / 1MB, 2)
           if ($sizeMb -gt 25) { throw "Setup EXE exceeds 25 MB: $sizeMb MB" }
+          Copy-Item $exe 'artifacts/SIRK-Agent-Setup.exe' -Force
           Write-Host "Setup EXE: $sizeMb MB"
 
-      - name: Install WiX 6
-        shell: pwsh
-        run: dotnet tool install --global wix --version 6.0.2
-
-      - name: Build MSI
+      - name: Build MSI with WiX 6
         shell: pwsh
         run: |
+          dotnet tool install --global wix --version 6.0.2
           wix build installer/Product.wxs `
             -arch x64 `
-            -d SetupExe="$PWD/artifacts/setup/SIRK-Agent-Setup.exe" `
+            -d SetupExe="$PWD/artifacts/SIRK-Agent-Setup.exe" `
             -o artifacts/SIRK-Agent-$env:VERSION-win-x64.msi
           if ($LASTEXITCODE -ne 0) { throw "MSI build failed. ExitCode=$LASTEXITCODE" }
-          if (-not (Test-Path "artifacts/SIRK-Agent-$env:VERSION-win-x64.msi")) { throw 'MSI build failed.' }
+          if (-not (Test-Path "artifacts/SIRK-Agent-$env:VERSION-win-x64.msi")) { throw 'MSI is missing.' }
 
-      - name: Resolve current .NET 10 Agent runtime package
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $releases = gh api 'repos/${{ github.repository }}/releases?per_page=30' | ConvertFrom-Json
-          $selected = $null
-          foreach ($release in @($releases)) {
-            if ($release.draft) { continue }
-            $manifestAsset = @($release.assets | Where-Object name -eq 'runtime-manifest.json' | Select-Object -First 1)
-            $candidate = @($release.assets | Where-Object name -match 'win-x64-framework-dependent.*\.zip$' | Select-Object -First 1)
-            if ($candidate.Count -ne 1) { continue }
-            if ($manifestAsset.Count -eq 1) {
-              $manifestPath = Join-Path $env:TEMP 'runtime-manifest.json'
-              gh api $manifestAsset[0].url -H 'Accept: application/octet-stream' > $manifestPath
-              $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
-              if ($manifest.targetFramework -ne 'net10.0-windows' -or $manifest.requiredRuntime -ne 'Microsoft.NETCore.App 10.0') { continue }
-            }
-            $selected = $candidate[0]
-            break
-          }
-          if (-not $selected) { throw 'No release contains the canonical .NET 10 Agent runtime ZIP.' }
-          gh api $selected.url -H 'Accept: application/octet-stream' > "artifacts/$($selected.name)"
-          "RUNTIME_ZIP=$($selected.name)" | Out-File $env:GITHUB_ENV -Append
-
-      - name: Create checksums and contract report
+      - name: Create checksums and manifests
         shell: pwsh
         run: |
           $files = @(
@@ -119,7 +171,7 @@ jobs:
             silentMsi = "msiexec /i SIRK-Agent-$env:VERSION-win-x64.msi /qn /norestart PORTAL_URL=https://portal.example ENROLLMENT_TOKEN=TOKEN SIRK_CHANNEL=stable"
           } | ConvertTo-Json -Depth 5 | Set-Content artifacts/installer-manifest.json -Encoding UTF8
 
-      - name: Publish GitHub Release
+      - name: Publish complete GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.VERSION }}
@@ -133,4 +185,5 @@ jobs:
             artifacts/SIRK-Agent-${{ env.VERSION }}-win-x64.msi.sha256
             artifacts/${{ env.RUNTIME_ZIP }}
             artifacts/${{ env.RUNTIME_ZIP }}.sha256
+            artifacts/runtime/runtime-manifest.json
             artifacts/installer-manifest.json

@@ -5,6 +5,7 @@ on:
   push:
     branches: [ main ]
     paths:
+      - 'global.json'
       - 'src/SirkAgent.Setup/**'
       - 'installer/**'
       - '.github/workflows/release-installers.yml'
@@ -22,7 +23,19 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
+
+      - name: Validate .NET 10-only contract
+        shell: pwsh
+        run: |
+          dotnet --info
+          $project = Get-Content 'src/SirkAgent.Setup/SirkAgent.Setup.csproj' -Raw
+          if ($project -notmatch '<TargetFramework>net10\.0-windows</TargetFramework>') {
+            throw 'SIRK Agent setup must target net10.0-windows only.'
+          }
+          if ($project -match 'net8\.0|net9\.0') {
+            throw 'Legacy target framework detected in SIRK Agent setup.'
+          }
 
       - name: Build Native AOT setup EXE
         shell: pwsh
@@ -78,6 +91,7 @@ jobs:
           @{
             schemaVersion = 1
             version = $env:VERSION
+            targetFramework = 'net10.0-windows'
             setupExe = 'SIRK-Agent-Setup.exe'
             msi = "SIRK-Agent-$env:VERSION-win-x64.msi"
             runtimeZip = $env:RUNTIME_ZIP

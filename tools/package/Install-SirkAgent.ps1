@@ -3,6 +3,7 @@
 [CmdletBinding()]
 param(
     [string]$InstallPath = "$env:ProgramFiles\SIRK\Agent",
+    [string]$DataPath = "$env:ProgramData\SIRK\Agent",
     [string]$ServiceName = "SirkAgent",
     [string]$WatchdogServiceName = "SirkAgentWatchdog",
     [switch]$NoStart
@@ -23,68 +24,44 @@ if (-not ($runtime -match '^Microsoft\.NETCore\.App 10\.')) {
     throw 'Brak Microsoft .NET 10 Runtime x64. Zainstaluj: winget install Microsoft.DotNet.Runtime.10'
 }
 
-$existingWatchdog = Get-Service -Name $WatchdogServiceName -ErrorAction SilentlyContinue
-if ($existingWatchdog) {
-    if ($existingWatchdog.Status -ne 'Stopped') {
-        Stop-Service -Name $WatchdogServiceName -Force
-        $existingWatchdog.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+foreach ($name in @($WatchdogServiceName, $ServiceName)) {
+    $service = Get-Service -Name $name -ErrorAction SilentlyContinue
+    if ($service) {
+        if ($service.Status -ne 'Stopped') {
+            Stop-Service -Name $name -Force
+            $service.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+        }
+        & sc.exe delete $name | Out-Null
     }
-    & sc.exe delete $WatchdogServiceName | Out-Null
 }
+Start-Sleep -Seconds 2
 
-$existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-if ($existing) {
-    if ($existing.Status -ne 'Stopped') {
-        Stop-Service -Name $ServiceName -Force
-        $existing.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
-    }
-    & sc.exe delete $ServiceName | Out-Null
-    Start-Sleep -Seconds 2
-}
-
-New-Item -ItemType Directory -Path $InstallPath -Force | Out-Null
 $sessionProcesses = @(Get-Process 'SirkAgent.Session' -ErrorAction SilentlyContinue)
 $sessionProcesses | Stop-Process -Force -ErrorAction SilentlyContinue
 $sessionProcesses | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
+
+if (Test-Path -LiteralPath $InstallPath) {
+    Remove-Item -LiteralPath $InstallPath -Recurse -Force
+}
+if (Test-Path -LiteralPath $DataPath) {
+    Remove-Item -LiteralPath $DataPath -Recurse -Force
+}
+Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' `
+    -Name 'SIRKAgentSession' -ErrorAction SilentlyContinue
+
+New-Item -ItemType Directory -Path $InstallPath -Force | Out-Null
 $packageFiles = Get-ChildItem -LiteralPath $source -File | Where-Object {
     $_.Name -notlike '*.zip' -and $_.Name -notlike 'TestBundle-*'
 }
 foreach ($packageFile in $packageFiles) {
-    $destination = Join-Path $InstallPath $packageFile.Name
-    $copied = $false
-    for ($attempt = 1; $attempt -le 10 -and -not $copied; $attempt++) {
-        try {
-            Copy-Item -LiteralPath $packageFile.FullName -Destination $destination -Force
-            $copied = $true
-        } catch {
-            if ($attempt -eq 10) { throw }
-            Start-Sleep -Milliseconds 500
-        }
-    }
+    Copy-Item -LiteralPath $packageFile.FullName -Destination (Join-Path $InstallPath $packageFile.Name) -Force
 }
 
-$sessionSource = Join-Path $source 'Session'
-$sessionTarget = Join-Path $InstallPath 'Session'
-if (Test-Path -LiteralPath $sessionSource) {
-    New-Item -ItemType Directory -Path $sessionTarget -Force | Out-Null
-    foreach ($sessionFile in Get-ChildItem -LiteralPath $sessionSource -File -Recurse) {
-        $relative = $sessionFile.FullName.Substring($sessionSource.TrimEnd('\').Length).TrimStart('\')
-        $destination = Join-Path $sessionTarget $relative
-        New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
-        for ($attempt = 1; $attempt -le 10; $attempt++) {
-            try { Copy-Item -LiteralPath $sessionFile.FullName -Destination $destination -Force; break }
-            catch { if ($attempt -eq 10) { throw }; Start-Sleep -Milliseconds 500 }
-        }
+foreach ($directoryName in @('Session', 'BrowserExtension')) {
+    $directorySource = Join-Path $source $directoryName
+    if (Test-Path -LiteralPath $directorySource) {
+        Copy-Item -LiteralPath $directorySource -Destination (Join-Path $InstallPath $directoryName) -Recurse -Force
     }
-}
-
-$extensionSource = Join-Path $source 'BrowserExtension'
-$extensionTarget = Join-Path $InstallPath 'BrowserExtension'
-if (Test-Path -LiteralPath $extensionSource) {
-    if (Test-Path -LiteralPath $extensionTarget) {
-        Remove-Item -LiteralPath $extensionTarget -Recurse -Force
-    }
-    Copy-Item -LiteralPath $extensionSource -Destination $extensionTarget -Recurse -Force
 }
 
 $browserInstaller = Join-Path $InstallPath 'Install-SirkBrowserBridge.ps1'
@@ -103,26 +80,22 @@ if (Test-Path -LiteralPath $sessionExe) {
     New-ItemProperty -Path $runKey -Name 'SIRKAgentSession' -Value ('"{0}"' -f $sessionExe) `
         -PropertyType String -Force | Out-Null
     if ([System.Diagnostics.Process]::GetCurrentProcess().SessionId -gt 0) {
-        try {
-            Start-Process -FilePath $sessionExe -WindowStyle Hidden
-        } catch {
-            Write-Warning "Broker sesji zostanie uruchomiony przy następnym logowaniu: $($_.Exception.Message)"
-        }
+        Start-Process -FilePath $sessionExe -WindowStyle Hidden
     }
 }
 
-$dataPath = Join-Path $env:ProgramData 'SIRK\Agent'
-New-Item -ItemType Directory -Path $dataPath -Force | Out-Null
-& icacls.exe $dataPath /inheritance:r `
+New-Item -ItemType Directory -Path $DataPath -Force | Out-Null
+& icacls.exe $DataPath /inheritance:r `
     /grant:r '*S-1-5-18:(OI)(CI)F' `
     '*S-1-5-32-544:(OI)(CI)F' `
     '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
 if ($LASTEXITCODE -ne 0) {
-    throw "Nie udalo sie zabezpieczyc ACL katalogu danych: $dataPath"
+    throw "Nie udalo sie zabezpieczyc ACL katalogu danych: $DataPath"
 }
 
 $targetExe = Join-Path $InstallPath $exeName
 & sc.exe create $ServiceName binPath= ('"{0}"' -f $targetExe) start= auto DisplayName= 'SIRK Agent' | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Nie udalo sie utworzyc uslugi $ServiceName." }
 & sc.exe description $ServiceName 'SIRK Agent security runtime and diagnostics service.' | Out-Null
 & sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/15000/restart/60000 | Out-Null
 & sc.exe failureflag $ServiceName 1 | Out-Null
@@ -133,6 +106,7 @@ if (-not (Test-Path -LiteralPath $watchdogExe)) {
 }
 & sc.exe create $WatchdogServiceName binPath= ('"{0}"' -f $watchdogExe) `
     start= delayed-auto DisplayName= 'SIRK Agent Watchdog' | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Nie udalo sie utworzyc uslugi $WatchdogServiceName." }
 & sc.exe description $WatchdogServiceName `
     'Minimal watchdog, recovery and signed update coordinator for SIRK Agent.' | Out-Null
 & sc.exe failure $WatchdogServiceName reset= 86400 `
@@ -146,5 +120,6 @@ if (-not $NoStart) {
     (Get-Service -Name $WatchdogServiceName).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
 }
 
-Write-Host "SIRK Agent zainstalowany: $InstallPath" -ForegroundColor Green
+Write-Host "SIRK Agent clean install completed: $InstallPath" -ForegroundColor Green
 Get-Service -Name $ServiceName, $WatchdogServiceName | Format-Table Name, Status, StartType -AutoSize
+Write-Host 'SIRK_AGENT_CLEAN_INSTALL_OK' -ForegroundColor Green

@@ -10,7 +10,6 @@ static string Require(IReadOnlyDictionary<string, string> values, string name)
         throw new InvalidOperationException($"Missing required argument --{name}.");
     return value.Trim();
 }
-
 static Dictionary<string, string> Parse(string[] args)
 {
     var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -18,32 +17,38 @@ static Dictionary<string, string> Parse(string[] args)
     {
         if (!args[index].StartsWith("--", StringComparison.Ordinal)) continue;
         var name = args[index][2..];
-        var value = index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal)
-            ? args[++index]
-            : "true";
+        var value = index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal) ? args[++index] : "true";
         result[name] = value;
     }
     return result;
 }
-
 static void Run(string file, IEnumerable<string> arguments, string? workingDirectory = null)
 {
-    var info = new ProcessStartInfo(file)
-    {
-        UseShellExecute = false,
-        CreateNoWindow = true,
-        WorkingDirectory = workingDirectory ?? Environment.CurrentDirectory
-    };
+    var info = new ProcessStartInfo(file) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = workingDirectory ?? Environment.CurrentDirectory };
     foreach (var argument in arguments) info.ArgumentList.Add(argument);
     using var process = Process.Start(info) ?? throw new InvalidOperationException($"Unable to start {file}.");
     process.WaitForExit();
     if (process.ExitCode != 0) throw new InvalidOperationException($"{file} failed with ExitCode={process.ExitCode}.");
 }
-
 static bool IsAdministrator()
 {
     using var identity = WindowsIdentity.GetCurrent();
     return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+}
+static string ResolveRuntimeAsset(JsonElement releases)
+{
+    foreach (var release in releases.EnumerateArray())
+    {
+        if (release.TryGetProperty("draft", out var draft) && draft.GetBoolean()) continue;
+        if (!release.TryGetProperty("assets", out var assets) || assets.ValueKind != JsonValueKind.Array) continue;
+        foreach (var asset in assets.EnumerateArray())
+        {
+            var name = asset.GetProperty("name").GetString() ?? "";
+            if (name.Contains("win-x64-framework-dependent", StringComparison.OrdinalIgnoreCase) && name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                return asset.GetProperty("browser_download_url").GetString() ?? "";
+        }
+    }
+    return "";
 }
 
 if (!OperatingSystem.IsWindows()) return 2;
@@ -65,20 +70,11 @@ try
     {
         using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
         client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("SIRK-Agent-Setup", "1.0"));
-        using var releaseResponse = await client.GetAsync("https://api.github.com/repos/Eris92/SIRK-Agent/releases/latest");
+        using var releaseResponse = await client.GetAsync("https://api.github.com/repos/Eris92/SIRK-Agent/releases?per_page=20");
         releaseResponse.EnsureSuccessStatusCode();
-        using var release = JsonDocument.Parse(await releaseResponse.Content.ReadAsStreamAsync());
-        var assetUrl = "";
-        foreach (var asset in release.RootElement.GetProperty("assets").EnumerateArray())
-        {
-            var name = asset.GetProperty("name").GetString() ?? "";
-            if (name.Contains("win-x64-framework-dependent", StringComparison.OrdinalIgnoreCase) && name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
-            {
-                assetUrl = asset.GetProperty("browser_download_url").GetString() ?? "";
-                break;
-            }
-        }
-        if (string.IsNullOrWhiteSpace(assetUrl)) throw new InvalidOperationException("Latest Agent release does not contain the Windows x64 package.");
+        using var releases = JsonDocument.Parse(await releaseResponse.Content.ReadAsStreamAsync());
+        var assetUrl = ResolveRuntimeAsset(releases.RootElement);
+        if (string.IsNullOrWhiteSpace(assetUrl)) throw new InvalidOperationException("No recent Agent release contains the Windows x64 runtime package.");
 
         var zip = Path.Combine(work, "agent.zip");
         await using (var output = File.Create(zip))
@@ -89,7 +85,10 @@ try
         var installer = Directory.EnumerateFiles(work, "Install-SirkAgent-WithUpdater.ps1", SearchOption.AllDirectories).FirstOrDefault()
             ?? Directory.EnumerateFiles(work, "Install-SirkAgent.ps1", SearchOption.AllDirectories).FirstOrDefault()
             ?? throw new FileNotFoundException("Agent installer is missing from the release package.");
-        Run("powershell.exe", new[] { "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", installer, "-Channel", channel }, Path.GetDirectoryName(installer));
+        var installArguments = new List<string> { "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", installer };
+        if (Path.GetFileName(installer).Equals("Install-SirkAgent-WithUpdater.ps1", StringComparison.OrdinalIgnoreCase))
+            installArguments.AddRange(new[] { "-Channel", channel });
+        Run("powershell.exe", installArguments, Path.GetDirectoryName(installer));
 
         var cli = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "SIRK", "Agent", "sirkctl.exe");
         if (!File.Exists(cli)) throw new FileNotFoundException("Installed sirkctl.exe was not found.", cli);
@@ -100,15 +99,11 @@ try
 
         var credential = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SIRK", "Agent", "portal-credential.bin");
         if (!File.Exists(credential)) throw new InvalidOperationException("Agent enrollment completed without portal-credential.bin.");
-        foreach (var service in new[] { "SirkAgent", "SirkAgentWatchdog" })
-            Run("sc.exe", new[] { "query", service });
+        foreach (var service in new[] { "SirkAgent", "SirkAgentWatchdog" }) Run("sc.exe", new[] { "query", service });
         Console.WriteLine("SIRK_AGENT_SETUP_OK");
         return 0;
     }
-    finally
-    {
-        try { Directory.Delete(work, true); } catch { }
-    }
+    finally { try { Directory.Delete(work, true); } catch { } }
 }
 catch (Exception error)
 {

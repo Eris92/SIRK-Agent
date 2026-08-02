@@ -19,8 +19,8 @@ $requiredRegister = @(
     'install-release.ps1',
     '-AllowSourceFallback',
     "applicationId       = 'sirk-agent'",
-    "serviceName         = $agentService.Name",
-    "signatureRequired   = $true",
+    'serviceName         = $agentService.Name',
+    'signatureRequired   = $true',
     'SIRK_AGENT_UPDATER_REGISTERED'
 )
 foreach ($needle in $requiredRegister) {

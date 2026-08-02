@@ -1,0 +1,102 @@
+name: SIRK Agent Installers
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/SirkAgent.Setup/**'
+      - 'installer/**'
+      - '.github/workflows/release-installers.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build-installers:
+    runs-on: windows-latest
+    env:
+      VERSION: 1.0.16-dev.${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build Native AOT setup EXE
+        shell: pwsh
+        run: |
+          dotnet restore src/SirkAgent.Setup/SirkAgent.Setup.csproj -r win-x64
+          dotnet publish src/SirkAgent.Setup/SirkAgent.Setup.csproj `
+            -c Release -r win-x64 --self-contained true --no-restore `
+            -p:PublishAot=true -p:StripSymbols=true `
+            -o artifacts/setup
+          $exe = 'artifacts/setup/SIRK-Agent-Setup.exe'
+          if (-not (Test-Path $exe)) { throw 'Native AOT setup EXE is missing.' }
+          $sizeMb = [Math]::Round((Get-Item $exe).Length / 1MB, 2)
+          if ($sizeMb -gt 25) { throw "Setup EXE exceeds 25 MB: $sizeMb MB" }
+          Write-Host "Setup EXE: $sizeMb MB"
+
+      - name: Install WiX 7
+        shell: pwsh
+        run: dotnet tool install --global wix --version 7.0.0
+
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          wix build installer/Product.wxs `
+            -arch x64 `
+            -d SetupExe="$PWD/artifacts/setup/SIRK-Agent-Setup.exe" `
+            -o artifacts/SIRK-Agent-$env:VERSION-win-x64.msi
+          if (-not (Test-Path "artifacts/SIRK-Agent-$env:VERSION-win-x64.msi")) { throw 'MSI build failed.' }
+
+      - name: Resolve current Agent runtime package
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $release = gh api repos/${{ github.repository }}/releases/latest | ConvertFrom-Json
+          $asset = @($release.assets | Where-Object name -match 'win-x64-framework-dependent.*\.zip$' | Select-Object -First 1)
+          if ($asset.Count -ne 1) { throw 'Latest release does not contain the canonical Agent runtime ZIP.' }
+          gh api $asset[0].url -H 'Accept: application/octet-stream' > "artifacts/$($asset[0].name)"
+          "RUNTIME_ZIP=$($asset[0].name)" | Out-File $env:GITHUB_ENV -Append
+
+      - name: Create checksums and contract report
+        shell: pwsh
+        run: |
+          $files = @(
+            'artifacts/SIRK-Agent-Setup.exe',
+            "artifacts/SIRK-Agent-$env:VERSION-win-x64.msi",
+            "artifacts/$env:RUNTIME_ZIP"
+          )
+          foreach ($file in $files) {
+            if (-not (Test-Path $file)) { throw "Missing release file: $file" }
+            $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $([IO.Path]::GetFileName($file))" | Set-Content "$file.sha256" -Encoding ASCII
+          }
+          @{
+            schemaVersion = 1
+            version = $env:VERSION
+            setupExe = 'SIRK-Agent-Setup.exe'
+            msi = "SIRK-Agent-$env:VERSION-win-x64.msi"
+            runtimeZip = $env:RUNTIME_ZIP
+            silentExe = 'SIRK-Agent-Setup.exe --portal-url https://portal.example --enrollment-token TOKEN --channel stable'
+            silentMsi = "msiexec /i SIRK-Agent-$env:VERSION-win-x64.msi /qn PORTAL_URL=https://portal.example ENROLLMENT_TOKEN=TOKEN SIRK_CHANNEL=stable"
+          } | ConvertTo-Json -Depth 5 | Set-Content artifacts/installer-manifest.json -Encoding UTF8
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: SIRK Agent ${{ env.VERSION }}
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            artifacts/SIRK-Agent-Setup.exe
+            artifacts/SIRK-Agent-Setup.exe.sha256
+            artifacts/SIRK-Agent-${{ env.VERSION }}-win-x64.msi
+            artifacts/SIRK-Agent-${{ env.VERSION }}-win-x64.msi.sha256
+            artifacts/${{ env.RUNTIME_ZIP }}
+            artifacts/${{ env.RUNTIME_ZIP }}.sha256
+            artifacts/installer-manifest.json

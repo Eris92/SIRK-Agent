@@ -1,0 +1,51 @@
+name: SIRK Agent .NET 10 Contract
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  dotnet10-only:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Reject legacy compatibility
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $projects = Get-ChildItem . -Recurse -File -Filter *.csproj |
+            Where-Object FullName -notmatch '\\.git\\'
+          if (-not $projects) { throw 'No .NET projects found.' }
+          foreach ($project in $projects) {
+            $text = Get-Content $project.FullName -Raw
+            if ($text -notmatch '<TargetFramework>net10\.0(?:-windows(?:10\.0\.17763)?)?</TargetFramework>') {
+              throw "Non-.NET 10 project: $($project.FullName)"
+            }
+            if ($text -match 'net[1-9]\.0') { throw "Legacy target in $($project.FullName)" }
+          }
+          $legacy = Get-ChildItem . -Recurse -File -Include *.ps1,*.yml,*.yaml,*.json,*.md |
+            Where-Object {
+              $_.FullName -notmatch '\\.git\\' -and
+              $_.FullName -notmatch '\\docs\\archive\\'
+            } | Select-String -Pattern 'Microsoft\.DotNet\.Runtime\.[1-9](?!0)|Microsoft\.NETCore\.App [1-9]\.|dotnet-version:\s*["'']?[1-9]\.|-Channel\s+[1-9]\.|AllowSourceFallback'
+          if ($legacy) {
+            $legacy | ForEach-Object { Write-Error "$($_.Path):$($_.LineNumber): $($_.Line.Trim())" }
+            throw 'Legacy runtime or compatibility reference detected.'
+          }
+      - name: Restore build and test
+        shell: pwsh
+        run: |
+          $projects = Get-ChildItem src -Recurse -File -Filter *.csproj
+          foreach ($project in $projects) {
+            dotnet restore $project.FullName
+            dotnet build $project.FullName -c Release --no-restore
+          }
+          $tests = Get-ChildItem tests -Recurse -File -Filter *.csproj -ErrorAction SilentlyContinue
+          foreach ($test in $tests) {
+            dotnet test $test.FullName -c Release
+          }

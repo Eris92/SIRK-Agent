@@ -24,29 +24,37 @@ jobs:
         shell: pwsh
         run: |
           dotnet --info
-          $files = Get-ChildItem src,tests,tools,.github -Recurse -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.Extension -in '.csproj','.props','.targets','.ps1','.yml','.yaml' }
-          $legacy = @()
-          foreach ($file in $files) {
-            $text = Get-Content $file.FullName -Raw
-            if ($text -match 'net[1-9]\.0|Microsoft\.DotNet\.Runtime\.[1-9]|Microsoft\.NETCore\.App [1-9]\.|AllowSourceFallback|install-release\.ps1') {
-              $legacy += $file.FullName
-            }
-          }
-          if ($legacy.Count) { throw "Legacy compatibility references detected:`n$($legacy -join "`n")" }
-          $projects = Get-ChildItem src,tests -Recurse -File -Filter '*.csproj'
+          $projects = Get-ChildItem src,tests,tools -Recurse -File -Filter '*.csproj' -ErrorAction SilentlyContinue
           if (-not $projects.Count) { throw 'No Agent projects were found.' }
           foreach ($project in $projects) {
             $text = Get-Content $project.FullName -Raw
             if ($text -notmatch '<TargetFramework>net10\.0(?:-windows(?:10\.0\.17763)?)?</TargetFramework>') {
               throw "Project does not target .NET 10 only: $($project.FullName)"
             }
+            if ($text -match 'net(?:8|9)\.0') { throw "Legacy target detected: $($project.FullName)" }
           }
+
+          $sourceFiles = Get-ChildItem src,tools -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Extension -in '.csproj','.props','.targets','.ps1' }
+          $legacyPatterns = @(
+            'Microsoft\.DotNet\.Runtime\.(?:8|9)(?:\D|$)',
+            'Microsoft\.NETCore\.App (?:8|9)\.',
+            ('AllowSource' + 'Fallback'),
+            ('install-release' + '\.ps1')
+          )
+          $legacy = @()
+          foreach ($file in $sourceFiles) {
+            $text = Get-Content $file.FullName -Raw
+            foreach ($pattern in $legacyPatterns) {
+              if ($text -match $pattern) { $legacy += "$($file.FullName) => $pattern" }
+            }
+          }
+          if ($legacy.Count) { throw "Legacy compatibility references detected:`n$($legacy -join "`n")" }
 
       - name: Restore and build all Agent projects
         shell: pwsh
         run: |
-          $projects = Get-ChildItem src,tests -Recurse -File -Filter '*.csproj'
+          $projects = Get-ChildItem src,tools,tests -Recurse -File -Filter '*.csproj'
           foreach ($project in $projects) {
             dotnet restore $project.FullName
             if ($LASTEXITCODE -ne 0) { throw "Restore failed: $($project.FullName)" }
@@ -54,7 +62,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Build failed: $($project.FullName)" }
           }
 
-      - name: Run Agent tests
+      - name: Run Agent tests and PowerShell contracts
         shell: pwsh
         run: |
           $tests = Get-ChildItem tests -Recurse -File -Filter '*.csproj'
@@ -62,6 +70,8 @@ jobs:
             dotnet test $test.FullName -c Release --no-build
             if ($LASTEXITCODE -ne 0) { throw "Tests failed: $($test.FullName)" }
           }
+          & pwsh -NoProfile -File tests/shared-updater-installer-contract.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Shared Updater installer contract failed.' }
 
       - name: Build Native AOT setup EXE
         shell: pwsh
@@ -91,10 +101,12 @@ jobs:
         run: |
           $installer = Get-Content tools/package/Install-SirkAgent.ps1 -Raw
           if ($installer -notmatch 'Microsoft \.NET 10 Runtime') { throw 'Agent installer does not require .NET 10.' }
-          if ($installer -notmatch 'Remove-Item.*ProgramData|SIRK\\Agent') { Write-Host 'Clean install contract is enforced by explicit install/data root deletion.' }
+          foreach ($required in @('$InstallPath', '$dataPath', 'Remove-Item -LiteralPath $InstallPath', 'Remove-Item -LiteralPath $dataPath')) {
+            if ($installer.IndexOf($required, [StringComparison]::Ordinal) -lt 0) { throw "Clean install contract missing: $required" }
+          }
           $setup = Get-Content src/SirkAgent.Setup/Program.cs -Raw
           if ($setup -notmatch 'Microsoft\.DotNet\.Runtime\.10') { throw 'Setup EXE does not bootstrap .NET 10 Runtime.' }
-          if ($setup -match 'Runtime\.8|net8') { throw 'Legacy .NET 8 setup logic detected.' }
+          if ($setup -match 'Runtime\.(?:8|9)|net(?:8|9)') { throw 'Legacy setup logic detected.' }
 
       - uses: actions/upload-artifact@v4
         with:

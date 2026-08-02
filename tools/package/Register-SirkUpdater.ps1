@@ -22,10 +22,10 @@ if (-not (Test-Path -LiteralPath $updaterCli)) {
     $bootstrap = Join-Path $env:TEMP ('sirk-updater-install-' + [guid]::NewGuid().ToString('N') + '.ps1')
     try {
         Invoke-WebRequest `
-            -Uri ('https://raw.githubusercontent.com/Eris92/SIRK-Updater/main/install.ps1?nocache=' + [guid]::NewGuid()) `
+            -Uri ('https://raw.githubusercontent.com/Eris92/SIRK-Updater/main/install-release.ps1?nocache=' + [guid]::NewGuid()) `
             -OutFile $bootstrap `
             -UseBasicParsing
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrap
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $bootstrap -AllowSourceFallback
         if ($LASTEXITCODE -ne 0) {
             throw "SIRK Updater installer failed with ExitCode=$LASTEXITCODE."
         }

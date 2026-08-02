@@ -16,12 +16,11 @@ foreach ($file in @($register, $wrapper)) {
 $registerText = Get-Content -LiteralPath $register -Raw
 $wrapperText = Get-Content -LiteralPath $wrapper -Raw
 $requiredRegister = @(
-    'install-release.ps1',
-    '-AllowSourceFallback',
-    "applicationId              = 'sirk-agent'",
-    'serviceName                = $agentService.Name',
-    'signatureRequired          = $true',
-    "signatureVerifierPath      = $signatureVerifier",
+    'install-release-v2.ps1',
+    "applicationId               = 'sirk-agent'",
+    'serviceName                 = $agentService.Name',
+    'signatureRequired           = $true',
+    'signatureVerifierPath       = $signatureVerifier',
     "signatureVerifierArguments = @('verify-update', '--package', '{payload}')",
     'SIRK_AGENT_UPDATER_REGISTERED'
 )
@@ -30,6 +29,18 @@ foreach ($needle in $requiredRegister) {
         throw "Agent Updater registration contract is missing: $needle"
     }
 }
+
+$forbidden = @(
+    ('AllowSource' + 'Fallback'),
+    ('install-release' + '.ps1'),
+    ('install' + '.ps1')
+)
+foreach ($needle in $forbidden) {
+    if ($registerText.IndexOf($needle, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        throw "Legacy Agent Updater installation path is forbidden: $needle"
+    }
+}
+
 foreach ($needle in @('Install-SirkAgent.ps1', 'Register-SirkUpdater.ps1', 'SIRK_AGENT_INSTALLATION_WITH_UPDATER_OK')) {
     if ($wrapperText.IndexOf($needle, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
         throw "Agent installer wrapper contract is missing: $needle"

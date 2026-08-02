@@ -19,8 +19,8 @@ if (-not (Test-Path -LiteralPath $sourceExe)) {
 }
 
 $runtime = & dotnet --list-runtimes 2>$null
-if (-not ($runtime -match '^Microsoft\.NETCore\.App 8\.')) {
-    throw 'Brak Microsoft .NET 8 Runtime x64. Zainstaluj: winget install Microsoft.DotNet.Runtime.8'
+if (-not ($runtime -match '^Microsoft\.NETCore\.App 10\.')) {
+    throw 'Brak Microsoft .NET 10 Runtime x64. Zainstaluj: winget install Microsoft.DotNet.Runtime.10'
 }
 
 $existingWatchdog = Get-Service -Name $WatchdogServiceName -ErrorAction SilentlyContinue
@@ -68,10 +68,6 @@ $sessionTarget = Join-Path $InstallPath 'Session'
 if (Test-Path -LiteralPath $sessionSource) {
     New-Item -ItemType Directory -Path $sessionTarget -Force | Out-Null
     foreach ($sessionFile in Get-ChildItem -LiteralPath $sessionSource -File -Recurse) {
-        # Windows PowerShell 5.1 runs on .NET Framework, where Path.GetRelativePath
-        # is unavailable even though it exists in the .NET 8 runtime used by the
-        # agent. The source path is already absolute and every enumerated file is
-        # below it, so a bounded prefix removal is sufficient and PS 5.1-safe.
         $relative = $sessionFile.FullName.Substring($sessionSource.TrimEnd('\').Length).TrimStart('\')
         $destination = Join-Path $sessionTarget $relative
         New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
@@ -106,11 +102,6 @@ if (Test-Path -LiteralPath $sessionExe) {
     New-Item -Path $runKey -Force | Out-Null
     New-ItemProperty -Path $runKey -Name 'SIRKAgentSession' -Value ('"{0}"' -f $sessionExe) `
         -PropertyType String -Force | Out-Null
-
-    # An in-place update stops the old broker while replacing its executable.
-    # Start the replacement immediately when setup itself runs in an interactive
-    # user session; deployments running as SYSTEM remain covered by the Run key
-    # at the user's next logon.
     if ([System.Diagnostics.Process]::GetCurrentProcess().SessionId -gt 0) {
         try {
             Start-Process -FilePath $sessionExe -WindowStyle Hidden

@@ -86,15 +86,18 @@ jobs:
           if ($sizeMb -gt 25) { throw "Setup EXE exceeds 25 MB: $sizeMb MB" }
           Write-Host "Setup EXE: $sizeMb MB"
 
-      - name: Build silent MSI
+      - name: Build silent MSI with WiX 6
         shell: pwsh
         run: |
-          dotnet tool install --global wix --version 7.0.0
+          dotnet tool install --global wix --version 6.0.2
           wix build installer/Product.wxs `
             -arch x64 `
             -d SetupExe="$PWD/artifacts/setup/SIRK-Agent-Setup.exe" `
             -o artifacts/SIRK-Agent-test-win-x64.msi
+          if ($LASTEXITCODE -ne 0) { throw "WiX MSI build failed. ExitCode=$LASTEXITCODE" }
           if (-not (Test-Path 'artifacts/SIRK-Agent-test-win-x64.msi')) { throw 'SIRK Agent MSI is missing.' }
+          $sizeMb = [Math]::Round((Get-Item 'artifacts/SIRK-Agent-test-win-x64.msi').Length / 1MB, 2)
+          Write-Host "Agent MSI: $sizeMb MB"
 
       - name: Validate clean installer scripts
         shell: pwsh

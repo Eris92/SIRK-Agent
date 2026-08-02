@@ -18,9 +18,11 @@ $wrapperText = Get-Content -LiteralPath $wrapper -Raw
 $requiredRegister = @(
     'install-release.ps1',
     '-AllowSourceFallback',
-    "applicationId       = 'sirk-agent'",
-    'serviceName         = $agentService.Name',
-    'signatureRequired   = $true',
+    "applicationId              = 'sirk-agent'",
+    'serviceName                = $agentService.Name',
+    'signatureRequired          = $true',
+    "signatureVerifierPath      = $signatureVerifier",
+    "signatureVerifierArguments = @('verify-update', '--package', '{payload}')",
     'SIRK_AGENT_UPDATER_REGISTERED'
 )
 foreach ($needle in $requiredRegister) {

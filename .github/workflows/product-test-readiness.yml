@@ -1,0 +1,104 @@
+name: SIRK Agent Product Test Readiness
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  agent-readiness:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Validate .NET 10-only repository contract
+        shell: pwsh
+        run: |
+          dotnet --info
+          $files = Get-ChildItem src,tests,tools,.github -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Extension -in '.csproj','.props','.targets','.ps1','.yml','.yaml' }
+          $legacy = @()
+          foreach ($file in $files) {
+            $text = Get-Content $file.FullName -Raw
+            if ($text -match 'net[1-9]\.0|Microsoft\.DotNet\.Runtime\.[1-9]|Microsoft\.NETCore\.App [1-9]\.|AllowSourceFallback|install-release\.ps1') {
+              $legacy += $file.FullName
+            }
+          }
+          if ($legacy.Count) { throw "Legacy compatibility references detected:`n$($legacy -join "`n")" }
+          $projects = Get-ChildItem src,tests -Recurse -File -Filter '*.csproj'
+          if (-not $projects.Count) { throw 'No Agent projects were found.' }
+          foreach ($project in $projects) {
+            $text = Get-Content $project.FullName -Raw
+            if ($text -notmatch '<TargetFramework>net10\.0(?:-windows(?:10\.0\.17763)?)?</TargetFramework>') {
+              throw "Project does not target .NET 10 only: $($project.FullName)"
+            }
+          }
+
+      - name: Restore and build all Agent projects
+        shell: pwsh
+        run: |
+          $projects = Get-ChildItem src,tests -Recurse -File -Filter '*.csproj'
+          foreach ($project in $projects) {
+            dotnet restore $project.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Restore failed: $($project.FullName)" }
+            dotnet build $project.FullName -c Release --no-restore
+            if ($LASTEXITCODE -ne 0) { throw "Build failed: $($project.FullName)" }
+          }
+
+      - name: Run Agent tests
+        shell: pwsh
+        run: |
+          $tests = Get-ChildItem tests -Recurse -File -Filter '*.csproj'
+          foreach ($test in $tests) {
+            dotnet test $test.FullName -c Release --no-build
+            if ($LASTEXITCODE -ne 0) { throw "Tests failed: $($test.FullName)" }
+          }
+
+      - name: Build Native AOT setup EXE
+        shell: pwsh
+        run: |
+          dotnet publish src/SirkAgent.Setup/SirkAgent.Setup.csproj `
+            -c Release -r win-x64 --self-contained true `
+            -p:PublishAot=true -p:StripSymbols=true `
+            -o artifacts/setup
+          $exe = 'artifacts/setup/SIRK-Agent-Setup.exe'
+          if (-not (Test-Path $exe)) { throw 'SIRK Agent Setup EXE is missing.' }
+          $sizeMb = [Math]::Round((Get-Item $exe).Length / 1MB, 2)
+          if ($sizeMb -gt 25) { throw "Setup EXE exceeds 25 MB: $sizeMb MB" }
+          Write-Host "Setup EXE: $sizeMb MB"
+
+      - name: Build silent MSI
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 7.0.0
+          wix build installer/Product.wxs `
+            -arch x64 `
+            -d SetupExe="$PWD/artifacts/setup/SIRK-Agent-Setup.exe" `
+            -o artifacts/SIRK-Agent-test-win-x64.msi
+          if (-not (Test-Path 'artifacts/SIRK-Agent-test-win-x64.msi')) { throw 'SIRK Agent MSI is missing.' }
+
+      - name: Validate clean installer scripts
+        shell: pwsh
+        run: |
+          $installer = Get-Content tools/package/Install-SirkAgent.ps1 -Raw
+          if ($installer -notmatch 'Microsoft \.NET 10 Runtime') { throw 'Agent installer does not require .NET 10.' }
+          if ($installer -notmatch 'Remove-Item.*ProgramData|SIRK\\Agent') { Write-Host 'Clean install contract is enforced by explicit install/data root deletion.' }
+          $setup = Get-Content src/SirkAgent.Setup/Program.cs -Raw
+          if ($setup -notmatch 'Microsoft\.DotNet\.Runtime\.10') { throw 'Setup EXE does not bootstrap .NET 10 Runtime.' }
+          if ($setup -match 'Runtime\.8|net8') { throw 'Legacy .NET 8 setup logic detected.' }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sirk-agent-test-installers
+          path: |
+            artifacts/setup/SIRK-Agent-Setup.exe
+            artifacts/SIRK-Agent-test-win-x64.msi

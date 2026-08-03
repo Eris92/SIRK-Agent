@@ -3,7 +3,7 @@
 [CmdletBinding()]
 param(
     [string]$InstallPath = "$env:ProgramFiles\SIRK\Agent",
-    [string]$DataPath = "$env:ProgramData\SIRK\Agent",
+    [string]$dataPath = "$env:ProgramData\SIRK\Agent",
     [string]$ServiceName = "SirkAgent",
     [string]$WatchdogServiceName = "SirkAgentWatchdog",
     [switch]$NoStart
@@ -43,8 +43,8 @@ $sessionProcesses | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
 if (Test-Path -LiteralPath $InstallPath) {
     Remove-Item -LiteralPath $InstallPath -Recurse -Force
 }
-if (Test-Path -LiteralPath $DataPath) {
-    Remove-Item -LiteralPath $DataPath -Recurse -Force
+if (Test-Path -LiteralPath $dataPath) {
+    Remove-Item -LiteralPath $dataPath -Recurse -Force
 }
 Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' `
     -Name 'SIRKAgentSession' -ErrorAction SilentlyContinue
@@ -84,13 +84,13 @@ if (Test-Path -LiteralPath $sessionExe) {
     }
 }
 
-New-Item -ItemType Directory -Path $DataPath -Force | Out-Null
-& icacls.exe $DataPath /inheritance:r `
+New-Item -ItemType Directory -Path $dataPath -Force | Out-Null
+& icacls.exe $dataPath /inheritance:r `
     /grant:r '*S-1-5-18:(OI)(CI)F' `
     '*S-1-5-32-544:(OI)(CI)F' `
     '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
 if ($LASTEXITCODE -ne 0) {
-    throw "Nie udalo sie zabezpieczyc ACL katalogu danych: $DataPath"
+    throw "Nie udalo sie zabezpieczyc ACL katalogu danych: $dataPath"
 }
 
 $targetExe = Join-Path $InstallPath $exeName

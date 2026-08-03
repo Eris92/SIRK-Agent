@@ -1,0 +1,19 @@
+name: Locate Endurance Contract
+
+on:
+  push:
+    branches: [ fix/enrollment-readiness-diagnostics ]
+    paths: [ '.github/workflows/locate-endurance-contract.yml' ]
+
+jobs:
+  locate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/enrollment-readiness-diagnostics
+      - name: Print matching workflow
+        run: |
+          file=$(grep -R -l "Oversized event log was not rotated" .github/workflows)
+          echo "MATCH=$file"
+          cat "$file"

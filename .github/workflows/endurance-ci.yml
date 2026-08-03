@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
 
       - name: Publish runtime
         shell: pwsh
@@ -43,19 +43,22 @@ jobs:
             @{ path = $name; sha256 = (Get-FileHash $path -Algorithm SHA256).Hash }
           }
           @{ files = $files } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $runtime 'integrity-manifest.json') -Encoding UTF8
-          @{ product='SIRK Agent'; version='${{ env.SIRK_VERSION }}'; commit='${{ github.sha }}'; runtime='win-x64'; requiredRuntime='.NET 8 x64'; selfContained=$false } | ConvertTo-Json | Set-Content (Join-Path $runtime 'build-manifest.json') -Encoding UTF8
+          @{ product='SIRK Agent'; version='${{ env.SIRK_VERSION }}'; commit='${{ github.sha }}'; runtime='win-x64'; requiredRuntime='.NET 10 x64'; selfContained=$false } | ConvertTo-Json | Set-Content (Join-Path $runtime 'build-manifest.json') -Encoding UTF8
 
-      - name: Prepare oversized event log and install
+      - name: Install without start and prepare oversized event log
         shell: pwsh
         run: |
           $root = Join-Path $env:ProgramData 'SIRK\Agent'
-          Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item $root -ItemType Directory -Force | Out-Null
+          ./artifacts/SIRK-Agent-Runtime/Install-SirkAgent.ps1 `
+            -InstallPath "$env:ProgramFiles\SIRK Agent Endurance CI" `
+            -NoStart
           $eventLog = Join-Path $root 'agent-events.jsonl'
           $stream = [IO.File]::Create($eventLog)
           try { $stream.SetLength(11MB) } finally { $stream.Dispose() }
-          ./artifacts/SIRK-Agent-Runtime/Install-SirkAgent.ps1 -InstallPath "$env:ProgramFiles\SIRK Agent Endurance CI"
+          Start-Service SirkAgent
           (Get-Service SirkAgent).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))
+          Start-Service SirkAgentWatchdog
+          (Get-Service SirkAgentWatchdog).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))
 
       - name: Validate runtime health and log rotation
         shell: pwsh

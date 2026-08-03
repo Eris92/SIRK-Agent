@@ -1,15 +1,15 @@
 # Full product audit
 
 Repository: `Eris92/SIRK-Agent`
-Commit: `5ccafa38bf9089434a93cca2070e13b58c5b6021`
+Commit: `99bb980cdb9afb8c70a28506ae8754035070e858`
 
 ## Summary
 
 ```json
 {
-  "files": 135,
-  "textFiles": 134,
-  "lines": 16199,
+  "files": 136,
+  "textFiles": 135,
+  "lines": 16231,
   "extensions": {
     ".cs": 71,
     ".csproj": 11,
@@ -19,7 +19,7 @@ Commit: `5ccafa38bf9089434a93cca2070e13b58c5b6021`
     ".ps1": 17,
     ".txt": 2,
     ".wxs": 1,
-    ".yml": 13,
+    ".yml": 14,
     "<none>": 1
   },
   "projects": 11,

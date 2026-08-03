@@ -1,10 +1,10 @@
 {
   "repository": "Eris92/SIRK-Agent",
-  "commit": "5ccafa38bf9089434a93cca2070e13b58c5b6021",
+  "commit": "99bb980cdb9afb8c70a28506ae8754035070e858",
   "summary": {
-    "files": 135,
-    "textFiles": 134,
-    "lines": 16199,
+    "files": 136,
+    "textFiles": 135,
+    "lines": 16231,
     "extensions": {
       ".cs": 71,
       ".csproj": 11,
@@ -14,7 +14,7 @@
       ".ps1": 17,
       ".txt": 2,
       ".wxs": 1,
-      ".yml": 13,
+      ".yml": 14,
       "<none>": 1
     },
     "projects": 11,
@@ -199,6 +199,10 @@
       },
       {
         "path": "docs/REMOTE-DESKTOP-PERFORMANCE.md",
+        "count": 1
+      },
+      {
+        "path": ".github/workflows/full-product-audit-pr.yml",
         "count": 1
       },
       {
@@ -444,6 +448,10 @@
       {
         "path": "docs/REMOTE-DESKTOP-PERFORMANCE.md",
         "count": 1
+      },
+      {
+        "path": ".github/workflows/full-product-audit-pr.yml",
+        "count": 1
       }
     ],
     "openid": [],
@@ -463,7 +471,12 @@
     "wazuh": [],
     "ticket": [],
     "smtp": [],
-    "email": [],
+    "email": [
+      {
+        "path": ".github/workflows/full-product-audit-pr.yml",
+        "count": 1
+      }
+    ],
     "webhook": [],
     "remote desktop": [
       {
@@ -561,6 +574,13 @@
       "has_pull_request": true,
       "has_push": true,
       "permissions_write": false
+    },
+    {
+      "path": ".github/workflows/full-product-audit-pr.yml",
+      "name": "Full Product Audit PR",
+      "has_pull_request": true,
+      "has_push": false,
+      "permissions_write": true
     },
     {
       "path": ".github/workflows/queue-cli-ci.yml",

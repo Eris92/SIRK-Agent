@@ -1,0 +1,1 @@
+Rerun SIRK Agent 0.3.2 queue CLI validation after accepting the control-file fallback response.

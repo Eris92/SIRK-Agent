@@ -11,6 +11,7 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
+using SkiaSharp;
 
 namespace SirkAgent.Session;
 
@@ -42,10 +43,13 @@ internal static class Program
     private static long _lastVideoRequestTimestamp;
 
     [STAThread]
-    private static async Task<int> Main()
+    private static async Task<int> Main(string[] args)
     {
         try
         {
+            if (args.Any(value => string.Equals(value, "--codec-self-test",
+                    StringComparison.OrdinalIgnoreCase)))
+                return RunImageCodecSelfTest();
             await RunAsync();
             return 0;
         }
@@ -133,7 +137,7 @@ internal static class Program
                         "snapshot" => SnapshotPayload(request.MonitorIndex ?? -1,
                             request.MaxWidth ?? 1280, request.Quality ?? 40,
                             request.TargetFps ?? 60, request.DeltaScalePercent ?? 100,
-                            request.ForceFull == true),
+                            request.ImageEncoding ?? "webp", request.ForceFull == true),
                         _ => new SessionVideoPayload(new SessionResponse(false, "SESSION_REQUEST_INVALID",
                             null, null, null), [])
                     };
@@ -190,7 +194,8 @@ internal static class Program
                             "monitors" => Monitors(),
                             "snapshot" => Snapshot(request.MonitorIndex ?? -1, request.MaxWidth ?? 1280,
                                 request.Quality ?? 40, request.TargetFps ?? 60,
-                                request.DeltaScalePercent ?? 100, request.ForceFull == true),
+                                request.DeltaScalePercent ?? 100,
+                                request.ImageEncoding ?? "webp", request.ForceFull == true),
                             "video-frame" => VideoFrame(request.MonitorIndex ?? -1, request.MaxWidth ?? 1280,
                                 request.TargetKbps ?? 1000, request.TargetFps ?? 60, request.ForceFull == true),
                             "stream-stop" => MarkStreamStopped(),
@@ -290,23 +295,24 @@ internal static class Program
         NativeDesktop.CaptureBounds(monitorIndex);
 
     private static SessionResponse Snapshot(int monitorIndex, int maxWidth, int quality, int targetFps,
-        int deltaScalePercent, bool requestedFull)
+        int deltaScalePercent, string imageEncoding, bool requestedFull)
     {
-        var payload = SnapshotPayload(monitorIndex, maxWidth, quality, targetFps, deltaScalePercent, requestedFull);
+        var payload = SnapshotPayload(monitorIndex, maxWidth, quality, targetFps, deltaScalePercent,
+            imageEncoding, requestedFull);
         return payload.Bytes.Length == 0 ? payload.Response :
             payload.Response with { ImageBase64 = Convert.ToBase64String(payload.Bytes) };
     }
 
     private static SessionVideoPayload SnapshotPayload(int monitorIndex, int maxWidth, int quality,
-        int targetFps, int deltaScalePercent, bool requestedFull)
+        int targetFps, int deltaScalePercent, string imageEncoding, bool requestedFull)
     {
         lock (CaptureSync)
             return SnapshotPayloadLocked(monitorIndex, maxWidth, quality, targetFps, deltaScalePercent,
-                requestedFull);
+                imageEncoding, requestedFull);
     }
 
     private static SessionVideoPayload SnapshotPayloadLocked(int monitorIndex, int maxWidth, int quality,
-        int targetFps, int deltaScalePercent, bool requestedFull)
+        int targetFps, int deltaScalePercent, string imageEncoding, bool requestedFull)
     {
         Volatile.Write(ref _lastVideoRequestTimestamp, Stopwatch.GetTimestamp());
         var totalTimer = Stopwatch.StartNew();
@@ -314,7 +320,8 @@ internal static class Program
         if (bounds.Width <= 0 || bounds.Height <= 0)
             throw new InvalidOperationException("Aktywna sesja nie udostępnia ekranu.");
         maxWidth = Math.Clamp(maxWidth, 640, 1920);
-        quality = Math.Clamp(quality, 25, 80);
+        quality = Math.Clamp(quality, 10, 100);
+        imageEncoding = NormalizeImageEncoding(imageEncoding);
         targetFps = Math.Clamp(targetFps, 1, 120);
         deltaScalePercent = Math.Clamp(deltaScalePercent, 10, 100);
         var fullScale = Math.Min(1d, Math.Min((double)maxWidth / bounds.Width, 1080d / bounds.Height));
@@ -381,9 +388,7 @@ internal static class Program
             PendingRefinementRegions.Remove(monitorIndex);
             LastDirtyFrameTimestamps.Remove(monitorIndex);
         }
-        using var parameters = new EncoderParameters(1);
-        parameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, (long)quality);
-        encodedBitmap.Save(output, JpegEncoder.Value, parameters);
+        var encodedAs = EncodeBitmap(encodedBitmap, output, imageEncoding, quality);
         encodeTimer.Stop();
         var bytes = output.ToArray();
         totalTimer.Stop();
@@ -413,7 +418,7 @@ internal static class Program
                 deltaScalePercent = refinement || fullFrame ? 100 : deltaScalePercent,
                 refinement,
                 accumulatedFrames,
-                encoding = "JPEG"
+                encoding = encodedAs
             }, Json)), bytes);
     }
 
@@ -605,6 +610,105 @@ internal static class Program
         GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, true, true);
         GC.WaitForPendingFinalizers();
         GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, true, true);
+    }
+
+    private static string NormalizeImageEncoding(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            "png" => "png",
+            "jpeg" or "jpg" => "jpeg",
+            "webp" => "webp",
+            _ => "webp"
+        };
+
+    private static string EncodeBitmap(Bitmap bitmap, Stream output, string imageEncoding, int quality)
+    {
+        imageEncoding = NormalizeImageEncoding(imageEncoding);
+        if (imageEncoding == "png")
+        {
+            bitmap.Save(output, ImageFormat.Png);
+            return "PNG";
+        }
+        if (imageEncoding == "jpeg")
+        {
+            using var parameters = new EncoderParameters(1);
+            parameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality,
+                (long)Math.Clamp(quality, 10, 100));
+            bitmap.Save(output, JpegEncoder.Value, parameters);
+            return "JPEG";
+        }
+
+        EncodeWebP(bitmap, output, Math.Clamp(quality, 10, 100));
+        return "WEBP";
+    }
+
+    private static void EncodeWebP(Bitmap bitmap, Stream output, int quality)
+    {
+        using var converted = bitmap.PixelFormat == PixelFormat.Format32bppPArgb
+            ? null
+            : new Bitmap(bitmap.Width, bitmap.Height, PixelFormat.Format32bppPArgb);
+        var source = converted ?? bitmap;
+        if (converted is not null)
+        {
+            using var graphics = Graphics.FromImage(converted);
+            graphics.CompositingMode = CompositingMode.SourceCopy;
+            graphics.DrawImageUnscaled(bitmap, 0, 0);
+        }
+
+        var bounds = new Rectangle(0, 0, source.Width, source.Height);
+        var locked = source.LockBits(bounds, ImageLockMode.ReadOnly, PixelFormat.Format32bppPArgb);
+        try
+        {
+            var rowBytes = source.Width * 4;
+            var pixels = new byte[rowBytes * source.Height];
+            for (var y = 0; y < source.Height; y++)
+            {
+                var row = IntPtr.Add(locked.Scan0, y * locked.Stride);
+                Marshal.Copy(row, pixels, y * rowBytes, rowBytes);
+            }
+            var info = new SKImageInfo(source.Width, source.Height,
+                SKColorType.Bgra8888, SKAlphaType.Premul);
+            using var skBitmap = new SKBitmap(info);
+            Marshal.Copy(pixels, 0, skBitmap.GetPixels(), pixels.Length);
+            using var image = SKImage.FromBitmap(skBitmap);
+            using var encoded = image.Encode(SKEncodedImageFormat.Webp, quality)
+                ?? throw new InvalidOperationException("SkiaSharp WebP encoder returned no data.");
+            encoded.SaveTo(output);
+        }
+        finally
+        {
+            source.UnlockBits(locked);
+        }
+    }
+
+    private static int RunImageCodecSelfTest()
+    {
+        using var bitmap = new Bitmap(96, 64, PixelFormat.Format32bppPArgb);
+        using (var graphics = Graphics.FromImage(bitmap))
+        {
+            graphics.Clear(Color.White);
+            using var brush = new SolidBrush(Color.Black);
+            graphics.FillRectangle(brush, 4, 4, 40, 20);
+            graphics.DrawString("SIRK", SystemFonts.DefaultFont, brush, 4, 32);
+        }
+
+        foreach (var codec in new[] { "jpeg", "png", "webp" })
+        {
+            using var output = new MemoryStream();
+            var encodedAs = EncodeBitmap(bitmap, output, codec, 85);
+            var bytes = output.ToArray();
+            var valid = encodedAs switch
+            {
+                "JPEG" => bytes.Length > 2 && bytes[0] == 0xff && bytes[1] == 0xd8,
+                "PNG" => bytes.Length > 8 && bytes[0] == 0x89 && bytes[1] == 0x50 &&
+                         bytes[2] == 0x4e && bytes[3] == 0x47,
+                "WEBP" => bytes.Length > 12 && Encoding.ASCII.GetString(bytes, 0, 4) == "RIFF" &&
+                          Encoding.ASCII.GetString(bytes, 8, 4) == "WEBP",
+                _ => false
+            };
+            if (!valid) return codec switch { "jpeg" => 21, "png" => 22, _ => 23 };
+        }
+        return 0;
     }
 
     private static bool DirtyRegionsRequireFullFrame(Rectangle[] dirtyRectangles, Rectangle bounds)
@@ -1029,7 +1133,7 @@ internal sealed record CapturedBitmap(Bitmap Bitmap, bool OwnsBitmap) : IDisposa
 
 internal sealed record SessionRequest(string Type, string? Action, int? X, int? Y, int? Delta, int? MonitorIndex,
     int? MaxWidth, int? Quality, int? TargetKbps, int? TargetFps, int? DeltaScalePercent,
-    string? Text, string? Key, string? Modifiers,
+    string? ImageEncoding, string? Text, string? Key, string? Modifiers,
     string? FileName, string? FileBase64, bool? ForceFull);
 internal sealed record SessionResponse(bool Ok, string Code, string? ImageBase64, int? Width, int? Height,
     JsonElement? Data = null, string? Error = null);

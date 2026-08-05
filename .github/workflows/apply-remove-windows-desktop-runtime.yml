@@ -26,6 +26,7 @@ jobs:
         run: |
           python .github/scripts/refactor_session_program_v2.py
           python .github/scripts/refactor_session_runtime.py
+          python .github/scripts/fix_native_input_chars.py
       - name: Restore and build Session broker
         shell: pwsh
         run: |
@@ -74,6 +75,7 @@ jobs:
           Remove-Item .github/scripts/refactor_session_program.py -Force
           Remove-Item .github/scripts/refactor_session_program_v2.py -Force
           Remove-Item .github/scripts/refactor_session_runtime.py -Force
+          Remove-Item .github/scripts/fix_native_input_chars.py -Force
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A

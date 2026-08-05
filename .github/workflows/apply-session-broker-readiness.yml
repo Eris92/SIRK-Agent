@@ -23,7 +23,9 @@ jobs:
           dotnet-version: 10.0.x
       - name: Apply readiness fix
         shell: pwsh
-        run: python .github/scripts/apply_session_broker_readiness.py
+        run: |
+          python .github/scripts/fix_session_broker_applicator.py
+          python .github/scripts/apply_session_broker_readiness.py
       - name: Restore and build
         shell: pwsh
         run: |
@@ -79,6 +81,7 @@ jobs:
         run: |
           Remove-Item .github/workflows/apply-session-broker-readiness.yml -Force
           Remove-Item .github/scripts/apply_session_broker_readiness.py -Force
+          Remove-Item .github/scripts/fix_session_broker_applicator.py -Force
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/SirkAgent.Service/InteractiveSessionPipe.cs `

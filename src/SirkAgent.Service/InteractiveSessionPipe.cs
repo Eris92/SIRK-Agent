@@ -68,11 +68,17 @@ internal static class InteractiveSessionPipe
     }
 
     internal static bool IsAvailable(int sessionId) =>
+        ProcessExists(sessionId) && PipeReady(sessionId, 0);
+
+    private static bool ProcessExists(int sessionId) =>
         Process.GetProcessesByName("SirkAgent.Session").Any(process =>
         {
             try { return process.SessionId == sessionId; }
             finally { process.Dispose(); }
         });
+
+    private static bool PipeReady(int sessionId, uint timeoutMilliseconds) =>
+        WaitNamedPipe(@"\\.\pipe\" + Name(sessionId), timeoutMilliseconds);
 
     internal static void Terminate(int sessionId)
     {
@@ -96,12 +102,17 @@ internal static class InteractiveSessionPipe
         lock (LaunchSync)
         {
             if (IsAvailable(sessionId)) return false;
+            if (ProcessExists(sessionId)) Terminate(sessionId);
+
             var executable = Path.Combine(AppContext.BaseDirectory, "Session", "SirkAgent.Session.exe");
             if (!File.Exists(executable))
                 executable = Path.Combine(AppContext.BaseDirectory, "SirkAgent.Session.exe");
-            if (!File.Exists(executable)) throw new FileNotFoundException("Brak brokera sesji użytkownika.", executable);
+            if (!File.Exists(executable))
+                throw new FileNotFoundException("Brak brokera sesji użytkownika.", executable);
             if (!WTSQueryUserToken((uint)sessionId, out var token))
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Nie można otworzyć aktywnej sesji użytkownika.");
+                throw new Win32Exception(Marshal.GetLastWin32Error(),
+                    "Nie można otworzyć aktywnej sesji użytkownika.");
+
             var environment = IntPtr.Zero;
             var process = new ProcessInformation();
             try
@@ -115,8 +126,32 @@ internal static class InteractiveSessionPipe
                 };
                 var command = new StringBuilder("\"" + executable + "\"");
                 if (!CreateProcessAsUser(token, executable, command, IntPtr.Zero, IntPtr.Zero, false,
-                        0x00000400, environment, AppContext.BaseDirectory, ref startup, out process))
-                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Nie można uruchomić brokera sesji użytkownika.");
+                        0x00000400, environment, Path.GetDirectoryName(executable)!,
+                        ref startup, out process))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(),
+                        "Nie można uruchomić brokera sesji użytkownika.");
+                }
+
+                var deadline = DateTime.UtcNow.AddSeconds(8);
+                while (DateTime.UtcNow < deadline)
+                {
+                    if (PipeReady(sessionId, 100)) return true;
+                    if (process.Process != IntPtr.Zero && WaitForSingleObject(process.Process, 0) == 0)
+                    {
+                        _ = GetExitCodeProcess(process.Process, out var exitCode);
+                        throw new InvalidOperationException(
+                            $"Broker sesji użytkownika zakończył się podczas startu. " +
+                            $"SessionId={sessionId}; ProcessId={process.ProcessId}; ExitCode={exitCode}; " +
+                            @"Log=C:\ProgramData\SIRK\Agent\session-startup-error.log");
+                    }
+                    Thread.Sleep(25);
+                }
+
+                throw new TimeoutException(
+                    $"Broker sesji użytkownika nie otworzył kanału sterowania. " +
+                    $"SessionId={sessionId}; ProcessId={process.ProcessId}; " +
+                    @"Log=C:\ProgramData\SIRK\Agent\session-startup-error.log");
             }
             finally
             {
@@ -125,13 +160,6 @@ internal static class InteractiveSessionPipe
                 if (environment != IntPtr.Zero) DestroyEnvironmentBlock(environment);
                 if (token != IntPtr.Zero) CloseHandle(token);
             }
-            var deadline = DateTime.UtcNow.AddSeconds(3);
-            while (DateTime.UtcNow < deadline)
-            {
-                if (IsAvailable(sessionId)) return true;
-                Thread.Sleep(25);
-            }
-            throw new InvalidOperationException("Broker sesji użytkownika nie uruchomił się.");
         }
     }
 
@@ -271,6 +299,17 @@ internal static class InteractiveSessionPipe
     private static extern bool CreateProcessAsUser(IntPtr token, string application, StringBuilder commandLine,
         IntPtr processAttributes, IntPtr threadAttributes, bool inheritHandles, uint creationFlags,
         IntPtr environment, string currentDirectory, ref StartupInfo startup, out ProcessInformation process);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool WaitNamedPipe(string name, uint timeoutMilliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
 
     [DllImport("kernel32.dll")]
     private static extern bool CloseHandle(IntPtr handle);

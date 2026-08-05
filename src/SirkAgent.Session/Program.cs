@@ -1,9 +1,9 @@
 using System.Drawing.Imaging;
 using System.Drawing.Drawing2D;
 using System.ComponentModel;
-using System.Collections.Specialized;
 using System.Buffers.Binary;
 using System.Diagnostics;
+using System.Drawing;
 using System.IO;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
@@ -11,8 +11,6 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
-using System.Windows.Forms;
-using System.Windows.Automation;
 
 namespace SirkAgent.Session;
 
@@ -244,27 +242,22 @@ internal static class Program
 
     private static SessionResponse Monitors()
     {
-        var monitors = Screen.AllScreens.Select((screen, index) => new
+        var monitors = NativeDesktop.Monitors().Select(monitor => new
         {
-            index,
-            name = screen.DeviceName,
-            primary = screen.Primary,
-            x = screen.Bounds.X,
-            y = screen.Bounds.Y,
-            width = screen.Bounds.Width,
-            height = screen.Bounds.Height
+            index = monitor.Index,
+            name = monitor.Name,
+            primary = monitor.Primary,
+            x = monitor.Bounds.X,
+            y = monitor.Bounds.Y,
+            width = monitor.Bounds.Width,
+            height = monitor.Bounds.Height
         }).ToArray();
         return new SessionResponse(true, "DESKTOP_MONITORS_OK", null, null, null,
             JsonSerializer.SerializeToElement(new { sessionId = SessionId, monitors }, Json));
     }
 
-    private static Rectangle CaptureBounds(int monitorIndex)
-    {
-        if (monitorIndex < 0) return SystemInformation.VirtualScreen;
-        var screens = Screen.AllScreens;
-        if (monitorIndex >= screens.Length) throw new InvalidDataException("Wybrany monitor nie istnieje.");
-        return screens[monitorIndex].Bounds;
-    }
+    private static Rectangle CaptureBounds(int monitorIndex) =>
+        NativeDesktop.CaptureBounds(monitorIndex);
 
     private static SessionResponse Snapshot(int monitorIndex, int maxWidth, int quality, int targetFps,
         int deltaScalePercent, bool requestedFull)
@@ -361,7 +354,7 @@ internal static class Program
         encodeTimer.Stop();
         var bytes = output.ToArray();
         totalTimer.Stop();
-        var cursor = Cursor.Position;
+        var cursor = NativeDesktop.GetCursorPosition();
         return new SessionVideoPayload(new SessionResponse(true, "DESKTOP_SNAPSHOT_OK", null,
             bounds.Width, bounds.Height, JsonSerializer.SerializeToElement(new
             {
@@ -411,7 +404,7 @@ internal static class Program
         try
         {
             var outputIndex = monitorIndex < 0
-                ? Array.FindIndex(Screen.AllScreens, value => value.Primary)
+                ? NativeDesktop.PrimaryMonitorIndex()
                 : monitorIndex;
             outputIndex = Math.Max(0, outputIndex);
             DxgiH264Frame gpuFrame;
@@ -440,7 +433,7 @@ internal static class Program
             {
                 if (gpuFrame.CursorChanged)
                 {
-                    var pointer = Cursor.Position;
+                    var pointer = NativeDesktop.GetCursorPosition();
                     return new SessionVideoPayload(new SessionResponse(true, "DESKTOP_CURSOR", null,
                         bounds.Width, bounds.Height, JsonSerializer.SerializeToElement(new
                         {
@@ -457,7 +450,7 @@ internal static class Program
                 return new SessionVideoPayload(new SessionResponse(true, "DESKTOP_NO_CHANGE", null,
                     bounds.Width, bounds.Height), []);
             }
-            var gpuCursor = Cursor.Position;
+            var gpuCursor = NativeDesktop.GetCursorPosition();
             totalTimer.Stop();
             return new SessionVideoPayload(new SessionResponse(true, "DESKTOP_VIDEO_FRAME_OK",
                 null, bounds.Width, bounds.Height,
@@ -514,7 +507,7 @@ internal static class Program
         if (bytes.Length == 0) return new SessionVideoPayload(new SessionResponse(true, "DESKTOP_NO_CHANGE", null,
             bounds.Width, bounds.Height, JsonSerializer.SerializeToElement(new {
                 encoderInputs = _h264Encoder.InputFrames, encoderOutputs = _h264Encoder.OutputFrames }, Json)), []);
-        var cursor = Cursor.Position;
+        var cursor = NativeDesktop.GetCursorPosition();
         return new SessionVideoPayload(new SessionResponse(true, "DESKTOP_VIDEO_FRAME_OK", null,
             bounds.Width, bounds.Height,
             JsonSerializer.SerializeToElement(new
@@ -750,7 +743,7 @@ internal static class Program
         try
         {
             var outputIndex = monitorIndex < 0
-                ? Array.FindIndex(Screen.AllScreens, value => value.Primary)
+                ? NativeDesktop.PrimaryMonitorIndex()
                 : monitorIndex;
             outputIndex = Math.Max(0, outputIndex);
             DxgiFrame frame;
@@ -809,17 +802,13 @@ internal static class Program
         {
             var text = request.Text ?? "";
             if (text.Length > 1024 * 1024) throw new InvalidDataException("Schowek przekracza limit 1 MiB.");
-            RunSta(() =>
-            {
-                if (text.Length == 0) Clipboard.Clear();
-                else Clipboard.SetText(text);
-                return true;
-            });
+            if (text.Length == 0) NativeClipboard.Clear();
+            else NativeClipboard.SetText(text);
             return new SessionResponse(true, "DESKTOP_CLIPBOARD_SET_OK", null, null, null);
         }
         if (request.Action == "clipboardGet")
         {
-            var clipboard = RunSta(ReadClipboard);
+            var clipboard = NativeClipboard.Read();
             return new SessionResponse(true, "DESKTOP_CLIPBOARD_GET_OK", null, null, null,
                 JsonSerializer.SerializeToElement(clipboard, Json));
         }
@@ -838,22 +827,18 @@ internal static class Program
             Directory.CreateDirectory(directory);
             var path = Path.Combine(directory, fileName);
             File.WriteAllBytes(path, content);
-            RunSta(() =>
-            {
-                Clipboard.SetFileDropList(new StringCollection { path });
-                return true;
-            });
+            NativeClipboard.SetFileDrop(path);
             return new SessionResponse(true, "DESKTOP_CLIPBOARD_FILE_SET_OK", null, null, null,
                 JsonSerializer.SerializeToElement(new { fileName, path, bytes = content.Length }, Json));
         }
         if (request.Action == "text")
         {
-            RunSta(() => { SendKeys.SendWait(EscapeSendKeys(request.Text ?? "")); return true; });
+            NativeInput.SendText(request.Text ?? string.Empty);
             return new SessionResponse(true, "DESKTOP_TEXT_OK", null, null, null);
         }
         if (request.Action == "key")
         {
-            RunSta(() => { SendKeys.SendWait(KeySequence(request.Key, request.Modifiers)); return true; });
+            NativeInput.SendKey(request.Key, request.Modifiers);
             return new SessionResponse(true, "DESKTOP_KEY_OK", null, null, null);
         }
 
@@ -864,8 +849,8 @@ internal static class Program
         var bounds = CaptureBounds(request.MonitorIndex ?? -1);
         var x = Math.Clamp(request.X ?? 0, 0, Math.Max(0, bounds.Width - 1)) + bounds.Left;
         var y = Math.Clamp(request.Y ?? 0, 0, Math.Max(0, bounds.Height - 1)) + bounds.Top;
-        var previous = Cursor.Position;
-        Cursor.Position = new Point(x, y);
+        var previous = NativeDesktop.GetCursorPosition();
+        NativeDesktop.SetCursorPosition(new Point(x, y));
         if (request.Action is "click" or "doubleClick")
         {
             var count = request.Action == "doubleClick" ? 2 : 1;
@@ -903,76 +888,6 @@ internal static class Program
             }, Json));
     }
 
-    private static T RunSta<T>(Func<T> action)
-    {
-        T? result = default;
-        Exception? failure = null;
-        using var completed = new ManualResetEventSlim();
-        var thread = new Thread(() =>
-        {
-            try { result = action(); }
-            catch (Exception ex) { failure = ex; }
-            finally { completed.Set(); }
-        })
-        {
-            IsBackground = true,
-            Name = "SIRK Agent interactive STA"
-        };
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        if (!completed.Wait(TimeSpan.FromSeconds(10)))
-            throw new TimeoutException("Operacja sesji interaktywnej przekroczyła limit czasu.");
-        if (failure is not null) throw new InvalidOperationException(failure.Message, failure);
-        return result!;
-    }
-
-    private static string EscapeSendKeys(string value) => value
-        .Replace("{", "{{}").Replace("}", "{}}")
-        .Replace("+", "{+}").Replace("^", "{^}").Replace("%", "{%}").Replace("~", "{~}");
-
-    private static string KeySequence(string? key, string? modifiers)
-    {
-        var allowed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["Enter"] = "{ENTER}", ["Tab"] = "{TAB}", ["Escape"] = "{ESC}", ["Backspace"] = "{BS}",
-            ["Delete"] = "{DEL}", ["Up"] = "{UP}", ["Down"] = "{DOWN}", ["Left"] = "{LEFT}",
-            ["Right"] = "{RIGHT}", ["Home"] = "{HOME}", ["End"] = "{END}", ["PageUp"] = "{PGUP}",
-            ["PageDown"] = "{PGDN}", ["F1"] = "{F1}", ["F2"] = "{F2}", ["F3"] = "{F3}",
-            ["F4"] = "{F4}", ["F5"] = "{F5}", ["F6"] = "{F6}", ["F7"] = "{F7}",
-            ["F8"] = "{F8}", ["F9"] = "{F9}", ["F10"] = "{F10}", ["F11"] = "{F11}", ["F12"] = "{F12}"
-        };
-        foreach (var letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-            allowed[letter.ToString()] = letter.ToString().ToLowerInvariant();
-        if (!allowed.TryGetValue(key ?? "", out var sequence))
-            throw new InvalidDataException("Niedozwolony klawisz specjalny.");
-        var values = (modifiers ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var prefix = "";
-        if (values.Contains("Control", StringComparer.OrdinalIgnoreCase)) prefix += "^";
-        if (values.Contains("Alt", StringComparer.OrdinalIgnoreCase)) prefix += "%";
-        if (values.Contains("Shift", StringComparer.OrdinalIgnoreCase)) prefix += "+";
-        return prefix + sequence;
-    }
-
-    private static object ReadClipboard()
-    {
-        if (Clipboard.ContainsFileDropList())
-        {
-            var paths = Clipboard.GetFileDropList().Cast<string>().Where(File.Exists).Take(1).ToArray();
-            if (paths.Length > 0)
-            {
-                var info = new FileInfo(paths[0]);
-                if (info.Length > 512 * 1024)
-                    return new { kind = "file", fileName = info.Name, bytes = info.Length,
-                        tooLarge = true, maximumBytes = 512 * 1024 };
-                return new { kind = "file", fileName = info.Name, bytes = info.Length,
-                    fileBase64 = Convert.ToBase64String(File.ReadAllBytes(info.FullName)), tooLarge = false };
-            }
-        }
-        var text = Clipboard.ContainsText() ? Clipboard.GetText() : "";
-        if (text.Length > 1024 * 1024) text = text[..(1024 * 1024)];
-        return new { kind = "text", text };
-    }
-
     private static SessionResponse Activity()
     {
         var foreground = GetForegroundWindow();
@@ -985,9 +900,9 @@ internal static class Program
         var lastInput = new LastInputInfo { Size = (uint)Marshal.SizeOf<LastInputInfo>() };
         var idleMilliseconds = GetLastInputInfo(ref lastInput)
             ? unchecked((uint)Environment.TickCount - lastInput.Time) : 0;
-        var clipboard = ClipboardMetadata();
+        var clipboard = NativeClipboard.Metadata();
         var now = DateTimeOffset.UtcNow;
-        var cursor = Cursor.Position;
+        var cursor = NativeDesktop.GetCursorPosition();
         var previousCursor = _lastCursorPosition;
         var cursorDistance = previousCursor is null ? 0d : Math.Sqrt(
             Math.Pow(cursor.X - previousCursor.Value.X, 2) +
@@ -998,7 +913,7 @@ internal static class Program
         var sampleIntervalMs = Math.Max(0, (now - _lastActivitySampleUtc).TotalMilliseconds);
         _lastActivitySampleUtc = now;
         _lastCursorPosition = cursor;
-        var uiAutomation = UiAutomation(foreground);
+        var uiAutomation = NativeDesktop.WindowMetadata(foreground);
         var data = JsonSerializer.SerializeToElement(new
         {
             sessionId = Process.GetCurrentProcess().SessionId,
@@ -1020,50 +935,6 @@ internal static class Program
             uiAutomation
         }, Json);
         return new SessionResponse(true, "ACTIVITY_SNAPSHOT_OK", null, null, null, data);
-    }
-
-    private static object? UiAutomation(IntPtr foreground)
-    {
-        try
-        {
-            var element = AutomationElement.FromHandle(foreground);
-            var current = element.Current;
-            return new
-            {
-                name = Limit(current.Name, 512),
-                automationId = Limit(current.AutomationId, 256),
-                controlType = Limit(current.ControlType?.ProgrammaticName, 128),
-                className = Limit(current.ClassName, 256),
-                frameworkId = Limit(current.FrameworkId, 128),
-                bounds = new
-                {
-                    x = current.BoundingRectangle.X,
-                    y = current.BoundingRectangle.Y,
-                    width = current.BoundingRectangle.Width,
-                    height = current.BoundingRectangle.Height
-                }
-            };
-        }
-        catch (Exception error)
-        {
-            return new { available = false, error = error.GetType().Name };
-        }
-    }
-
-    private static object ClipboardMetadata()
-    {
-        try
-        {
-            var formats = Clipboard.GetDataObject()?.GetFormats(autoConvert: false)
-                .Take(32).ToArray() ?? [];
-            var fileCount = Clipboard.ContainsFileDropList() ? Clipboard.GetFileDropList().Count : 0;
-            var textLength = Clipboard.ContainsText() ? Clipboard.GetText().Length : 0;
-            return new { available = true, formats, fileCount, textLength };
-        }
-        catch (Exception error)
-        {
-            return new { available = false, error = error.GetType().Name };
-        }
     }
 
     private static string? Limit(string? value, int maximum) =>

@@ -1,0 +1,721 @@
+{
+  "repository": "Eris92/SIRK-Agent",
+  "commit": "99bb980cdb9afb8c70a28506ae8754035070e858",
+  "summary": {
+    "files": 136,
+    "textFiles": 135,
+    "lines": 16231,
+    "extensions": {
+      ".cs": 71,
+      ".csproj": 11,
+      ".js": 2,
+      ".json": 3,
+      ".md": 14,
+      ".ps1": 17,
+      ".txt": 2,
+      ".wxs": 1,
+      ".yml": 14,
+      "<none>": 1
+    },
+    "projects": 11,
+    "nodeArtifacts": 0,
+    "legacyPaths": 0,
+    "findingsBySeverity": {
+      "critical": 0,
+      "high": 0,
+      "medium": 7,
+      "low": 0,
+      "info": 0
+    }
+  },
+  "projects": [
+    {
+      "path": "tests/SirkAgent.Policy.Tests/SirkAgent.Policy.Tests.csproj",
+      "frameworks": [
+        "net10.0-windows"
+      ],
+      "packages": [
+        {
+          "name": "Microsoft.NET.Test.Sdk",
+          "version": "17.11.1"
+        },
+        {
+          "name": "xunit",
+          "version": "2.9.2"
+        },
+        {
+          "name": "xunit.runner.visualstudio",
+          "version": "2.8.2"
+        }
+      ]
+    },
+    {
+      "path": "src/SirkAgent.Report/SirkAgent.Report.csproj",
+      "frameworks": [
+        "net10.0-windows"
+      ],
+      "packages": []
+    },
+    {
+      "path": "src/SirkAgent.Watchdog/SirkAgent.Watchdog.csproj",
+      "frameworks": [
+        "net10.0-windows"
+      ],
+      "packages": [
+        {
+          "name": "Microsoft.Extensions.Hosting.WindowsServices",
+          "version": "10.0.10"
+        },
+        {
+          "name": "System.ServiceProcess.ServiceController",
+          "version": "10.0.10"
+        }
+      ]
+    },
+    {
+      "path": "src/SirkAgent.Session/SirkAgent.Session.csproj",
+      "frameworks": [
+        "net10.0-windows10.0.17763"
+      ],
+      "packages": [
+        {
+          "name": "Vortice.Direct3D11",
+          "version": "3.8.3"
+        },
+        {
+          "name": "Vortice.DXGI",
+          "version": "3.8.3"
+        },
+        {
+          "name": "Vortice.MediaFoundation",
+          "version": "3.8.3"
+        },
+        {
+          "name": "SharpMediaFoundationInterop",
+          "version": "0.3.1"
+        }
+      ]
+    },
+    {
+      "path": "src/SirkAgent.Policy/SirkAgent.Policy.csproj",
+      "frameworks": [
+        "net10.0-windows"
+      ],
+      "packages": [
+        {
+          "name": "System.Security.Cryptography.ProtectedData",
+          "version": "10.0.0"
+        }
+      ]
+    },
+    {
+      "path": "src/SirkAgent.Service/SirkAgent.Service.csproj",
+      "frameworks": [
+        "net10.0-windows"
+      ],
+      "packages": [
+        {
+          "name": "Microsoft.Extensions.Hosting.WindowsServices",
+          "version": "10.0.10"
+        }
+      ]
+    },
+    {
+      "path": "src/SirkAgent.BrowserHost/SirkAgent.BrowserHost.csproj",
+      "frameworks": [
+        "net10.0-windows"
+      ],
+      "packages": []
+    },
+    {
+      "path": "src/SirkAgent.Cli/SirkAgent.Cli.csproj",
+      "frameworks": [
+        "net10.0-windows"
+      ],
+      "packages": []
+    },
+    {
+      "path": "src/SirkAgent.Setup/SirkAgent.Setup.csproj",
+      "frameworks": [
+        "net10.0-windows"
+      ],
+      "packages": []
+    },
+    {
+      "path": "tools/SirkAgent.Policy.TestHarness/SirkAgent.Policy.TestHarness.csproj",
+      "frameworks": [
+        "net10.0-windows"
+      ],
+      "packages": []
+    },
+    {
+      "path": "tools/SirkAgent.H264Benchmark/SirkAgent.H264Benchmark.csproj",
+      "frameworks": [
+        "net10.0-windows10.0.17763"
+      ],
+      "packages": [
+        {
+          "name": "SharpMediaFoundationInterop",
+          "version": "0.3.1"
+        },
+        {
+          "name": "Vortice.MediaFoundation",
+          "version": "3.8.3"
+        },
+        {
+          "name": "Vortice.Direct3D11",
+          "version": "3.8.3"
+        }
+      ]
+    }
+  ],
+  "nodeArtifacts": [],
+  "legacyPaths": [],
+  "jsonConfigurationKeys": {},
+  "configurationTypes": [],
+  "endpoints": [
+    {
+      "path": "tools/Test-DesktopStream.ps1",
+      "value": "$portal/api/bootstrap"
+    }
+  ],
+  "integrations": {
+    "central": [
+      {
+        "path": "src/SirkAgent.Service/Core/ManagementPlaneHealth.cs",
+        "count": 5
+      },
+      {
+        "path": "docs/CONTINUE-IN-NEW-CHAT.md",
+        "count": 2
+      },
+      {
+        "path": "README.md",
+        "count": 1
+      },
+      {
+        "path": "docs/ROADMAP-SECURITY.md",
+        "count": 1
+      },
+      {
+        "path": "docs/REMOTE-DESKTOP-PERFORMANCE.md",
+        "count": 1
+      },
+      {
+        "path": ".github/workflows/full-product-audit-pr.yml",
+        "count": 1
+      },
+      {
+        "path": "tests/SirkAgent.Policy.Tests/ManagementPlaneHealthTests.cs",
+        "count": 1
+      }
+    ],
+    "portal": [
+      {
+        "path": "src/SirkAgent.Service/ManagementWorker.cs",
+        "count": 74
+      },
+      {
+        "path": "README.md",
+        "count": 14
+      },
+      {
+        "path": "src/SirkAgent.Cli/Program.cs",
+        "count": 14
+      },
+      {
+        "path": "tools/Test-DesktopStream.ps1",
+        "count": 11
+      },
+      {
+        "path": "tests/SirkAgent.Policy.Tests/PortalCredentialStoreTests.cs",
+        "count": 10
+      },
+      {
+        "path": "src/SirkAgent.Setup/Program.cs",
+        "count": 9
+      },
+      {
+        "path": "src/SirkAgent.Policy/PortalCredentialStore.cs",
+        "count": 8
+      },
+      {
+        "path": "src/SirkAgent.Service/RemoteCommandExecutor.cs",
+        "count": 8
+      },
+      {
+        "path": "docs/CONTINUE-IN-NEW-CHAT.md",
+        "count": 6
+      },
+      {
+        "path": "src/SirkAgent.Service/DesktopStreamWorker.cs",
+        "count": 6
+      },
+      {
+        "path": "docs/REMOTE-DESKTOP-PERFORMANCE.md",
+        "count": 5
+      },
+      {
+        "path": "installer/Product.wxs",
+        "count": 4
+      },
+      {
+        "path": ".github/workflows/release-installers.yml",
+        "count": 4
+      },
+      {
+        "path": "tests/SirkAgent.Policy.Tests/PortalPolicyDeliveryStoreTests.cs",
+        "count": 3
+      },
+      {
+        "path": "src/SirkAgent.Service/NetworkChangeWorker.cs",
+        "count": 3
+      },
+      {
+        "path": "src/SirkAgent.Service/Core/ManagementPlaneHealth.cs",
+        "count": 3
+      },
+      {
+        "path": "docs/TAMPER-PROTECTION.md",
+        "count": 2
+      },
+      {
+        "path": "docs/WATCHDOG-AND-NETWORK-RECOVERY.md",
+        "count": 2
+      },
+      {
+        "path": "src/SirkAgent.Policy/PortalPolicyDeliveryStore.cs",
+        "count": 2
+      },
+      {
+        "path": "docs/MANAGEMENT-PLANE-HEALTH.md",
+        "count": 1
+      }
+    ],
+    "agent": [
+      {
+        "path": ".github/workflows/policy-engine-ci.yml",
+        "count": 114
+      },
+      {
+        "path": ".github/workflows/management-full-ci.yml",
+        "count": 71
+      },
+      {
+        "path": ".github/workflows/endurance-report-ci.yml",
+        "count": 58
+      },
+      {
+        "path": ".github/workflows/endurance-ci.yml",
+        "count": 55
+      },
+      {
+        "path": ".github/workflows/queue-cli-ci.yml",
+        "count": 54
+      },
+      {
+        "path": "README.md",
+        "count": 53
+      },
+      {
+        "path": "docs/CONTINUE-IN-NEW-CHAT.md",
+        "count": 47
+      },
+      {
+        "path": ".github/workflows/release-installers.yml",
+        "count": 42
+      },
+      {
+        "path": "src/SirkAgent.Cli/Program.cs",
+        "count": 37
+      },
+      {
+        "path": "src/SirkAgent.Report/Program.cs",
+        "count": 33
+      },
+      {
+        "path": ".github/workflows/policy-debug-ci.yml",
+        "count": 32
+      },
+      {
+        "path": ".github/workflows/management-persistence-ci.yml",
+        "count": 29
+      },
+      {
+        "path": "docs/TEST-RELEASE-0.2.0.md",
+        "count": 23
+      },
+      {
+        "path": "src/SirkAgent.Service/AgentWorker.cs",
+        "count": 22
+      },
+      {
+        "path": "src/SirkAgent.Service/Core/AgentPaths.cs",
+        "count": 22
+      },
+      {
+        "path": ".github/workflows/product-test-readiness.yml",
+        "count": 21
+      },
+      {
+        "path": "src/SirkAgent.Setup/Program.cs",
+        "count": 20
+      },
+      {
+        "path": "tools/package/Install-SirkAgent.ps1",
+        "count": 18
+      },
+      {
+        "path": "tools/package/Build-SirkAgentFinalPackage.ps1",
+        "count": 18
+      },
+      {
+        "path": "tools/package/Register-SirkUpdater.ps1",
+        "count": 16
+      }
+    ],
+    "updater": [
+      {
+        "path": "tools/package/Register-SirkUpdater.ps1",
+        "count": 19
+      },
+      {
+        "path": ".github/workflows/shared-updater-contract.yml",
+        "count": 10
+      },
+      {
+        "path": "tests/shared-updater-installer-contract.ps1",
+        "count": 8
+      },
+      {
+        "path": "tools/package/Install-SirkAgent-WithUpdater.ps1",
+        "count": 7
+      },
+      {
+        "path": ".github/workflows/product-test-readiness.yml",
+        "count": 2
+      },
+      {
+        "path": ".github/workflows/release-installers.yml",
+        "count": 2
+      },
+      {
+        "path": ".github/workflows/dotnet10-contract.yml",
+        "count": 2
+      },
+      {
+        "path": "tests/SirkAgent.PackageTests/EnrollmentReadiness.Tests.ps1",
+        "count": 2
+      },
+      {
+        "path": "src/SirkAgent.Setup/Program.cs",
+        "count": 2
+      },
+      {
+        "path": ".github/workflows/enrollment-readiness-ci.yml",
+        "count": 1
+      }
+    ],
+    "entra": [
+      {
+        "path": "src/SirkAgent.Service/Core/ManagementPlaneHealth.cs",
+        "count": 34
+      },
+      {
+        "path": "src/SirkAgent.Service/ManagementPlaneWorker.cs",
+        "count": 6
+      },
+      {
+        "path": "docs/MANAGEMENT-PLANE-HEALTH.md",
+        "count": 4
+      },
+      {
+        "path": "tests/SirkAgent.Policy.Tests/ManagementPlaneHealthTests.cs",
+        "count": 4
+      },
+      {
+        "path": "README.md",
+        "count": 2
+      },
+      {
+        "path": "docs/CONTINUE-IN-NEW-CHAT.md",
+        "count": 2
+      },
+      {
+        "path": "docs/ROADMAP-SECURITY.md",
+        "count": 1
+      },
+      {
+        "path": "docs/REMOTE-DESKTOP-PERFORMANCE.md",
+        "count": 1
+      },
+      {
+        "path": ".github/workflows/full-product-audit-pr.yml",
+        "count": 1
+      }
+    ],
+    "openid": [],
+    "oidc": [],
+    "saml": [],
+    "ldap": [],
+    "active directory": [
+      {
+        "path": "src/SirkAgent.Service/Core/ManagementPlaneHealth.cs",
+        "count": 5
+      }
+    ],
+    "jira": [],
+    "servicedesk": [],
+    "service desk": [],
+    "zabbix": [],
+    "wazuh": [],
+    "ticket": [],
+    "smtp": [],
+    "email": [
+      {
+        "path": ".github/workflows/full-product-audit-pr.yml",
+        "count": 1
+      }
+    ],
+    "webhook": [],
+    "remote desktop": [
+      {
+        "path": "README.md",
+        "count": 1
+      },
+      {
+        "path": "docs/WATCHDOG-AND-NETWORK-RECOVERY.md",
+        "count": 1
+      },
+      {
+        "path": "docs/REMOTE-DESKTOP-PERFORMANCE.md",
+        "count": 1
+      }
+    ],
+    "rdp": [
+      {
+        "path": "tools/package/Build-SirkAgentFinalPackage.ps1",
+        "count": 1
+      }
+    ],
+    "backup": [
+      {
+        "path": "tools/package/Apply-SirkAgentUpdate.ps1",
+        "count": 7
+      },
+      {
+        "path": ".github/workflows/management-full-ci.yml",
+        "count": 5
+      },
+      {
+        "path": "README.md",
+        "count": 1
+      },
+      {
+        "path": "docs/CONTINUE-IN-NEW-CHAT.md",
+        "count": 1
+      }
+    ],
+    "restore": [
+      {
+        "path": ".github/workflows/dotnet10-contract.yml",
+        "count": 6
+      },
+      {
+        "path": ".github/workflows/product-test-readiness.yml",
+        "count": 4
+      },
+      {
+        "path": "tools/SirkAgent.Policy.TestHarness/Program.cs",
+        "count": 4
+      },
+      {
+        "path": ".github/workflows/policy-engine-ci.yml",
+        "count": 3
+      },
+      {
+        "path": ".github/workflows/management-full-ci.yml",
+        "count": 2
+      },
+      {
+        "path": ".github/workflows/management-persistence-ci.yml",
+        "count": 1
+      },
+      {
+        "path": "src/SirkAgent.Service/Core/ManagementPlaneHealth.cs",
+        "count": 1
+      },
+      {
+        "path": "tools/package/Build-SirkAgentFinalPackage.ps1",
+        "count": 1
+      }
+    ],
+    "yubikey": [],
+    "webauthn": [],
+    "fido": [],
+    "mfa": [
+      {
+        "path": "docs/MANAGEMENT-PLANE-HEALTH.md",
+        "count": 1
+      }
+    ]
+  },
+  "workflows": [
+    {
+      "path": ".github/workflows/compile-diagnostic.yml",
+      "name": "SIRK Agent Compile Diagnostic",
+      "has_pull_request": true,
+      "has_push": false,
+      "permissions_write": false
+    },
+    {
+      "path": ".github/workflows/endurance-report-ci.yml",
+      "name": "SIRK Agent Endurance Report CI",
+      "has_pull_request": true,
+      "has_push": true,
+      "permissions_write": false
+    },
+    {
+      "path": ".github/workflows/full-product-audit-pr.yml",
+      "name": "Full Product Audit PR",
+      "has_pull_request": true,
+      "has_push": false,
+      "permissions_write": true
+    },
+    {
+      "path": ".github/workflows/queue-cli-ci.yml",
+      "name": "SIRK Agent Queue CLI CI",
+      "has_pull_request": true,
+      "has_push": true,
+      "permissions_write": false
+    },
+    {
+      "path": ".github/workflows/product-test-readiness.yml",
+      "name": "SIRK Agent Product Test Readiness",
+      "has_pull_request": true,
+      "has_push": true,
+      "permissions_write": false
+    },
+    {
+      "path": ".github/workflows/policy-debug-ci.yml",
+      "name": "SIRK Agent Policy Debug CI",
+      "has_pull_request": true,
+      "has_push": false,
+      "permissions_write": false
+    },
+    {
+      "path": ".github/workflows/policy-engine-ci.yml",
+      "name": "SIRK Agent CI",
+      "has_pull_request": true,
+      "has_push": true,
+      "permissions_write": false
+    },
+    {
+      "path": ".github/workflows/enrollment-readiness-ci.yml",
+      "name": "SIRK Agent Enrollment Readiness CI",
+      "has_pull_request": true,
+      "has_push": false,
+      "permissions_write": false
+    },
+    {
+      "path": ".github/workflows/shared-updater-contract.yml",
+      "name": "SIRK Agent Shared Updater Contract",
+      "has_pull_request": true,
+      "has_push": true,
+      "permissions_write": false
+    },
+    {
+      "path": ".github/workflows/management-persistence-ci.yml",
+      "name": "SIRK Agent Management Persistence CI",
+      "has_pull_request": true,
+      "has_push": false,
+      "permissions_write": false
+    },
+    {
+      "path": ".github/workflows/management-full-ci.yml",
+      "name": "SIRK Agent Full Management CI",
+      "has_pull_request": true,
+      "has_push": true,
+      "permissions_write": false
+    },
+    {
+      "path": ".github/workflows/release-installers.yml",
+      "name": "SIRK Agent Complete Windows Release",
+      "has_pull_request": false,
+      "has_push": true,
+      "permissions_write": true
+    },
+    {
+      "path": ".github/workflows/dotnet10-contract.yml",
+      "name": "SIRK Agent .NET 10 Contract",
+      "has_pull_request": true,
+      "has_push": true,
+      "permissions_write": false
+    },
+    {
+      "path": ".github/workflows/endurance-ci.yml",
+      "name": "SIRK Agent Runtime Endurance CI",
+      "has_pull_request": true,
+      "has_push": true,
+      "permissions_write": false
+    }
+  ],
+  "findings": [
+    {
+      "severity": "medium",
+      "category": "incomplete",
+      "path": ".github/workflows/management-full-ci.yml",
+      "line": 143,
+      "rule": "incomplete-implementation",
+      "snippet": "Set-Content (Join-Path $root 'quarantine-state.bin') 'test-placeholder'"
+    },
+    {
+      "severity": "medium",
+      "category": "transport",
+      "path": "browser-extension/manifest.json",
+      "line": 8,
+      "rule": "plaintext-http-url",
+      "snippet": "\"host_permissions\": [\"http://*/*\", \"https://*/*\"],"
+    },
+    {
+      "severity": "medium",
+      "category": "transport",
+      "path": "browser-extension/manifest.json",
+      "line": 12,
+      "rule": "plaintext-http-url",
+      "snippet": "\"matches\": [\"http://*/*\", \"https://*/*\"],"
+    },
+    {
+      "severity": "medium",
+      "category": "transport",
+      "path": "browser-extension/service-worker.js",
+      "line": 41,
+      "rule": "plaintext-http-url",
+      "snippet": "}, { urls: [\"http://*/*\", \"https://*/*\"] });"
+    },
+    {
+      "severity": "medium",
+      "category": "transport",
+      "path": "browser-extension/service-worker.js",
+      "line": 47,
+      "rule": "plaintext-http-url",
+      "snippet": "}, { urls: [\"http://*/*\", \"https://*/*\"] });"
+    },
+    {
+      "severity": "medium",
+      "category": "transport",
+      "path": "installer/Product.wxs",
+      "line": 1,
+      "rule": "plaintext-http-url",
+      "snippet": "<Wix xmlns=\"http://wixtoolset.org/schemas/v4/wxs\">"
+    },
+    {
+      "severity": "medium",
+      "category": "process",
+      "path": "src/SirkAgent.Report/Program.cs",
+      "line": 67,
+      "rule": "shell-execute-enabled",
+      "snippet": "try { Process.Start(new ProcessStartInfo(htmlPath) { UseShellExecute = true }); }"
+    }
+  ]
+}

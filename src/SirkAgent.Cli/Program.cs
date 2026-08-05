@@ -118,10 +118,11 @@ if (command == "enroll")
 {
     var endpointValue = GetOption(args, "--endpoint");
     var tokenFile = GetOption(args, "--bootstrap-token-file");
-    if (!Uri.TryCreate(endpointValue, UriKind.Absolute, out var endpoint) ||
-        endpoint.Scheme != Uri.UriSchemeHttps &&
-        (endpoint.Scheme != Uri.UriSchemeHttp || !endpoint.IsLoopback))
+    if (!Uri.TryCreate(endpointValue, UriKind.Absolute, out var suppliedEndpoint) ||
+        suppliedEndpoint.Scheme != Uri.UriSchemeHttps &&
+        (suppliedEndpoint.Scheme != Uri.UriSchemeHttp || !suppliedEndpoint.IsLoopback))
         throw new ArgumentException("Enrollment endpoint must use HTTPS (HTTP is allowed only for loopback testing).");
+    var endpoint = CanonicalAgentEndpoint(suppliedEndpoint, "/api/v1/agent/enroll");
     if (string.IsNullOrWhiteSpace(tokenFile) || !File.Exists(tokenFile))
         throw new FileNotFoundException("Bootstrap token file was not found.", tokenFile);
 
@@ -174,8 +175,9 @@ if (command == "enroll")
         throw new InvalidDataException("Enrollment response does not match this device.");
 
     var checkInEndpoint = string.IsNullOrWhiteSpace(enrollment.CheckInEndpoint)
-        ? new Uri(endpoint, "/api/agent/v1/checkin")
-        : new Uri(endpoint, enrollment.CheckInEndpoint);
+        ? CanonicalAgentEndpoint(endpoint, "/api/v1/agent/checkin")
+        : CanonicalAgentEndpoint(new Uri(endpoint, enrollment.CheckInEndpoint),
+            "/api/v1/agent/checkin");
     if (checkInEndpoint.Scheme != Uri.UriSchemeHttps &&
         (checkInEndpoint.Scheme != Uri.UriSchemeHttp || !checkInEndpoint.IsLoopback))
         throw new InvalidDataException("Enrollment returned an unsafe check-in endpoint.");
@@ -228,8 +230,10 @@ if (command == "rotate-device-key")
     var credential = store.Load() ?? throw new InvalidOperationException("This device is not enrolled.");
     if (!Uri.TryCreate(credential.Endpoint, UriKind.Absolute, out var checkInEndpoint))
         throw new InvalidDataException("Stored Portal endpoint is invalid.");
-    var rotateEndpoint = new Uri(checkInEndpoint, "/api/agent/v1/rotate-key");
-    var keyName = DeviceSigningKey.NameFor(credential.TenantId, credential.DeviceId);
+    var rotateEndpoint = new Uri(checkInEndpoint, "/api/v1/agent/rotate-key");
+    var previousKeyName = credential.KeyName
+                          ?? DeviceSigningKey.NameFor(credential.TenantId, credential.DeviceId);
+    var keyName = previousKeyName + "-R" + Guid.NewGuid().ToString("N");
     if (DeviceSigningKey.Exists(keyName))
         throw new InvalidOperationException("The non-exportable replacement key already exists; no state was changed.");
     try
@@ -259,6 +263,11 @@ if (command == "rotate-device-key")
             PrivateKeyPkcs8 = null,
             KeyName = keyName
         });
+        if (!string.Equals(previousKeyName, keyName, StringComparison.Ordinal) &&
+            DeviceSigningKey.Exists(previousKeyName))
+        {
+            DeviceSigningKey.Delete(previousKeyName);
+        }
     }
     catch
     {
@@ -287,9 +296,11 @@ if (command == "set-portal-endpoint")
     var credentialPath = Path.Combine(agentRoot, "portal-credential.bin");
     var store = new PortalCredentialStore(credentialPath, new DpapiMachineStateProtector());
     var credential = store.Load() ?? throw new InvalidOperationException("This device is not enrolled.");
-    var checkInEndpoint = endpoint.AbsolutePath.EndsWith("/api/agent/v1/checkin", StringComparison.OrdinalIgnoreCase)
-        ? endpoint
-        : new Uri(endpoint, "/api/agent/v1/checkin");
+    var checkInEndpoint = new UriBuilder(endpoint)
+    {
+        Path = "/api/v1/agent/checkin",
+        Query = string.Empty
+    }.Uri;
     store.Save(credential with { Endpoint = checkInEndpoint.AbsoluteUri });
     Console.WriteLine(JsonSerializer.Serialize(new
     {
@@ -658,6 +669,9 @@ static void SignDeviceRequest(HttpRequestMessage request, byte[] payload, Portal
     request.Headers.Add("X-SIRK-Nonce", nonce);
     request.Headers.Add("X-SIRK-Signature", Convert.ToBase64String(signature));
 }
+
+static Uri CanonicalAgentEndpoint(Uri source, string path) =>
+    new UriBuilder(source) { Path = path, Query = string.Empty }.Uri;
 
 static string? GetOption(string[] values, string name)
 {

@@ -1,0 +1,65 @@
+name: Apply full-frame resolution fix
+
+on:
+  push:
+    branches:
+      - fix/full-frame-resolution
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/full-frame-resolution
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Apply full-frame resolution fix
+        shell: pwsh
+        run: python .github/scripts/apply_full_frame_resolution.py
+      - name: Restore and build Session broker
+        shell: pwsh
+        run: |
+          dotnet restore src/SirkAgent.Session/SirkAgent.Session.csproj
+          if ($LASTEXITCODE -ne 0) { throw 'Session restore failed.' }
+          dotnet build src/SirkAgent.Session/SirkAgent.Session.csproj -c Release --no-restore
+          if ($LASTEXITCODE -ne 0) { throw 'Session build failed.' }
+      - name: Validate full-frame scale contract
+        shell: pwsh
+        run: |
+          $source = Get-Content src/SirkAgent.Session/Program.cs -Raw
+          if ($source -notmatch 'encodeFullFrame = forceFull \|\| DirtyRegionsRequireFullFrame') {
+            throw 'Full-frame coverage is not selected before the encode scale.'
+          }
+          if ($source -match 'encodeScale = forceFull \|\| refinement') {
+            throw 'Legacy low-resolution full-frame scale selection remains.'
+          }
+          if ($source -notmatch 'dirtyArea >= \(long\)bounds.Width \* bounds.Height \* 7 / 10') {
+            throw 'Full-frame dirty coverage threshold is missing.'
+          }
+      - name: Publish Session broker
+        shell: pwsh
+        run: |
+          $publish = Join-Path $env:RUNNER_TEMP 'session-full-frame-fix'
+          dotnet publish src/SirkAgent.Session/SirkAgent.Session.csproj -c Release -r win-x64 `
+            --self-contained false --no-restore -o $publish
+          if ($LASTEXITCODE -ne 0) { throw 'Session publish failed.' }
+          $runtimeConfig = Get-Content (Join-Path $publish 'SirkAgent.Session.runtimeconfig.json') -Raw
+          if ($runtimeConfig -match 'Microsoft.WindowsDesktop.App') {
+            throw 'Session unexpectedly requires Windows Desktop Runtime.'
+          }
+      - name: Commit product change
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/SirkAgent.Session/Program.cs
+          git commit -m 'fix: encode full desktop frames at base resolution'
+          git push origin HEAD:fix/full-frame-resolution

@@ -24,7 +24,7 @@ jobs:
       - name: Apply native Session broker refactor
         shell: pwsh
         run: |
-          python .github/scripts/refactor_session_program.py
+          python .github/scripts/refactor_session_program_v2.py
           python .github/scripts/refactor_session_runtime.py
       - name: Restore and build Session broker
         shell: pwsh
@@ -72,6 +72,7 @@ jobs:
         run: |
           Remove-Item .github/workflows/apply-remove-windows-desktop-runtime.yml -Force
           Remove-Item .github/scripts/refactor_session_program.py -Force
+          Remove-Item .github/scripts/refactor_session_program_v2.py -Force
           Remove-Item .github/scripts/refactor_session_runtime.py -Force
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'

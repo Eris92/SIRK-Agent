@@ -23,7 +23,7 @@ if ($pipe -match 'internal static bool IsAvailable\(int sessionId\)\s*=>\s*Proce
 if ($session -notmatch 'Lazy<ImageCodecInfo> JpegEncoder') {
     throw 'JPEG codec initialization is still eager during broker startup.'
 }
-if ($session -notmatch 'private static async Task<int> Main\(\)') {
+if ($session -notmatch 'private static async Task<int> Main\((?:string\[\] args)?\)') {
     throw 'Session broker fatal startup guard is missing.'
 }
 if ($session -notmatch 'LogFatalStartup\(error\)') {

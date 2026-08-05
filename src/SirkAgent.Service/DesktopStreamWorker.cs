@@ -43,7 +43,8 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
     private int _deltaScalePercent = 100;
     private int _profileDeltaScalePercent = 100;
     private int _h264Available = 1;
-    private int _profileQuality = 72;
+    private int _profileQuality = 85;
+    private string _imageEncoding = "webp";
     private long _lastStreamStatusWrite;
     private readonly Queue<(DateTimeOffset At, int Bytes)> _bandwidthWindow = new();
     private DateTimeOffset _lastAdaptiveChange = DateTimeOffset.MinValue;
@@ -89,6 +90,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                     targetKbps = Volatile.Read(ref _targetKbps),
                     targetFps = Volatile.Read(ref _targetFps),
                     deltaScalePercent = Volatile.Read(ref _deltaScalePercent),
+                    imageEncoding = Volatile.Read(ref _imageEncoding),
                     forceFull
                 }, Json);
                 string responseJson;
@@ -164,7 +166,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                     Number(data, "accumulatedFrames"),
                     Number(data, "cursorX"), Number(data, "cursorY"),
                     DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                    encoding.StartsWith("H264", StringComparison.Ordinal) ? "video/h264" : "image/jpeg",
+                    ContentTypeForEncoding(encoding),
                     encoding, Bool(data, "keyFrame"), Bool(data, "cursorOnly"));
                 var enqueued = false;
                 if (Volatile.Read(ref _dirtyRegionMode) != 0)
@@ -265,10 +267,13 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
             var requestedDeltaScaleValue = Integer(input, "deltaScalePercent");
             var requestedDeltaScale = requestedDeltaScaleValue == 0 ? 100 :
                 Math.Clamp(requestedDeltaScaleValue, 10, 100);
+            var requestedImageEncoding = NormalizeImageEncoding(Text(input, "imageEncoding"));
             var previousDirtyRegionMode = Volatile.Read(ref _dirtyRegionMode);
             var previousSessionId = Volatile.Read(ref _sessionId);
+            var previousImageEncoding = Volatile.Read(ref _imageEncoding);
             if (requestedWidth != previousWidth || requestedFps != previousFps ||
-                requestedDirtyRegionMode != previousDirtyRegionMode || requestedSessionId != previousSessionId)
+                requestedDirtyRegionMode != previousDirtyRegionMode || requestedSessionId != previousSessionId ||
+                !string.Equals(requestedImageEncoding, previousImageEncoding, StringComparison.Ordinal))
             {
                 var recycleSessionId = InteractiveSessionPipe.Resolve(
                     previousSessionId >= 0 ? previousSessionId : requestedSessionId >= 0 ? requestedSessionId : null);
@@ -278,8 +283,12 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                     requestedSessionId >= 0 ? requestedSessionId : recycleSessionId);
             }
             Volatile.Write(ref _maxWidth, requestedWidth);
-            Volatile.Write(ref _quality, Math.Clamp(Integer(input, "quality"), 25, 80));
-            Volatile.Write(ref _profileQuality, Volatile.Read(ref _quality));
+            var requestedQualityValue = Integer(input, "quality");
+            var requestedQuality = requestedQualityValue == 0 ? 85 :
+                Math.Clamp(requestedQualityValue, 10, 100);
+            Volatile.Write(ref _quality, requestedQuality);
+            Volatile.Write(ref _profileQuality, requestedQuality);
+            Volatile.Write(ref _imageEncoding, requestedImageEncoding);
             Volatile.Write(ref _targetKbps, Math.Clamp(Integer(input, "targetKbps"), 300, 8000));
             Volatile.Write(ref _targetFps, requestedFps);
             Volatile.Write(ref _profileTargetFps, requestedFps);
@@ -424,6 +433,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
                         targetKbps = Volatile.Read(ref _targetKbps),
                         targetFps = Volatile.Read(ref _targetFps),
                         frameMode = Volatile.Read(ref _dirtyRegionMode) != 0 ? "tiles" : "h264",
+                        imageEncoding = Volatile.Read(ref _imageEncoding),
                         deltaScalePercent = Volatile.Read(ref _deltaScalePercent),
                         bitrateKbps
                     }, Json);
@@ -502,7 +512,8 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
         {
             if (Volatile.Read(ref _dirtyRegionMode) != 0 && deltaScale > 10)
                 Volatile.Write(ref _deltaScalePercent, Math.Max(10, deltaScale - 5));
-            else if (quality > 30) Volatile.Write(ref _quality, Math.Max(25, quality - 3));
+            else if (!string.Equals(Volatile.Read(ref _imageEncoding), "png", StringComparison.Ordinal) &&
+                     quality > 20) Volatile.Write(ref _quality, Math.Max(10, quality - 3));
             else if (Volatile.Read(ref _dirtyRegionMode) != 0 && targetFps > 5)
                 Volatile.Write(ref _targetFps, Math.Max(5, targetFps - 5));
             _lastAdaptiveChange = now;
@@ -521,6 +532,24 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
         }
         return bitrateKbps;
     }
+
+    private static string NormalizeImageEncoding(string? value) =>
+        value?.Trim().ToLowerInvariant() switch
+        {
+            "png" => "png",
+            "jpeg" or "jpg" => "jpeg",
+            "webp" => "webp",
+            _ => "webp"
+        };
+
+    private static string ContentTypeForEncoding(string encoding) =>
+        encoding.ToUpperInvariant() switch
+        {
+            "PNG" => "image/png",
+            "WEBP" => "image/webp",
+            var value when value.StartsWith("H264", StringComparison.Ordinal) => "video/h264",
+            _ => "image/jpeg"
+        };
 
     private static string Number(JsonElement data, string name) =>
         data.TryGetProperty(name, out var value) ? value.ToString() : "0";

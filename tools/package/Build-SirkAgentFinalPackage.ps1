@@ -69,10 +69,16 @@ $files = Get-ChildItem $package -File -Recurse |
     deployment = 'framework-dependent'
     targetFramework = 'net10.0-windows'
     requiredRuntime = 'Microsoft.NETCore.App 10.0'
+    desktopRuntimeRequired = $false
     compatibilityMode = $false
     authenticodeSigned = $true
     authenticodeSigner = 'CN=Sir-K Mini RDP Signing'
 } | ConvertTo-Json | Set-Content (Join-Path $package 'runtime-manifest.json') -Encoding UTF8
+
+$sessionRuntimeConfig = Get-Content (Join-Path $package 'Session\SirkAgent.Session.runtimeconfig.json') -Raw
+if ($sessionRuntimeConfig -match 'Microsoft.WindowsDesktop.App') {
+    throw 'Session broker still requires Microsoft.WindowsDesktop.App.'
+}
 
 $forbidden = @('coreclr.dll', 'hostfxr.dll', 'hostpolicy.dll', 'System.Private.CoreLib.dll')
 $found = $forbidden | Where-Object { Test-Path (Join-Path $package $_) }

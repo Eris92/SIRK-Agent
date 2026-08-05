@@ -215,11 +215,11 @@ internal static class NativeInput
         var virtualKey = ResolveVirtualKey(key);
         var modifierKeys = ResolveModifiers(modifiers);
         var inputs = new List<Input>(modifierKeys.Count * 2 + 2);
-        inputs.AddRange(modifierKeys.Select(value => Keyboard(value, 0, 0)));
-        inputs.Add(Keyboard(virtualKey, 0, 0));
-        inputs.Add(Keyboard(virtualKey, 0, KeyEventKeyUp));
+        inputs.AddRange(modifierKeys.Select(value => Keyboard(value, '\0', 0)));
+        inputs.Add(Keyboard(virtualKey, '\0', 0));
+        inputs.Add(Keyboard(virtualKey, '\0', KeyEventKeyUp));
         for (var index = modifierKeys.Count - 1; index >= 0; index--)
-            inputs.Add(Keyboard(modifierKeys[index], 0, KeyEventKeyUp));
+            inputs.Add(Keyboard(modifierKeys[index], '\0', KeyEventKeyUp));
         Send(inputs);
     }
 

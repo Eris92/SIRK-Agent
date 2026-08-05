@@ -1,5 +1,5 @@
-using System.Diagnostics;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -19,27 +19,27 @@ internal static class InteractiveSessionPipe
     {
         if (requested is >= 0 and <= 65535) return requested.Value;
         if (requested is not null) throw new InvalidDataException("Nieprawidłowy identyfikator sesji.");
-        var active = WTSGetActiveConsoleSessionId();
-        if (active == uint.MaxValue) throw new InvalidOperationException("Brak aktywnej sesji konsoli.");
-        return checked((int)active);
+        return ResolveActiveSession()
+               ?? throw new InvalidOperationException("Brak aktywnej interaktywnej sesji użytkownika.");
     }
 
     internal static object[] Sessions()
     {
-        var active = WTSGetActiveConsoleSessionId();
+        var active = ResolveActiveSession();
         var helperAvailable = false;
-        if (active != uint.MaxValue)
+        if (active is not null)
         {
             try
             {
-                EnsureAvailable(checked((int)active));
+                EnsureAvailable(active.Value);
                 helperAvailable = true;
             }
             catch
             {
-                helperAvailable = IsAvailable(checked((int)active));
+                helperAvailable = IsAvailable(active.Value);
             }
         }
+
         var sessions = Process.GetProcessesByName("SirkAgent.Session")
             .Select(process =>
             {
@@ -47,7 +47,7 @@ internal static class InteractiveSessionPipe
                 {
                     return new SessionDescriptor(
                         process.SessionId,
-                        active != uint.MaxValue && process.SessionId == (int)active,
+                        active is not null && process.SessionId == active.Value,
                         true,
                         process.Id);
                 }
@@ -60,8 +60,10 @@ internal static class InteractiveSessionPipe
             .Select(group => group.First())
             .OrderBy(item => item.sessionId)
             .ToList();
-        if (active != uint.MaxValue && sessions.All(item => item.sessionId != (int)active))
-            sessions.Add(new SessionDescriptor((int)active, true, helperAvailable, 0));
+
+        if (active is not null && sessions.All(item => item.sessionId != active.Value))
+            sessions.Add(new SessionDescriptor(active.Value, true, helperAvailable, 0));
+
         return sessions.OrderBy(item => item.sessionId).Cast<object>().ToArray();
     }
 
@@ -133,6 +135,94 @@ internal static class InteractiveSessionPipe
         }
     }
 
+    private static int? ResolveActiveSession()
+    {
+        var console = WTSGetActiveConsoleSessionId();
+        if (console != uint.MaxValue && CanOpenUserToken(console))
+            return checked((int)console);
+
+        foreach (var sessionId in EnumerateActiveWtsSessions())
+        {
+            if (CanOpenUserToken((uint)sessionId))
+                return sessionId;
+        }
+
+        foreach (var process in Process.GetProcessesByName("explorer"))
+        {
+            using (process)
+            {
+                try
+                {
+                    if (process.SessionId > 0 && CanOpenUserToken((uint)process.SessionId))
+                        return process.SessionId;
+                }
+                catch (InvalidOperationException)
+                {
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<int> EnumerateActiveWtsSessions()
+    {
+        if (!WTSEnumerateSessions(
+                IntPtr.Zero,
+                0,
+                1,
+                out var sessionInfo,
+                out var count))
+        {
+            yield break;
+        }
+
+        try
+        {
+            var size = Marshal.SizeOf<WtsSessionInfo>();
+            for (var index = 0; index < count; index++)
+            {
+                var pointer = IntPtr.Add(sessionInfo, index * size);
+                var session = Marshal.PtrToStructure<WtsSessionInfo>(pointer);
+                if (session.State == WtsConnectState.Active && session.SessionId is >= 0 and <= 65535)
+                    yield return session.SessionId;
+            }
+        }
+        finally
+        {
+            WTSFreeMemory(sessionInfo);
+        }
+    }
+
+    private static bool CanOpenUserToken(uint sessionId)
+    {
+        if (!WTSQueryUserToken(sessionId, out var token)) return false;
+        CloseHandle(token);
+        return true;
+    }
+
+    private enum WtsConnectState
+    {
+        Active = 0,
+        Connected = 1,
+        ConnectQuery = 2,
+        Shadow = 3,
+        Disconnected = 4,
+        Idle = 5,
+        Listen = 6,
+        Reset = 7,
+        Down = 8,
+        Init = 9
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WtsSessionInfo
+    {
+        public int SessionId;
+        public IntPtr WinStationName;
+        public WtsConnectState State;
+    }
+
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct StartupInfo
     {
@@ -156,6 +246,17 @@ internal static class InteractiveSessionPipe
 
     [DllImport("kernel32.dll")]
     private static extern uint WTSGetActiveConsoleSessionId();
+
+    [DllImport("wtsapi32.dll", SetLastError = true)]
+    private static extern bool WTSEnumerateSessions(
+        IntPtr serverHandle,
+        int reserved,
+        int version,
+        out IntPtr sessionInfo,
+        out int count);
+
+    [DllImport("wtsapi32.dll")]
+    private static extern void WTSFreeMemory(IntPtr memory);
 
     [DllImport("wtsapi32.dll", SetLastError = true)]
     private static extern bool WTSQueryUserToken(uint sessionId, out IntPtr token);

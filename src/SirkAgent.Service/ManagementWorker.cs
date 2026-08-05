@@ -328,13 +328,14 @@ internal sealed class ManagementWorker : BackgroundService
                          (config?.PortalEnabled == true ? config.DeviceToken : null);
         if (string.IsNullOrWhiteSpace(endpointValue) || string.IsNullOrWhiteSpace(tokenValue))
             return;
-        if (!Uri.TryCreate(endpointValue, UriKind.Absolute, out var endpoint) ||
-            endpoint.Scheme != Uri.UriSchemeHttps &&
-            (endpoint.Scheme != Uri.UriSchemeHttp || !endpoint.IsLoopback))
+        if (!Uri.TryCreate(endpointValue, UriKind.Absolute, out var configuredEndpoint) ||
+            configuredEndpoint.Scheme != Uri.UriSchemeHttps &&
+            (configuredEndpoint.Scheme != Uri.UriSchemeHttp || !configuredEndpoint.IsLoopback))
         {
             _logger.LogWarning("Portal check-in endpoint is invalid.");
             return;
         }
+        var endpoint = CanonicalAgentEndpoint(configuredEndpoint, "/api/v1/agent/checkin");
 
         var items = queue.ReadReady(Math.Clamp(config?.BatchSize ?? 25, 1, 100), DateTimeOffset.UtcNow);
         var payload = new
@@ -407,8 +408,16 @@ internal sealed class ManagementWorker : BackgroundService
             }
             if (!portalResponse.Ok)
                 throw new InvalidDataException("Portal rejected the check-in.");
+            SynchronizeTrustedPolicyKeys(paths.TrustedKeysPath, portalResponse.TrustedPolicyKeys);
             new PortalPolicyDeliveryStore(paths.InboxDirectory, _json)
                 .Store(TenantId, deviceId, portalResponse.Policies);
+            if (credential is not null &&
+                !string.Equals(credential.Endpoint, endpoint.AbsoluteUri, StringComparison.Ordinal))
+            {
+                new PortalCredentialStore(paths.PortalCredentialPath,
+                    new DpapiMachineStateProtector()).Save(
+                    credential with { Endpoint = endpoint.AbsoluteUri });
+            }
             DeleteCommandResults(paths.CommandResultsDirectory);
             _ = await ExecuteRemoteCommandsAsync(paths, portalResponse.Commands, token);
             foreach (var item in items)
@@ -434,6 +443,77 @@ internal sealed class ManagementWorker : BackgroundService
             }, _json);
         }
     }
+
+
+    private void SynchronizeTrustedPolicyKeys(
+        string path,
+        IReadOnlyList<TrustedKeyEntry>? supplied)
+    {
+        if (supplied is not { Count: > 0 }) return;
+        if (supplied.Count > 10)
+            throw new InvalidDataException("Portal returned too many trusted policy keys.");
+
+        var normalized = supplied.Select(ValidateTrustedPolicyKey)
+            .OrderBy(value => value.KeyId, StringComparer.Ordinal)
+            .ToArray();
+        if (normalized.Select(value => value.KeyId).Distinct(StringComparer.Ordinal).Count() != normalized.Length)
+            throw new InvalidDataException("Portal returned duplicate trusted policy key identifiers.");
+
+        if (File.Exists(path))
+        {
+            var existing = JsonSerializer.Deserialize<TrustedKeyDocument>(File.ReadAllBytes(path), _json)
+                           ?? new TrustedKeyDocument([]);
+            var current = existing.Keys.Select(ValidateTrustedPolicyKey)
+                .OrderBy(value => value.KeyId, StringComparer.Ordinal)
+                .ToArray();
+            if (current.Length != normalized.Length ||
+                current.Where((value, index) =>
+                        !string.Equals(value.KeyId, normalized[index].KeyId, StringComparison.Ordinal) ||
+                        !PublicKeysEqual(value.PublicKeyPem, normalized[index].PublicKeyPem))
+                    .Any())
+            {
+                throw new InvalidDataException(
+                    "Portal attempted to replace an established trusted policy key set.");
+            }
+            return;
+        }
+
+        AtomicFile.WriteJson(path, new TrustedKeyDocument(normalized), _json);
+    }
+
+    private static TrustedKeyEntry ValidateTrustedPolicyKey(TrustedKeyEntry value)
+    {
+        if (string.IsNullOrWhiteSpace(value.KeyId) || value.KeyId.Length > 128 ||
+            string.IsNullOrWhiteSpace(value.PublicKeyPem))
+            throw new InvalidDataException("Portal returned an invalid trusted policy key.");
+        using var key = ECDsa.Create();
+        key.ImportFromPem(value.PublicKeyPem);
+        if (key.KeySize != 256)
+            throw new InvalidDataException("Trusted policy key must use ECDSA P-256.");
+        return new TrustedKeyEntry(value.KeyId.Trim(), key.ExportSubjectPublicKeyInfoPem());
+    }
+
+    private static bool PublicKeysEqual(string left, string right)
+    {
+        using var leftKey = ECDsa.Create();
+        using var rightKey = ECDsa.Create();
+        leftKey.ImportFromPem(left);
+        rightKey.ImportFromPem(right);
+        var leftBytes = leftKey.ExportSubjectPublicKeyInfo();
+        var rightBytes = rightKey.ExportSubjectPublicKeyInfo();
+        try
+        {
+            return CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(leftBytes);
+            CryptographicOperations.ZeroMemory(rightBytes);
+        }
+    }
+
+    private static Uri CanonicalAgentEndpoint(Uri source, string path) =>
+        new UriBuilder(source) { Path = path, Query = string.Empty }.Uri;
 
     private void WritePortalLoopDiagnostic(ManagementPaths paths, string stage) =>
         AtomicFile.WriteJson(Path.Combine(paths.Root, "portal-loop-diagnostic.json"),
@@ -648,7 +728,10 @@ internal sealed record ManagementConfig(bool Enabled, string? TelemetryEndpoint,
     string? PortalEndpoint = null, string? DeviceToken = null);
 internal sealed record IntegrityManifest(IReadOnlyList<IntegrityManifestEntry> Files);
 internal sealed record IntegrityManifestEntry(string Path, string Sha256);
-internal sealed record PortalCheckInResponse(bool Ok, IReadOnlyList<JsonElement>? Policies,
+internal sealed record PortalCheckInResponse(
+    bool Ok,
+    IReadOnlyList<TrustedKeyEntry>? TrustedPolicyKeys,
+    IReadOnlyList<JsonElement>? Policies,
     IReadOnlyList<PortalRemoteCommand>? Commands);
 
 internal sealed record ManagementPaths(string Root, string InboxDirectory, string AcceptedDirectory,

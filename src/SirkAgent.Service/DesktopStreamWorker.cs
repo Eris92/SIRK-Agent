@@ -535,7 +535,7 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
     private static Uri FrameEndpoint(string endpoint)
     {
         var source = new Uri(endpoint);
-        return new UriBuilder(source) { Path = "/api/agent/v1/desktop/frame", Query = "" }.Uri;
+        return new UriBuilder(source) { Path = "/api/v1/agent/desktop/frame", Query = "" }.Uri;
     }
 
     private static Uri DesktopSocketEndpoint(string endpoint)
@@ -544,14 +544,14 @@ internal sealed class DesktopStreamWorker(ILogger<DesktopStreamWorker> logger) :
         return new UriBuilder(source)
         {
             Scheme = source.Scheme == Uri.UriSchemeHttps ? "wss" : "ws",
-            Path = "/api/agent/v1/desktop/stream", Query = ""
+            Path = "/api/v1/agent/desktop/stream", Query = ""
         }.Uri;
     }
 
     private static Uri ControlEndpoint(string endpoint)
     {
         var source = new Uri(endpoint);
-        return new UriBuilder(source) { Path = "/api/agent/v1/desktop/control", Query = "" }.Uri;
+        return new UriBuilder(source) { Path = "/api/v1/agent/desktop/control", Query = "" }.Uri;
     }
 
     private static void WriteStatus(bool ok, string error)

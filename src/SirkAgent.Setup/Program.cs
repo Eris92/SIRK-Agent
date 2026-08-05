@@ -228,7 +228,7 @@ try
         if (!File.Exists(cli)) throw new FileNotFoundException("Installed sirkctl.exe was not found.", cli);
         var tokenFile = Path.Combine(work, "enrollment-token.txt");
         await File.WriteAllTextAsync(tokenFile, token);
-        Run(cli, new[] { "enroll", "--endpoint", portalOrigin + "/api/agent/v1/enroll", "--bootstrap-token-file", tokenFile });
+        Run(cli, new[] { "enroll", "--endpoint", portalOrigin + "/api/v1/agent/enroll", "--bootstrap-token-file", tokenFile });
         Run(cli, new[] { "sync" });
 
         var credential = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),

@@ -70,6 +70,8 @@ jobs:
             dotnet test $test.FullName -c Release --no-build
             if ($LASTEXITCODE -ne 0) { throw "Tests failed: $($test.FullName)" }
           }
+          & pwsh -NoProfile -File tests/session-broker-readiness-contract.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Session broker readiness contract failed.' }
           & pwsh -NoProfile -File tests/shared-updater-installer-contract.ps1
           if ($LASTEXITCODE -ne 0) { throw 'Shared Updater installer contract failed.' }
 

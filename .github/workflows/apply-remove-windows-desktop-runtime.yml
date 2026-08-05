@@ -68,16 +68,20 @@ jobs:
           if ($source -match 'System.Windows.Forms|System.Windows.Automation|AutomationElement|SendKeys\.') {
             throw 'WinForms or WPF API remains.'
           }
-      - name: Commit final refactor
+      - name: Commit product refactor
         shell: pwsh
         run: |
-          Remove-Item .github/workflows/apply-remove-windows-desktop-runtime.yml -Force
+          git checkout -- .github/workflows/dotnet10-contract.yml
           Remove-Item .github/scripts/refactor_session_program.py -Force
           Remove-Item .github/scripts/refactor_session_program_v2.py -Force
           Remove-Item .github/scripts/refactor_session_runtime.py -Force
           Remove-Item .github/scripts/fix_native_input_chars.py -Force
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
+          git add src/SirkAgent.Session/Program.cs `
+                  src/SirkAgent.Session/NativeDesktop.cs `
+                  src/SirkAgent.Session/SirkAgent.Session.csproj `
+                  tools/package/Build-SirkAgentFinalPackage.ps1 `
+                  .github/scripts
           git commit -m 'refactor: remove Windows Desktop Runtime from Agent session broker'
           git push origin HEAD:refactor/remove-windows-desktop-runtime

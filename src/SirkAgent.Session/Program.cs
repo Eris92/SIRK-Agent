@@ -369,9 +369,12 @@ internal static class Program
         }
         var encodeTimer = Stopwatch.StartNew();
         using var output = new MemoryStream();
-        var encodeScale = forceFull || refinement ? fullScale : fullScale * deltaScalePercent / 100d;
-        using var encodedBitmap = BuildEncodedBitmap(bitmap, bounds, dirtyRectangles, encodeScale, forceFull,
-            out var fullFrame, out var patches);
+        var encodeFullFrame = forceFull || DirtyRegionsRequireFullFrame(dirtyRectangles, bounds);
+        var encodeScale = encodeFullFrame || refinement
+            ? fullScale
+            : fullScale * deltaScalePercent / 100d;
+        using var encodedBitmap = BuildEncodedBitmap(bitmap, bounds, dirtyRectangles, encodeScale,
+            encodeFullFrame, out var fullFrame, out var patches);
         if (fullFrame)
         {
             LastFullFrames[monitorIndex] = now;
@@ -602,6 +605,15 @@ internal static class Program
         GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, true, true);
         GC.WaitForPendingFinalizers();
         GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, true, true);
+    }
+
+    private static bool DirtyRegionsRequireFullFrame(Rectangle[] dirtyRectangles, Rectangle bounds)
+    {
+        var regions = MergeDirtyRectangles(dirtyRectangles, bounds);
+        if (regions.Count > 64) regions = CoalesceToGrid(regions, bounds, 8, 8);
+        if (regions.Count == 0) return true;
+        var dirtyArea = regions.Sum(value => (long)value.Width * value.Height);
+        return dirtyArea >= (long)bounds.Width * bounds.Height * 7 / 10;
     }
 
     private static Bitmap BuildEncodedBitmap(Bitmap source, Rectangle bounds, Rectangle[] dirtyRectangles,

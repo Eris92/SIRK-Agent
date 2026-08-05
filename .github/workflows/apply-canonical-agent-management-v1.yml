@@ -65,11 +65,12 @@ jobs:
       - name: Commit product changes
         shell: pwsh
         run: |
+          git checkout -- .github/workflows/dotnet10-contract.yml .github/workflows/product-test-readiness.yml
           Remove-Item .github/workflows/apply-canonical-agent-management-v1.yml -Force
           Remove-Item .github/scripts/apply_canonical_agent_management_v1.py -Force
           Remove-Item .github/scripts/patch_canonical_agent_cli_routes.py -Force
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
+          git add src tests/canonical-agent-management-v1-contract.ps1 .github/scripts .github/workflows/apply-canonical-agent-management-v1.yml
           git commit -m 'feat: use canonical signed Agent management v1'
           git push origin HEAD:feat/canonical-agent-management-v1

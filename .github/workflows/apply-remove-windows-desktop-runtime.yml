@@ -1,0 +1,80 @@
+name: Apply Windows Desktop Runtime removal
+
+on:
+  push:
+    branches:
+      - refactor/remove-windows-desktop-runtime
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/remove-windows-desktop-runtime
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Apply native Session broker refactor
+        shell: pwsh
+        run: |
+          python .github/scripts/refactor_session_program.py
+          python .github/scripts/refactor_session_runtime.py
+      - name: Restore and build Session broker
+        shell: pwsh
+        run: |
+          dotnet restore src/SirkAgent.Session/SirkAgent.Session.csproj
+          if ($LASTEXITCODE -ne 0) { throw 'Session restore failed.' }
+          dotnet build src/SirkAgent.Session/SirkAgent.Session.csproj -c Release --no-restore
+          if ($LASTEXITCODE -ne 0) { throw 'Session build failed.' }
+      - name: Validate framework dependency
+        shell: pwsh
+        run: |
+          $publish = Join-Path $env:RUNNER_TEMP 'session-core-runtime-only'
+          dotnet publish src/SirkAgent.Session/SirkAgent.Session.csproj -c Release -r win-x64 `
+            --self-contained false --no-restore -o $publish
+          if ($LASTEXITCODE -ne 0) { throw 'Session publish failed.' }
+          $runtimeConfig = Get-Content (Join-Path $publish 'SirkAgent.Session.runtimeconfig.json') -Raw
+          if ($runtimeConfig -match 'Microsoft.WindowsDesktop.App') {
+            throw 'Session still requires Microsoft.WindowsDesktop.App.'
+          }
+          if ($runtimeConfig -notmatch 'Microsoft.NETCore.App') {
+            throw 'Session does not require Microsoft.NETCore.App.'
+          }
+          $deps = Get-Content (Join-Path $publish 'SirkAgent.Session.deps.json') -Raw
+          if ($deps -match 'System.Windows.Forms|PresentationFramework|PresentationCore|WindowsBase') {
+            throw 'WinForms or WPF dependency remains in publish output.'
+          }
+          $process = Start-Process -FilePath (Join-Path $publish 'SirkAgent.Session.exe') -PassThru -WindowStyle Hidden
+          Start-Sleep -Seconds 3
+          if ($process.HasExited) { throw "Session broker exited during startup. ExitCode=$($process.ExitCode)" }
+          Stop-Process -Id $process.Id -Force
+      - name: Validate repository contract
+        shell: pwsh
+        run: |
+          $project = Get-Content src/SirkAgent.Session/SirkAgent.Session.csproj -Raw
+          if ($project -match '<UseWindowsForms>|<UseWPF>|Microsoft.WindowsDesktop.App') {
+            throw 'Desktop Runtime project dependency remains.'
+          }
+          $source = (Get-ChildItem src/SirkAgent.Session -File -Filter '*.cs' |
+            ForEach-Object { Get-Content $_.FullName -Raw }) -join "`n"
+          if ($source -match 'System.Windows.Forms|System.Windows.Automation|AutomationElement|SendKeys\.') {
+            throw 'WinForms or WPF API remains.'
+          }
+      - name: Commit final refactor
+        shell: pwsh
+        run: |
+          Remove-Item .github/workflows/apply-remove-windows-desktop-runtime.yml -Force
+          Remove-Item .github/scripts/refactor_session_program.py -Force
+          Remove-Item .github/scripts/refactor_session_runtime.py -Force
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'refactor: remove Windows Desktop Runtime from Agent session broker'
+          git push origin HEAD:refactor/remove-windows-desktop-runtime

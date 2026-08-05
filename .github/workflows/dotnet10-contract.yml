@@ -49,6 +49,16 @@ jobs:
             throw 'Legacy runtime or compatibility reference detected.'
           }
 
+          $sessionProject = Get-Content 'src/SirkAgent.Session/SirkAgent.Session.csproj' -Raw
+          if ($sessionProject -match '<UseWindowsForms>|<UseWPF>|Microsoft.WindowsDesktop.App') {
+            throw 'SirkAgent.Session still requires Windows Desktop Runtime.'
+          }
+          $sessionSource = (Get-ChildItem 'src/SirkAgent.Session' -File -Filter '*.cs' |
+            ForEach-Object { Get-Content $_.FullName -Raw }) -join "`n"
+          if ($sessionSource -match 'System.Windows.Forms|System.Windows.Automation|AutomationElement|SendKeys\.') {
+            throw 'SirkAgent.Session still contains WinForms or WPF APIs.'
+          }
+
       - name: Restore build and test
         shell: pwsh
         run: |
@@ -65,5 +75,22 @@ jobs:
             dotnet test $test.FullName -c Release --no-restore
             if ($LASTEXITCODE -ne 0) { throw "Tests failed: $($test.FullName)" }
           }
+
+          $publish = Join-Path $env:RUNNER_TEMP 'sirk-session-runtime-contract'
+          dotnet publish src/SirkAgent.Session/SirkAgent.Session.csproj -c Release -r win-x64 `
+            --self-contained false --no-restore -o $publish
+          if ($LASTEXITCODE -ne 0) { throw 'SirkAgent.Session publish failed.' }
+          $runtimeConfig = Get-Content (Join-Path $publish 'SirkAgent.Session.runtimeconfig.json') -Raw
+          if ($runtimeConfig -match 'Microsoft.WindowsDesktop.App') {
+            throw 'Published Session broker still requires Microsoft.WindowsDesktop.App.'
+          }
+          if ($runtimeConfig -notmatch 'Microsoft.NETCore.App') {
+            throw 'Published Session broker does not declare Microsoft.NETCore.App.'
+          }
+          $deps = Get-Content (Join-Path $publish 'SirkAgent.Session.deps.json') -Raw
+          if ($deps -match 'System.Windows.Forms|PresentationFramework|PresentationCore|WindowsBase') {
+            throw 'Published Session broker contains WinForms or WPF dependencies.'
+          }
+
           & pwsh -NoProfile -File tests/shared-updater-installer-contract.ps1
           if ($LASTEXITCODE -ne 0) { throw 'Shared Updater installer contract failed.' }

@@ -27,8 +27,9 @@ internal static class Program
     private const uint MouseEventMiddleUp = 0x0040;
     private const uint MouseEventWheel = 0x0800;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
-    private static readonly ImageCodecInfo JpegEncoder = ImageCodecInfo.GetImageEncoders()
-        .First(value => value.FormatID == ImageFormat.Jpeg.Guid);
+    private static readonly Lazy<ImageCodecInfo> JpegEncoder = new(() =>
+        ImageCodecInfo.GetImageEncoders()
+            .First(value => value.FormatID == ImageFormat.Jpeg.Guid));
     private static DateTimeOffset _lastActivitySampleUtc = DateTimeOffset.UtcNow;
     private static System.Drawing.Point? _lastCursorPosition;
     private static readonly object CaptureSync = new();
@@ -41,7 +42,21 @@ internal static class Program
     private static long _lastVideoRequestTimestamp;
 
     [STAThread]
-    private static async Task Main()
+    private static async Task<int> Main()
+    {
+        try
+        {
+            await RunAsync();
+            return 0;
+        }
+        catch (Exception error)
+        {
+            LogFatalStartup(error);
+            return 1;
+        }
+    }
+
+    private static async Task RunAsync()
     {
         using var singleInstance = new Mutex(true, "Local\\SIRK-Agent-Interactive-Session-" + SessionId,
             out var ownsMutex);
@@ -213,6 +228,21 @@ internal static class Program
         catch { }
     }
 
+    private static void LogFatalStartup(Exception error)
+    {
+        LogError(error);
+        try
+        {
+            var directory = Path.Combine(Environment.GetFolderPath(
+                Environment.SpecialFolder.CommonApplicationData), "SIRK", "Agent");
+            Directory.CreateDirectory(directory);
+            File.AppendAllText(Path.Combine(directory, "session-startup-error.log"),
+                DateTimeOffset.UtcNow.ToString("O") + " sessionId=" + SessionId + " " +
+                error + Environment.NewLine);
+        }
+        catch { }
+    }
+
     private static NamedPipeServerStream CreatePipe(string? name = null)
     {
         using var identity = WindowsIdentity.GetCurrent(TokenAccessLevels.Query);
@@ -350,7 +380,7 @@ internal static class Program
         }
         using var parameters = new EncoderParameters(1);
         parameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, (long)quality);
-        encodedBitmap.Save(output, JpegEncoder, parameters);
+        encodedBitmap.Save(output, JpegEncoder.Value, parameters);
         encodeTimer.Stop();
         var bytes = output.ToArray();
         totalTimer.Stop();

@@ -65,7 +65,6 @@ jobs:
           git add src/SirkAgent.Session/Program.cs `
                   src/SirkAgent.Session/SirkAgent.Session.csproj `
                   src/SirkAgent.Service/DesktopStreamWorker.cs `
-                  tests/desktop-image-codec-contract.ps1 `
-                  .github/workflows/dotnet10-contract.yml
+                  tests/desktop-image-codec-contract.ps1
           git commit -m 'feat: add WebP PNG and JPEG desktop image codecs'
           git push origin HEAD:feat/desktop-image-codecs

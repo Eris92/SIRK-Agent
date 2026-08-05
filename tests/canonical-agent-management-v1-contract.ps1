@@ -15,6 +15,8 @@ foreach ($required in @(
     '/api/v1/agent/checkin',
     'SynchronizeTrustedPolicyKeys',
     'Portal attempted to replace an established trusted policy key set',
+    'if (current.Length == 0)',
+    'AtomicFile.WriteJson(path, new TrustedKeyDocument(normalized), _json)',
     'PublicKeysEqual',
     'TrustedPolicyKeys',
     'credential with { Endpoint = endpoint.AbsoluteUri }'

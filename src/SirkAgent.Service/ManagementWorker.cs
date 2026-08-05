@@ -466,6 +466,11 @@ internal sealed class ManagementWorker : BackgroundService
             var current = existing.Keys.Select(ValidateTrustedPolicyKey)
                 .OrderBy(value => value.KeyId, StringComparer.Ordinal)
                 .ToArray();
+            if (current.Length == 0)
+            {
+                AtomicFile.WriteJson(path, new TrustedKeyDocument(normalized), _json);
+                return;
+            }
             if (current.Length != normalized.Length ||
                 current.Where((value, index) =>
                         !string.Equals(value.KeyId, normalized[index].KeyId, StringComparison.Ordinal) ||

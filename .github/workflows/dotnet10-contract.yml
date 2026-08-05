@@ -92,5 +92,29 @@ jobs:
             throw 'Published Session broker contains WinForms or WPF dependencies.'
           }
 
+          $process = Start-Process -FilePath (Join-Path $publish 'SirkAgent.Session.exe') `
+            -PassThru -WindowStyle Hidden
+          try {
+            Start-Sleep -Milliseconds 500
+            if ($process.HasExited) {
+              throw "Session broker exited before readiness. ExitCode=$($process.ExitCode)"
+            }
+            $sessionId = (Get-Process -Id $process.Id).SessionId
+            $client = [System.IO.Pipes.NamedPipeClientStream]::new(
+              '.', "SIRK-Agent-Interactive-Session-$sessionId",
+              [System.IO.Pipes.PipeDirection]::InOut,
+              [System.IO.Pipes.PipeOptions]::Asynchronous)
+            try {
+              $client.Connect(5000)
+              if (-not $client.IsConnected) { throw 'Session broker pipe did not become ready.' }
+            }
+            finally { $client.Dispose() }
+          }
+          finally {
+            if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+          }
+
+          & pwsh -NoProfile -File tests/session-broker-readiness-contract.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Session broker readiness contract failed.' }
           & pwsh -NoProfile -File tests/shared-updater-installer-contract.ps1
           if ($LASTEXITCODE -ne 0) { throw 'Shared Updater installer contract failed.' }

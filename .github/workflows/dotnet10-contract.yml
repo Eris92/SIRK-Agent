@@ -116,5 +116,7 @@ jobs:
 
           & pwsh -NoProfile -File tests/session-broker-readiness-contract.ps1
           if ($LASTEXITCODE -ne 0) { throw 'Session broker readiness contract failed.' }
+          & pwsh -NoProfile -File tests/canonical-agent-management-v1-contract.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical Agent management v1 contract failed.' }
           & pwsh -NoProfile -File tests/shared-updater-installer-contract.ps1
           if ($LASTEXITCODE -ne 0) { throw 'Shared Updater installer contract failed.' }

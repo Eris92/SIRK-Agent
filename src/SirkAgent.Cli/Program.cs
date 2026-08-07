@@ -15,7 +15,7 @@ var agentRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder
 if (command == "create-test-update-manifest")
 {
     var package = GetOption(args, "--package");
-    var version = GetOption(args, "--version") ?? "0.0.0-test";
+    var version = GetOption(args, "--version") ?? "0.1.1.999999";
     if (string.IsNullOrWhiteSpace(package) || !Directory.Exists(package))
         throw new DirectoryNotFoundException("Update package directory was not found.");
     package = Path.GetFullPath(package);
@@ -28,10 +28,11 @@ if (command == "create-test-update-manifest")
         .Where(path => !string.Equals(Path.GetFileName(path), "update-manifest.json", StringComparison.OrdinalIgnoreCase))
         .Select(path => new UpdateManifestFile(
             Path.GetRelativePath(package, path).Replace('\\', '/'),
+            new FileInfo(path).Length,
             Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)))))
         .OrderBy(file => file.Path, StringComparer.Ordinal)
         .ToArray();
-    var unsigned = new UpdateManifest(1, "SIRK Agent", version, "win-x64", files,
+    var unsigned = new UpdateManifest(1, "sirk-agent", "SIRK Agent", version, "win-x64", files,
         new PolicySignature { Algorithm = "ES256", KeyId = "sirk-test-es256", Value = "pending" });
     var signature = key.SignData(CanonicalJson.SerializeWithoutTopLevelSignature(unsigned),
         HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation);

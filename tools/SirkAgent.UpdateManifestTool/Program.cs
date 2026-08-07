@@ -17,7 +17,9 @@ static async Task<int> RunAsync(string[] args)
             var output = Path.GetFullPath(args[3]);
             var keyring = CreateKeyring(keyFile, keyId);
             Directory.CreateDirectory(Path.GetDirectoryName(output)!);
-            await File.WriteAllBytesAsync(output, JsonSerializer.SerializeToUtf8Bytes(keyring, JsonOptions()));
+            await File.WriteAllBytesAsync(
+                output,
+                JsonSerializer.SerializeToUtf8Bytes(keyring, JsonOptions()));
             Console.WriteLine(output);
             return 0;
         }
@@ -31,23 +33,35 @@ static async Task<int> RunAsync(string[] args)
             var keyId = ValidateKeyId(args[5]);
             var manifest = SignPackage(directory, version, runtime, keyFile, keyId);
             var output = Path.Combine(directory, "update-manifest.json");
-            await File.WriteAllBytesAsync(output, JsonSerializer.SerializeToUtf8Bytes(manifest, JsonOptions()));
+            await File.WriteAllBytesAsync(
+                output,
+                JsonSerializer.SerializeToUtf8Bytes(manifest, JsonOptions()));
             Console.WriteLine(output);
             return 0;
         }
 
-        if (args.Length == 8 && args[0].Equals("release", StringComparison.OrdinalIgnoreCase))
+        if (args.Length == 9 && args[0].Equals("release", StringComparison.OrdinalIgnoreCase))
         {
             var asset = Path.GetFullPath(args[1]);
             var version = ValidateVersion(args[2]);
             var runtime = ValidateRuntime(args[3]);
             var channel = ValidateChannel(args[4]);
-            var keyFile = Path.GetFullPath(args[5]);
-            var keyId = ValidateKeyId(args[6]);
-            var output = Path.GetFullPath(args[7]);
-            var descriptor = SignRelease(asset, version, runtime, channel, keyFile, keyId);
+            var commit = ValidateCommit(args[5]);
+            var keyFile = Path.GetFullPath(args[6]);
+            var keyId = ValidateKeyId(args[7]);
+            var output = Path.GetFullPath(args[8]);
+            var descriptor = SignRelease(
+                asset,
+                version,
+                runtime,
+                channel,
+                commit,
+                keyFile,
+                keyId);
             Directory.CreateDirectory(Path.GetDirectoryName(output)!);
-            await File.WriteAllBytesAsync(output, JsonSerializer.SerializeToUtf8Bytes(descriptor, JsonOptions()));
+            await File.WriteAllBytesAsync(
+                output,
+                JsonSerializer.SerializeToUtf8Bytes(descriptor, JsonOptions()));
             Console.WriteLine(output);
             return 0;
         }
@@ -55,7 +69,7 @@ static async Task<int> RunAsync(string[] args)
         Console.Error.WriteLine("Usage:");
         Console.Error.WriteLine("  keyring <private-key.pem> <key-id> <output.json>");
         Console.Error.WriteLine("  package <directory> <version> <runtime> <private-key.pem> <key-id>");
-        Console.Error.WriteLine("  release <asset.zip> <version> <runtime> <channel> <private-key.pem> <key-id> <descriptor.json>");
+        Console.Error.WriteLine("  release <asset.zip> <version> <runtime> <channel> <commit> <private-key.pem> <key-id> <descriptor.json>");
         return 2;
     }
     catch (Exception error)
@@ -76,20 +90,36 @@ static TrustedReleaseKeyDocument CreateKeyring(string keyFile, string keyId)
     ]);
 }
 
-static UpdateManifest SignPackage(string directory, string version, string runtime, string keyFile, string keyId)
+static UpdateManifest SignPackage(
+    string directory,
+    string version,
+    string runtime,
+    string keyFile,
+    string keyId)
 {
-    if (!Directory.Exists(directory)) throw new DirectoryNotFoundException(directory);
+    if (!Directory.Exists(directory))
+        throw new DirectoryNotFoundException(directory);
     var files = Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories)
-        .Where(path => !Path.GetFileName(path).Equals("update-manifest.json", StringComparison.OrdinalIgnoreCase))
-        .Select(path => new UpdateManifestFile(
-            Path.GetRelativePath(directory, path).Replace('\\', '/'),
-            Sha256(path)))
+        .Where(path =>
+            !Path.GetFileName(path).Equals(
+                "update-manifest.json",
+                StringComparison.OrdinalIgnoreCase))
+        .Select(path =>
+        {
+            var info = new FileInfo(path);
+            return new UpdateManifestFile(
+                Path.GetRelativePath(directory, path).Replace('\\', '/'),
+                info.Length,
+                Sha256(path));
+        })
         .OrderBy(file => file.Path, StringComparer.Ordinal)
         .ToArray();
-    if (files.Length == 0) throw new InvalidDataException("Package directory is empty.");
+    if (files.Length == 0)
+        throw new InvalidDataException("Package directory is empty.");
 
     var unsigned = new UpdateManifest(
         1,
+        "sirk-agent",
         "SIRK Agent",
         version,
         runtime,
@@ -103,13 +133,16 @@ static AgentReleaseDescriptor SignRelease(
     string version,
     string runtime,
     string channel,
+    string commit,
     string keyFile,
     string keyId)
 {
     var info = new FileInfo(asset);
-    if (!info.Exists || info.Length <= 0) throw new FileNotFoundException("Release asset is missing.", asset);
+    if (!info.Exists || info.Length <= 0)
+        throw new FileNotFoundException("Release asset is missing.", asset);
     var unsigned = new AgentReleaseDescriptor(
         1,
+        "sirk-agent",
         "SIRK Agent",
         version,
         runtime,
@@ -117,6 +150,7 @@ static AgentReleaseDescriptor SignRelease(
         info.Name,
         info.Length,
         Sha256(asset),
+        commit,
         DateTimeOffset.UtcNow,
         EmptySignature(keyId));
     return unsigned with { Signature = Sign(unsigned, keyFile, keyId) };
@@ -129,7 +163,12 @@ static PolicySignature Sign<T>(T value, string keyFile, string keyId)
         CanonicalJson.SerializeWithoutTopLevelSignature(value),
         HashAlgorithmName.SHA256,
         DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
-    return new PolicySignature { Algorithm = "ES256", KeyId = keyId, Value = Base64Url(signature) };
+    return new PolicySignature
+    {
+        Algorithm = "ES256",
+        KeyId = keyId,
+        Value = Base64Url(signature)
+    };
 }
 
 static ECDsa LoadPrivateKey(string keyFile)
@@ -139,7 +178,8 @@ static ECDsa LoadPrivateKey(string keyFile)
     try
     {
         key.ImportFromPem(pem);
-        if (key.KeySize != 256) throw new CryptographicException("Release signing key must be P-256.");
+        if (key.KeySize != 256)
+            throw new CryptographicException("Release signing key must be P-256.");
         return key;
     }
     catch
@@ -161,39 +201,62 @@ static string Sha256(string path)
 static string ValidateVersion(string value)
 {
     value = value.Trim();
-    if (!Regex.IsMatch(value, "^0\\.1\\.1\\.[0-9]+$", RegexOptions.CultureInvariant))
-        throw new InvalidDataException("Release version must use 0.1.1.X and remain below 1.0.0.");
+    if (!Regex.IsMatch(
+            value,
+            "^0\\.1\\.1\\.[0-9]+$",
+            RegexOptions.CultureInvariant))
+        throw new InvalidDataException(
+            "Release version must use 0.1.1.X and remain below 1.0.0.");
     return value;
 }
 
-static string ValidateRuntime(string value) => value == "win-x64"
-    ? value
-    : throw new InvalidDataException("Only win-x64 is supported by the Agent update contract.");
+static string ValidateRuntime(string value) =>
+    value == "win-x64"
+        ? value
+        : throw new InvalidDataException(
+            "Only win-x64 is supported by the Agent update contract.");
 
-static string ValidateChannel(string value) => value is "stable" or "preview"
-    ? value
-    : throw new InvalidDataException("Update channel must be stable or preview.");
+static string ValidateChannel(string value) =>
+    value is "stable" or "preview"
+        ? value
+        : throw new InvalidDataException(
+            "Update channel must be stable or preview.");
+
+static string ValidateCommit(string value)
+{
+    value = value.Trim().ToLowerInvariant();
+    if (!Regex.IsMatch(value, "^[0-9a-f]{40}$", RegexOptions.CultureInvariant))
+        throw new InvalidDataException("Release commit must be a 40-character Git SHA.");
+    return value;
+}
 
 static string ValidateKeyId(string value)
 {
     value = value.Trim();
-    if (!Regex.IsMatch(value, "^[A-Za-z0-9._-]{1,80}$", RegexOptions.CultureInvariant))
+    if (!Regex.IsMatch(
+            value,
+            "^[A-Za-z0-9._-]{1,80}$",
+            RegexOptions.CultureInvariant))
         throw new InvalidDataException("Invalid release signing key id.");
     return value;
 }
 
-static string Base64Url(byte[] value) => Convert.ToBase64String(value)
-    .TrimEnd('=')
-    .Replace('+', '-')
-    .Replace('/', '_');
+static string Base64Url(byte[] value) =>
+    Convert.ToBase64String(value)
+        .TrimEnd('=')
+        .Replace('+', '-')
+        .Replace('/', '_');
 
 internal sealed record TrustedReleaseKeyDocument(
     [property: JsonPropertyName("keys")] IReadOnlyList<TrustedReleaseKeyEntry> Keys);
+
 internal sealed record TrustedReleaseKeyEntry(
     [property: JsonPropertyName("keyId")] string KeyId,
     [property: JsonPropertyName("publicKeyPem")] string PublicKeyPem);
+
 internal sealed record AgentReleaseDescriptor(
     [property: JsonPropertyName("schemaVersion")] int SchemaVersion,
+    [property: JsonPropertyName("applicationId")] string ApplicationId,
     [property: JsonPropertyName("product")] string Product,
     [property: JsonPropertyName("version")] string Version,
     [property: JsonPropertyName("runtime")] string Runtime,
@@ -201,5 +264,6 @@ internal sealed record AgentReleaseDescriptor(
     [property: JsonPropertyName("assetName")] string AssetName,
     [property: JsonPropertyName("size")] long Size,
     [property: JsonPropertyName("sha256")] string Sha256,
+    [property: JsonPropertyName("commit")] string Commit,
     [property: JsonPropertyName("publishedAtUtc")] DateTimeOffset PublishedAtUtc,
     [property: JsonPropertyName("signature")] PolicySignature Signature);

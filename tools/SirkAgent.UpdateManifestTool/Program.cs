@@ -19,7 +19,7 @@ static async Task<int> RunAsync(string[] args)
             var keyId = ValidateKeyId(args[5]);
             var manifest = SignPackage(directory, version, runtime, keyFile, keyId);
             var output = Path.Combine(directory, "update-manifest.json");
-            await File.WriteAllBytesAsync(output, JsonSerializer.SerializeToUtf8Bytes(manifest, Json));
+            await File.WriteAllBytesAsync(output, JsonSerializer.SerializeToUtf8Bytes(manifest, JsonOptions()));
             Console.WriteLine(output);
             return 0;
         }
@@ -35,7 +35,7 @@ static async Task<int> RunAsync(string[] args)
             var output = Path.GetFullPath(args[7]);
             var descriptor = SignRelease(asset, version, runtime, channel, keyFile, keyId);
             Directory.CreateDirectory(Path.GetDirectoryName(output)!);
-            await File.WriteAllBytesAsync(output, JsonSerializer.SerializeToUtf8Bytes(descriptor, Json));
+            await File.WriteAllBytesAsync(output, JsonSerializer.SerializeToUtf8Bytes(descriptor, JsonOptions()));
             Console.WriteLine(output);
             return 0;
         }
@@ -52,7 +52,8 @@ static async Task<int> RunAsync(string[] args)
     }
 }
 
-static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+static JsonSerializerOptions JsonOptions() =>
+    new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
 static UpdateManifest SignPackage(string directory, string version, string runtime, string keyFile, string keyId)
 {

@@ -139,6 +139,11 @@ jobs:
 
           dotnet run --project tools/SirkAgent.UpdateManifestTool/SirkAgent.UpdateManifestTool.csproj `
             -c Release --no-build -- `
+            keyring $env:SIGNING_KEY_FILE $env:SIGNING_KEY_ID (Join-Path $payload 'release-trusted-keys.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Release trust keyring creation failed.' }
+
+          dotnet run --project tools/SirkAgent.UpdateManifestTool/SirkAgent.UpdateManifestTool.csproj `
+            -c Release --no-build -- `
             package $payload $env:VERSION win-x64 $env:SIGNING_KEY_FILE $env:SIGNING_KEY_ID
           if ($LASTEXITCODE -ne 0) { throw 'Signed package manifest creation failed.' }
 
@@ -207,6 +212,7 @@ jobs:
             msi = "SIRK-Agent-$env:VERSION-win-x64.msi"
             runtimeZip = $env:RUNTIME_ZIP
             signedUpdateDescriptor = "SIRK-Agent-$env:VERSION-win-x64.update.json"
+            releaseTrustKeyring = 'release-trusted-keys.json'
             silentExe = 'SIRK-Agent-Setup.exe --portal-url https://portal.example --enrollment-token TOKEN --channel stable'
             silentMsi = "msiexec /i SIRK-Agent-$env:VERSION-win-x64.msi /qn /norestart PORTAL_URL=https://portal.example ENROLLMENT_TOKEN=TOKEN SIRK_CHANNEL=stable"
           } | ConvertTo-Json -Depth 5 | Set-Content artifacts/installer-manifest.json -Encoding UTF8
@@ -227,6 +233,7 @@ jobs:
             artifacts/${{ env.RUNTIME_ZIP }}.sha256
             artifacts/SIRK-Agent-${{ env.VERSION }}-win-x64.update.json
             artifacts/runtime/update-manifest.json
+            artifacts/runtime/release-trusted-keys.json
             artifacts/runtime/runtime-manifest.json
             artifacts/installer-manifest.json
 

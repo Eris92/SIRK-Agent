@@ -19,9 +19,11 @@ $requiredRegister = @(
     'install-release-v2.ps1',
     "applicationId               = 'sirk-agent'",
     'serviceName                 = $agentService.Name',
+    "updateSource                = 'sirk-central-cache'",
     'signatureRequired           = $true',
     'signatureVerifierPath       = $signatureVerifier',
-    "signatureVerifierArguments = @('verify-update', '--package', '{payload}')",
+    "`$releaseTrustKeyring = Join-Path `$InstallPath 'release-trusted-keys.json'",
+    "signatureVerifierArguments = @('verify-update', '--package', '{payload}', '--trusted-keys', `$releaseTrustKeyring)",
     'SIRK_AGENT_UPDATER_REGISTERED'
 )
 foreach ($needle in $requiredRegister) {

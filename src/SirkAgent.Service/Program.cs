@@ -18,6 +18,7 @@ builder.Services.AddHostedService<ActivityCollectorWorker>();
 builder.Services.AddHostedService<FileActivityWorker>();
 builder.Services.AddHostedService<BrowserBridgeWorker>();
 builder.Services.AddHostedService<RiskAnalyticsWorker>();
+builder.Services.AddHostedService<AgentUpdateWorker>();
 builder.Services.AddSingleton<PortalReconnectSignal>();
 builder.Services.AddHostedService<NetworkChangeWorker>();
 builder.Services.AddHostedService<DesktopStreamWorker>();

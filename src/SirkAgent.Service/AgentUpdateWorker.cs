@@ -215,12 +215,13 @@ internal sealed class AgentUpdateWorker(ILogger<AgentUpdateWorker> logger) : Bac
         string channel,
         string releaseKeysPath)
     {
-        if (!VersionPattern.IsMatch(latest.Version ?? string.Empty) || latest.Runtime != "win-x64" || latest.Channel != channel ||
+        var latestVersion = latest.Version;
+        if (!VersionPattern.IsMatch(latestVersion ?? string.Empty) || latest.Runtime != "win-x64" || latest.Channel != channel ||
             latest.Size is <= 0 or > MaximumPackageBytes || !IsSha256(latest.Sha256) ||
             string.IsNullOrWhiteSpace(latest.DownloadTicket) || latest.DownloadTicketExpiresAtUtc <= DateTimeOffset.UtcNow ||
             latest.Descriptor is null)
             throw new InvalidDataException("Central latest update metadata is invalid.");
-        if (Version.Parse(latest.Version).CompareTo(Version.Parse(currentVersion)) <= 0)
+        if (Version.Parse(latestVersion!).CompareTo(Version.Parse(currentVersion)) <= 0)
             throw new InvalidDataException("Central attempted an Agent update rollback or same-version overwrite.");
         var descriptor = latest.Descriptor;
         if (descriptor.SchemaVersion != 1 || descriptor.Product != "SIRK Agent" || descriptor.Version != latest.Version ||

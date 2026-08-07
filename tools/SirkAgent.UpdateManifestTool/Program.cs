@@ -10,6 +10,18 @@ static async Task<int> RunAsync(string[] args)
 {
     try
     {
+        if (args.Length == 4 && args[0].Equals("keyring", StringComparison.OrdinalIgnoreCase))
+        {
+            var keyFile = Path.GetFullPath(args[1]);
+            var keyId = ValidateKeyId(args[2]);
+            var output = Path.GetFullPath(args[3]);
+            var keyring = CreateKeyring(keyFile, keyId);
+            Directory.CreateDirectory(Path.GetDirectoryName(output)!);
+            await File.WriteAllBytesAsync(output, JsonSerializer.SerializeToUtf8Bytes(keyring, JsonOptions()));
+            Console.WriteLine(output);
+            return 0;
+        }
+
         if (args.Length == 6 && args[0].Equals("package", StringComparison.OrdinalIgnoreCase))
         {
             var directory = Path.GetFullPath(args[1]);
@@ -41,6 +53,7 @@ static async Task<int> RunAsync(string[] args)
         }
 
         Console.Error.WriteLine("Usage:");
+        Console.Error.WriteLine("  keyring <private-key.pem> <key-id> <output.json>");
         Console.Error.WriteLine("  package <directory> <version> <runtime> <private-key.pem> <key-id>");
         Console.Error.WriteLine("  release <asset.zip> <version> <runtime> <channel> <private-key.pem> <key-id> <descriptor.json>");
         return 2;
@@ -54,6 +67,14 @@ static async Task<int> RunAsync(string[] args)
 
 static JsonSerializerOptions JsonOptions() =>
     new(JsonSerializerDefaults.Web) { WriteIndented = true };
+
+static TrustedReleaseKeyDocument CreateKeyring(string keyFile, string keyId)
+{
+    using var key = LoadPrivateKey(keyFile);
+    return new TrustedReleaseKeyDocument([
+        new TrustedReleaseKeyEntry(keyId, key.ExportSubjectPublicKeyInfoPem())
+    ]);
+}
 
 static UpdateManifest SignPackage(string directory, string version, string runtime, string keyFile, string keyId)
 {
@@ -103,15 +124,29 @@ static AgentReleaseDescriptor SignRelease(
 
 static PolicySignature Sign<T>(T value, string keyFile, string keyId)
 {
-    var pem = File.ReadAllText(keyFile);
-    using var key = ECDsa.Create();
-    key.ImportFromPem(pem);
-    if (key.KeySize != 256) throw new CryptographicException("Release signing key must be P-256.");
+    using var key = LoadPrivateKey(keyFile);
     var signature = key.SignData(
         CanonicalJson.SerializeWithoutTopLevelSignature(value),
         HashAlgorithmName.SHA256,
         DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
     return new PolicySignature { Algorithm = "ES256", KeyId = keyId, Value = Base64Url(signature) };
+}
+
+static ECDsa LoadPrivateKey(string keyFile)
+{
+    var pem = File.ReadAllText(keyFile);
+    var key = ECDsa.Create();
+    try
+    {
+        key.ImportFromPem(pem);
+        if (key.KeySize != 256) throw new CryptographicException("Release signing key must be P-256.");
+        return key;
+    }
+    catch
+    {
+        key.Dispose();
+        throw;
+    }
 }
 
 static PolicySignature EmptySignature(string keyId) =>
@@ -152,6 +187,11 @@ static string Base64Url(byte[] value) => Convert.ToBase64String(value)
     .Replace('+', '-')
     .Replace('/', '_');
 
+internal sealed record TrustedReleaseKeyDocument(
+    [property: JsonPropertyName("keys")] IReadOnlyList<TrustedReleaseKeyEntry> Keys);
+internal sealed record TrustedReleaseKeyEntry(
+    [property: JsonPropertyName("keyId")] string KeyId,
+    [property: JsonPropertyName("publicKeyPem")] string PublicKeyPem);
 internal sealed record AgentReleaseDescriptor(
     [property: JsonPropertyName("schemaVersion")] int SchemaVersion,
     [property: JsonPropertyName("product")] string Product,

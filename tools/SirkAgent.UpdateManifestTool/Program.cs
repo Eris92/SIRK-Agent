@@ -40,16 +40,20 @@ static async Task<int> RunAsync(string[] args)
             return 0;
         }
 
-        if (args.Length == 9 && args[0].Equals("release", StringComparison.OrdinalIgnoreCase))
+        if (args.Length is 8 or 9 && args[0].Equals("release", StringComparison.OrdinalIgnoreCase))
         {
             var asset = Path.GetFullPath(args[1]);
             var version = ValidateVersion(args[2]);
             var runtime = ValidateRuntime(args[3]);
             var channel = ValidateChannel(args[4]);
-            var commit = ValidateCommit(args[5]);
-            var keyFile = Path.GetFullPath(args[6]);
-            var keyId = ValidateKeyId(args[7]);
-            var output = Path.GetFullPath(args[8]);
+            var explicitCommit = args.Length == 9;
+            var commit = ValidateCommit(
+                explicitCommit
+                    ? args[5]
+                    : Environment.GetEnvironmentVariable("GITHUB_SHA") ?? string.Empty);
+            var keyFile = Path.GetFullPath(args[explicitCommit ? 6 : 5]);
+            var keyId = ValidateKeyId(args[explicitCommit ? 7 : 6]);
+            var output = Path.GetFullPath(args[explicitCommit ? 8 : 7]);
             var descriptor = SignRelease(
                 asset,
                 version,
@@ -69,7 +73,8 @@ static async Task<int> RunAsync(string[] args)
         Console.Error.WriteLine("Usage:");
         Console.Error.WriteLine("  keyring <private-key.pem> <key-id> <output.json>");
         Console.Error.WriteLine("  package <directory> <version> <runtime> <private-key.pem> <key-id>");
-        Console.Error.WriteLine("  release <asset.zip> <version> <runtime> <channel> <commit> <private-key.pem> <key-id> <descriptor.json>");
+        Console.Error.WriteLine("  release <asset.zip> <version> <runtime> <channel> [commit] <private-key.pem> <key-id> <descriptor.json>");
+        Console.Error.WriteLine("  release without [commit] requires GITHUB_SHA in the CI environment.");
         return 2;
     }
     catch (Exception error)

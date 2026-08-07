@@ -38,6 +38,8 @@ if (-not $agentService) { throw "SIRK Agent service is not installed: $ServiceNa
 $watchdogService = Get-Service -Name $WatchdogServiceName -ErrorAction SilentlyContinue
 $signatureVerifier = Join-Path $InstallPath 'sirkctl.exe'
 if (-not (Test-Path -LiteralPath $signatureVerifier -PathType Leaf)) { throw "SIRK Agent signature verifier is missing: $signatureVerifier" }
+$releaseTrustKeyring = Join-Path $InstallPath 'release-trusted-keys.json'
+if (-not (Test-Path -LiteralPath $releaseTrustKeyring -PathType Leaf)) { throw "SIRK Agent release trust keyring is missing: $releaseTrustKeyring" }
 
 $manifestPath = Join-Path $env:TEMP ('sirk-agent-updater-' + [guid]::NewGuid().ToString('N') + '.json')
 try {
@@ -51,10 +53,10 @@ try {
         dataRoot                    = $DataPath
         healthUrl                   = $null
         channel                     = $Channel
-        updateSource                = 'https://github.com/Eris92/SIRK-Agent'
+        updateSource                = 'sirk-central-cache'
         signatureRequired           = $true
         signatureVerifierPath       = $signatureVerifier
-        signatureVerifierArguments = @('verify-update', '--package', '{payload}')
+        signatureVerifierArguments = @('verify-update', '--package', '{payload}', '--trusted-keys', $releaseTrustKeyring)
     } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 
     & $updaterCli register $manifestPath | Out-Host

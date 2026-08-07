@@ -1,7 +1,7 @@
 name: SIRK Agent CI
 
 env:
-  SIRK_VERSION: 1.0.15
+  SIRK_VERSION: 0.1.1.${{ github.run_number }}
 
 on:
   push:
@@ -189,9 +189,9 @@ jobs:
           pause' | Set-Content artifacts/SIRK-Agent-Runtime/COLLECT-TEST-BUNDLE.cmd -Encoding ascii
 
           @'
-          SIRK AGENT 0.2.3 TEST
+          SIRK AGENT TEST
 
-          Wymagania: Windows x64 oraz Microsoft .NET 8 Runtime x64.
+          Wymagania: Windows x64 oraz Microsoft .NET 10 Runtime x64.
 
           1. Czysty pierwszy start automatycznie tworzy chroniony policy-state.bin.
           2. Uruchom TEST-AGENT-ONCE.cmd i wygeneruj raport.

@@ -23,4 +23,8 @@ builder.Services.AddSingleton<PortalReconnectSignal>();
 builder.Services.AddHostedService<NetworkChangeWorker>();
 builder.Services.AddHostedService<DesktopStreamWorker>();
 
-await builder.Build().RunAsync();
+var host = builder.Build();
+var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
+lifetime.ApplicationStopping.Register(InteractiveSessionPipe.TerminateAll);
+lifetime.ApplicationStopped.Register(InteractiveSessionPipe.TerminateAll);
+await host.RunAsync();

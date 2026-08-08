@@ -149,7 +149,7 @@ internal sealed class AgentUpdateWorker(ILogger<AgentUpdateWorker> logger) : Bac
             credential.Endpoint,
             allowLoopbackHttp: true,
             "Portal endpoint");
-        const string channel = "stable";
+        var channel = UpdateChannel();
         var accessUri = CanonicalEndpoint(
             portal,
             "/api/v1/agent/update-access",
@@ -644,6 +644,38 @@ internal sealed class AgentUpdateWorker(ILogger<AgentUpdateWorker> logger) : Bac
                 label +
                 " must be HTTPS (or loopback HTTP where explicitly allowed).");
         return uri;
+    }
+
+    private static string UpdateChannel()
+    {
+        var commonData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+        var manifestPath = Path.Combine(
+            commonData,
+            "SIRK",
+            "Updater",
+            "applications",
+            "sirk-agent.json");
+        try
+        {
+            if (!File.Exists(manifestPath)) return "stable";
+            using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
+            var root = document.RootElement;
+            if (!root.TryGetProperty("applicationId", out var applicationId) ||
+                applicationId.GetString() != "sirk-agent" ||
+                !root.TryGetProperty("channel", out var channel) ||
+                channel.ValueKind != JsonValueKind.String)
+                return "stable";
+            return channel.GetString()?.Trim().ToLowerInvariant() switch
+            {
+                "preview" => "preview",
+                _ => "stable"
+            };
+        }
+        catch (Exception error) when (
+            error is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return "stable";
+        }
     }
 
     private static string CurrentVersion()

@@ -81,11 +81,21 @@ jobs:
             dotnet publish $project `
               -c Release -r win-x64 --self-contained false `
               -p:PublishSingleFile=false -p:PublishTrimmed=false `
+              -p:DebugType=None -p:DebugSymbols=false `
               "-p:Version=$env:VERSION" `
               "-p:FileVersion=$env:VERSION" `
               "-p:InformationalVersion=$env:VERSION+${{ github.sha }}" `
               -o $output
             if ($LASTEXITCODE -ne 0) { throw "Runtime publish failed: $project" }
+          }
+
+          # Production update payloads never need portable/native debug symbols. Some
+          # transitive native packages copy PDBs even when DebugSymbols=false, so
+          # strip them explicitly before integrity/signature manifests are created.
+          Get-ChildItem $payload -Recurse -File -Filter '*.pdb' -ErrorAction SilentlyContinue |
+            Remove-Item -Force
+          if (Get-ChildItem $payload -Recurse -File -Filter '*.pdb' -ErrorAction SilentlyContinue) {
+            throw 'Agent production update payload must not contain PDB files.'
           }
 
           Copy-Item 'tools/package/*.ps1' $payload -Force

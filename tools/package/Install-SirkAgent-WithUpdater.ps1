@@ -5,7 +5,7 @@ param(
     [string]$InstallPath = "$env:ProgramFiles\SIRK\Agent",
     [string]$ServiceName = 'SirkAgent',
     [string]$WatchdogServiceName = 'SirkAgentWatchdog',
-    [ValidateSet('dev','stable')]
+    [ValidateSet('preview','stable')]
     [string]$Channel = 'stable',
     [switch]$NoStart
 )

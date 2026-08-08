@@ -40,6 +40,20 @@ static async Task<int> RunAsync(string[] args)
             return 0;
         }
 
+        if (args.Length == 3 && args[0].Equals("verify", StringComparison.OrdinalIgnoreCase))
+        {
+            var directory = Path.GetFullPath(args[1]);
+            var keyringPath = Path.GetFullPath(args[2]);
+            var manifestPath = Path.Combine(directory, "update-manifest.json");
+            var verifier = new UpdatePackageVerifier(
+                PemPolicyPublicKeyProvider.Load(keyringPath));
+            var result = verifier.Verify(directory, manifestPath);
+            if (!result.Accepted)
+                throw new InvalidDataException(result.Code + ": " + result.Message);
+            Console.WriteLine("SIRK_AGENT_UPDATE_PACKAGE_VERIFIED");
+            return 0;
+        }
+
         if (args.Length is 8 or 9 && args[0].Equals("release", StringComparison.OrdinalIgnoreCase))
         {
             var asset = Path.GetFullPath(args[1]);
@@ -73,6 +87,7 @@ static async Task<int> RunAsync(string[] args)
         Console.Error.WriteLine("Usage:");
         Console.Error.WriteLine("  keyring <private-key.pem> <key-id> <output.json>");
         Console.Error.WriteLine("  package <directory> <version> <runtime> <private-key.pem> <key-id>");
+        Console.Error.WriteLine("  verify <directory> <release-trusted-keys.json>");
         Console.Error.WriteLine("  release <asset.zip> <version> <runtime> <channel> [commit] <private-key.pem> <key-id> <descriptor.json>");
         Console.Error.WriteLine("  release without [commit] requires GITHUB_SHA in the CI environment.");
         return 2;

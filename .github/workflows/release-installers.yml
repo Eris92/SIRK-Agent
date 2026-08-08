@@ -2,16 +2,13 @@ name: SIRK Agent Complete Windows Release
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
-    paths:
-      - 'global.json'
-      - 'src/**'
-      - 'installer/**'
-      - 'tools/package/**'
-      - 'tools/SirkAgent.UpdateManifestTool/**'
-      - 'browser-extension/**'
-      - '.github/workflows/release-installers.yml'
+    inputs:
+      channel:
+        description: Release channel
+        required: true
+        default: preview
+        type: choice
+        options: [preview, stable]
 
 permissions:
   contents: write
@@ -21,6 +18,7 @@ jobs:
     runs-on: windows-latest
     env:
       VERSION: 0.1.1.${{ github.run_number }}
+      CHANNEL: ${{ inputs.channel }}
       SIGNING_PRIVATE_KEY_PEM: ${{ secrets.SIRK_RELEASE_SIGNING_PRIVATE_KEY_PEM }}
       SIGNING_KEY_ID: ${{ secrets.SIRK_RELEASE_SIGNING_KEY_ID }}
     steps:
@@ -36,6 +34,9 @@ jobs:
           dotnet --info
           if ($env:VERSION -notmatch '^0\.1\.1\.\d+$') {
             throw "Release version must use 0.1.1.X and remain below 1.0.0: $env:VERSION"
+          }
+          if ($env:CHANNEL -notin @('preview','stable')) {
+            throw "Release channel must be preview or stable: $env:CHANNEL"
           }
           $projects = Get-ChildItem src,tests,tools -Recurse -File -Filter '*.csproj' -ErrorAction SilentlyContinue
           if (-not $projects.Count) { throw 'No Agent projects were found.' }
@@ -158,7 +159,7 @@ jobs:
           $descriptor = Join-Path $PWD "artifacts/SIRK-Agent-$env:VERSION-win-x64.update.json"
           dotnet run --project tools/SirkAgent.UpdateManifestTool/SirkAgent.UpdateManifestTool.csproj `
             -c Release --no-build -- `
-            release $zipPath $env:VERSION win-x64 stable $env:SIGNING_KEY_FILE $env:SIGNING_KEY_ID $descriptor
+            release $zipPath $env:VERSION win-x64 $env:CHANNEL $env:SIGNING_KEY_FILE $env:SIGNING_KEY_ID $descriptor
           if ($LASTEXITCODE -ne 0) { throw 'Signed release descriptor creation failed.' }
 
       - name: Build Native AOT setup EXE
@@ -213,8 +214,9 @@ jobs:
             runtimeZip = $env:RUNTIME_ZIP
             signedUpdateDescriptor = "SIRK-Agent-$env:VERSION-win-x64.update.json"
             releaseTrustKeyring = 'release-trusted-keys.json'
-            silentExe = 'SIRK-Agent-Setup.exe --portal-url https://portal.example --enrollment-token TOKEN --channel stable'
-            silentMsi = "msiexec /i SIRK-Agent-$env:VERSION-win-x64.msi /qn /norestart PORTAL_URL=https://portal.example ENROLLMENT_TOKEN=TOKEN SIRK_CHANNEL=stable"
+            channel = $env:CHANNEL
+            silentExe = "SIRK-Agent-Setup.exe --portal-url https://portal.example --enrollment-token TOKEN --channel $env:CHANNEL"
+            silentMsi = "msiexec /i SIRK-Agent-$env:VERSION-win-x64.msi /qn /norestart PORTAL_URL=https://portal.example ENROLLMENT_TOKEN=TOKEN SIRK_CHANNEL=$env:CHANNEL"
           } | ConvertTo-Json -Depth 5 | Set-Content artifacts/installer-manifest.json -Encoding UTF8
 
       - name: Publish complete GitHub Release
@@ -222,7 +224,7 @@ jobs:
         with:
           tag_name: v${{ env.VERSION }}
           name: SIRK Agent ${{ env.VERSION }}
-          prerelease: false
+          prerelease: ${{ inputs.channel == 'preview' }}
           generate_release_notes: true
           files: |
             artifacts/SIRK-Agent-Setup.exe

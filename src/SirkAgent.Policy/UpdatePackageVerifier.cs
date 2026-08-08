@@ -29,6 +29,7 @@ public sealed record UpdateVerificationResult(bool Accepted, string Code, string
 
 public sealed class UpdatePackageVerifier
 {
+    private const int MaximumFiles = 8192;
     private readonly IPolicyPublicKeyProvider _keys;
     private readonly JsonSerializerOptions _json;
 
@@ -45,7 +46,8 @@ public sealed class UpdatePackageVerifier
         UpdateManifest manifest,
         string? currentVersion = null)
     {
-        var root = Path.GetFullPath(packageDirectory);
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(packageDirectory));
+        var rootPrefix = root + Path.DirectorySeparatorChar;
         if (manifest.Files is null ||
             manifest.Signature is null ||
             manifest.SchemaVersion != 1 ||
@@ -53,7 +55,7 @@ public sealed class UpdatePackageVerifier
             !string.Equals(manifest.Product, "SIRK Agent", StringComparison.Ordinal) ||
             !string.Equals(manifest.Runtime, "win-x64", StringComparison.Ordinal) ||
             string.IsNullOrWhiteSpace(manifest.Version) ||
-            manifest.Files.Count == 0)
+            manifest.Files.Count is <= 0 or > MaximumFiles)
             return UpdateVerificationResult.Reject(
                 "UPDATE_MANIFEST_INVALID",
                 "Update manifest metadata is invalid.");
@@ -116,11 +118,9 @@ public sealed class UpdatePackageVerifier
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in manifest.Files)
         {
-            if (string.IsNullOrWhiteSpace(file.Path) ||
-                Path.IsPathRooted(file.Path) ||
-                file.Path.Contains(':') ||
-                file.Path.Replace('\\', '/').Split('/').Any(part => part == "..") ||
-                !seen.Add(file.Path) ||
+            var relative = NormalizeRelativePath(file.Path);
+            if (relative is null ||
+                !seen.Add(relative) ||
                 file.Size < 0 ||
                 !IsSha256(file.Sha256))
                 return UpdateVerificationResult.Reject(
@@ -129,26 +129,39 @@ public sealed class UpdatePackageVerifier
 
             var target = Path.GetFullPath(Path.Combine(
                 root,
-                file.Path.Replace('/', Path.DirectorySeparatorChar)));
-            if (!target.StartsWith(
-                    root + Path.DirectorySeparatorChar,
-                    StringComparison.OrdinalIgnoreCase) ||
+                relative.Replace('/', Path.DirectorySeparatorChar)));
+            if (!target.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase) ||
                 !File.Exists(target))
                 return UpdateVerificationResult.Reject(
                     "UPDATE_FILE_MISSING",
-                    $"Update file is missing: {file.Path}");
+                    $"Update file is missing: {relative}");
 
             var info = new FileInfo(target);
             if (info.Length != file.Size)
                 return UpdateVerificationResult.Reject(
                     "UPDATE_FILE_SIZE_MISMATCH",
-                    $"Update file size mismatch: {file.Path}");
+                    $"Update file size mismatch: {relative}");
             using var stream = File.OpenRead(target);
             var actual = Convert.ToHexString(SHA256.HashData(stream));
             if (!string.Equals(actual, file.Sha256, StringComparison.OrdinalIgnoreCase))
                 return UpdateVerificationResult.Reject(
                     "UPDATE_FILE_HASH_MISMATCH",
-                    $"Update file hash mismatch: {file.Path}");
+                    $"Update file hash mismatch: {relative}");
+        }
+
+        foreach (var actualPath in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+        {
+            var relative = NormalizeRelativePath(Path.GetRelativePath(root, actualPath));
+            if (relative is null)
+                return UpdateVerificationResult.Reject(
+                    "UPDATE_FILE_ENTRY_INVALID",
+                    "Update payload contains an unsafe file path.");
+            if (string.Equals(relative, "update-manifest.json", StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (!seen.Contains(relative))
+                return UpdateVerificationResult.Reject(
+                    "UPDATE_FILE_UNLISTED",
+                    $"Update payload contains an unlisted file: {relative}");
         }
 
         var required = new[]
@@ -185,6 +198,18 @@ public sealed class UpdatePackageVerifier
                 "UPDATE_MANIFEST_INVALID",
                 error.Message);
         }
+    }
+
+    private static string? NormalizeRelativePath(string? value)
+    {
+        var path = (value ?? string.Empty).Replace('\\', '/');
+        if (path.Length is <= 0 or > 512 ||
+            path.StartsWith('/') ||
+            Path.IsPathRooted(path) ||
+            path.Contains(':') ||
+            path.Split('/', StringSplitOptions.RemoveEmptyEntries).Any(part => part == ".."))
+            return null;
+        return path;
     }
 
     private static bool IsSha256(string value) =>

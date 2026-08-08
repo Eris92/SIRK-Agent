@@ -6,7 +6,7 @@ param(
     [string]$DataPath = "$env:ProgramData\SIRK\Agent",
     [string]$ServiceName = 'SirkAgent',
     [string]$WatchdogServiceName = 'SirkAgentWatchdog',
-    [ValidateSet('dev','stable')]
+    [ValidateSet('preview','stable')]
     [string]$Channel = 'stable'
 )
 

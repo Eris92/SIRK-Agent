@@ -150,7 +150,27 @@ jobs:
 
           $zipName = "SIRK-Agent-$env:VERSION-net10-win-x64-framework-dependent.zip"
           $zipPath = Join-Path $PWD "artifacts/$zipName"
-          Compress-Archive -Path "$payload/*" -DestinationPath $zipPath -CompressionLevel Optimal
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+          [IO.Compression.ZipFile]::CreateFromDirectory(
+            $payload,
+            $zipPath,
+            [IO.Compression.CompressionLevel]::Optimal,
+            $false)
+
+          $verifyRoot = Join-Path $env:RUNNER_TEMP 'sirk-agent-update-roundtrip'
+          if (Test-Path $verifyRoot) { Remove-Item $verifyRoot -Recurse -Force }
+          New-Item -ItemType Directory -Path $verifyRoot -Force | Out-Null
+          try {
+            Expand-Archive -LiteralPath $zipPath -DestinationPath $verifyRoot -Force
+            dotnet run --project tools/SirkAgent.UpdateManifestTool/SirkAgent.UpdateManifestTool.csproj `
+              -c Release --no-build -- `
+              verify $verifyRoot (Join-Path $verifyRoot 'release-trusted-keys.json')
+            if ($LASTEXITCODE -ne 0) { throw 'Signed Agent ZIP round-trip verification failed.' }
+          }
+          finally {
+            Remove-Item $verifyRoot -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
           $sizeMb = [Math]::Round((Get-Item $zipPath).Length / 1MB, 2)
           if ($sizeMb -gt 50) { throw "Agent runtime ZIP exceeds 50 MB: $sizeMb MB" }
           Write-Host "Agent runtime ZIP: $sizeMb MB"

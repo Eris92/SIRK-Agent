@@ -90,9 +90,28 @@ internal static class InteractiveSessionPipe
                 {
                     if (process.SessionId != sessionId) continue;
                     process.Kill(true);
-                    process.WaitForExit(2000);
+                    process.WaitForExit(5000);
                 }
                 catch (InvalidOperationException) { }
+            }
+        }
+    }
+
+    internal static void TerminateAll()
+    {
+        lock (LaunchSync)
+        {
+            foreach (var process in Process.GetProcessesByName("SirkAgent.Session"))
+            {
+                using (process)
+                {
+                    try
+                    {
+                        process.Kill(true);
+                        process.WaitForExit(5000);
+                    }
+                    catch (InvalidOperationException) { }
+                }
             }
         }
     }

@@ -194,7 +194,7 @@ try
     var token = Require(values, "enrollment-token");
     if (token.Length < 20 || token.Length > 256) throw new InvalidOperationException("Enrollment token is invalid.");
     var channel = values.GetValueOrDefault("channel", "stable");
-    if (channel is not ("stable" or "dev")) throw new InvalidOperationException("--channel must be stable or dev.");
+    if (channel is not ("stable" or "preview")) throw new InvalidOperationException("--channel must be stable or preview.");
 
     var work = Path.Combine(Path.GetTempPath(), "SIRK-Agent-Setup-" + Guid.NewGuid().ToString("N"));
     Directory.CreateDirectory(work);
